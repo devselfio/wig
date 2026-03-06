@@ -117,3 +117,81 @@ test {
     _ = session;
     _ = scaffold;
 }
+
+test "E2E: data pipeline loads config, computes tokens, renders template" {
+    const testing_alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing_alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("data");
+    try tmp.dir.makePath("styles/default");
+
+    {
+        var dir = try tmp.dir.openDir("data", .{});
+        defer dir.close();
+        var f = try dir.createFile("site.yaml", .{});
+        try f.writeAll("url: https://example.com\ntitle: E2E Test");
+        f.close();
+    }
+    {
+        var dir = try tmp.dir.openDir("styles/default", .{});
+        defer dir.close();
+        var f = try dir.createFile("style.yaml", .{});
+        try f.writeAll(
+            \\viewport:
+            \\  min: 320
+            \\  max: 1240
+            \\typography:
+            \\  base:
+            \\    min: 18
+            \\    max: 20
+            \\  scale:
+            \\    min: 1.2
+            \\    max: 1.25
+            \\  steps:
+            \\    above: 2
+            \\    below: 1
+        );
+        f.close();
+    }
+
+    const abs = try tmp.dir.realpathAlloc(a, ".");
+
+    var site_cfg = try config.loadSiteConfig(a, abs);
+    defer site_cfg.deinit();
+
+    const style_cfgs = try config.loadStyleConfigs(a, abs);
+    try std.testing.expect(style_cfgs.len == 1);
+
+    const params = try tokens.extractParams(style_cfgs[0].raw, a);
+    var token_result = try tokens.compute(a, params);
+    defer token_result.deinit();
+
+    var ctx = toupee.Context.init(a);
+    const site_val = try context.combToToupee(a, site_cfg.raw);
+    try ctx.put("site", site_val);
+    try ctx.put("tokens", token_result.value);
+
+    var resolver: toupee.Resolver = .{};
+    const html = try toupee.render(
+        a,
+        "<h1><t-var name=\"site.title\">default</t-var></h1>",
+        &ctx,
+        resolver.loader(),
+        .{},
+    );
+    try std.testing.expectEqualStrings("<h1>E2E Test</h1>", html);
+
+    const html2 = try toupee.render(
+        a,
+        "<t-if var=\"tokens.typography\">has-tokens</t-if>",
+        &ctx,
+        resolver.loader(),
+        .{},
+    );
+    try std.testing.expectEqualStrings("has-tokens", html2);
+}
