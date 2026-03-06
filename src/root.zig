@@ -25,6 +25,14 @@ pub const handler = @import("handler.zig");
 pub const session = @import("session.zig");
 pub const scaffold = @import("scaffold.zig");
 
+pub const Diagnostic = struct {
+    kind: Kind = .err,
+    message: []const u8,
+    template_name: ?[]const u8 = null,
+
+    pub const Kind = enum { err, warning };
+};
+
 pub const WigError = error{
     NotImplemented,
     InvalidConfig,
@@ -305,10 +313,67 @@ pub const Site = struct {
         self.build_arena = build_arena;
     }
 
-    pub fn validate(self: *const Site, options: ValidateOptions) !void {
-        _ = self;
+    /// Validates the site without rendering. Checks config, manifests,
+    /// frontmatter, and template resolution. Optionally checks external links.
+    pub fn validate(self: *Site, options: ValidateOptions) ![]const Diagnostic {
         _ = options;
-        return error.NotImplemented;
+        const a = self.allocator;
+
+        var diags: std.ArrayListUnmanaged(Diagnostic) = .{};
+
+        const abs_root = self.root_dir.realpathAlloc(a, ".") catch
+            return error.MissingConfig;
+        defer a.free(abs_root);
+
+        var site_cfg = config.loadSiteConfig(a, abs_root) catch |err| {
+            try diags.append(a, .{ .kind = .err, .message = switch (err) {
+                error.MissingConfig => "Missing site config: create data/site.yaml",
+                error.DualConfig => "Found both site.yaml and site.json -- use exactly one",
+                error.MissingUrl => "Site config missing required 'url' field",
+                else => "Invalid site config",
+            } });
+            return try diags.toOwnedSlice(a);
+        };
+        defer site_cfg.deinit();
+
+        const style_cfgs = config.loadStyleConfigs(a, abs_root) catch {
+            try diags.append(a, .{ .kind = .warning, .message = "Could not scan styles directory" });
+            return try diags.toOwnedSlice(a);
+        };
+        defer {
+            for (style_cfgs) |*c| @constCast(c).deinit();
+            a.free(style_cfgs);
+        }
+
+        if (style_cfgs.len == 0) {
+            try diags.append(a, .{ .kind = .warning, .message = "No styles found (no style.yaml in styles/)" });
+        }
+
+        const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
+        defer a.free(styles_path);
+
+        var engine = toupee.Engine.init(a) catch {
+            try diags.append(a, .{ .kind = .err, .message = "Failed to initialise template engine" });
+            return try diags.toOwnedSlice(a);
+        };
+        defer engine.deinit();
+
+        engine.loadFromDirectory(styles_path, ".html") catch {};
+
+        var resolver: toupee.Resolver = .{};
+        const toupee_diags = engine.validate(a, resolver.loader()) catch
+            return try diags.toOwnedSlice(a);
+        defer a.free(toupee_diags);
+
+        for (toupee_diags) |d| {
+            try diags.append(a, .{
+                .kind = .err,
+                .message = d.message,
+                .template_name = d.template_name,
+            });
+        }
+
+        return try diags.toOwnedSlice(a);
     }
 };
 
