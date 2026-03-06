@@ -4,6 +4,7 @@ pub const comb = @import("comb");
 pub const zjot = @import("zjot");
 
 const Allocator = std.mem.Allocator;
+const fs = std.fs;
 
 pub const config = @import("config.zig");
 pub const context = @import("context.zig");
@@ -35,6 +36,7 @@ pub const WigError = error{
     UnrecognisedExtension,
     MissingTemplate,
     BuildFailed,
+    OutputDirNotClean,
 };
 
 pub const ContentParser = pages.ContentParser;
@@ -68,21 +70,239 @@ pub const ValidateOptions = struct {
 pub const Site = struct {
     allocator: Allocator,
     options: SiteOptions,
+    root_dir: fs.Dir,
+    site_config: ?config.SiteConfig = null,
+    style_configs: ?[]config.StyleConfig = null,
+    data_result: ?config.DataResult = null,
     engine: ?toupee.Engine = null,
+    build_arena: ?std.heap.ArenaAllocator = null,
 
-    pub fn init(a: Allocator, options: SiteOptions) WigError!Site {
-        _ = options.root;
-        return .{ .allocator = a, .options = options };
+    pub fn init(a: Allocator, options: SiteOptions) !Site {
+        const root_dir = fs.cwd().openDir(options.root, .{ .iterate = true }) catch
+            return error.MissingConfig;
+
+        return .{
+            .allocator = a,
+            .options = options,
+            .root_dir = root_dir,
+        };
     }
 
     pub fn deinit(self: *Site) void {
+        if (self.build_arena) |*ba| ba.deinit();
         if (self.engine) |*e| e.deinit();
+        if (self.data_result) |*d| d.deinit();
+        if (self.style_configs) |cfgs| {
+            for (cfgs) |*c| @constCast(c).deinit();
+            self.allocator.free(cfgs);
+        }
+        if (self.site_config) |*c| c.deinit();
+        self.root_dir.close();
     }
 
     pub fn buildAll(self: *Site, options: BuildOptions) !void {
-        _ = self;
-        _ = options;
-        return error.NotImplemented;
+        const a = self.allocator;
+        const abs_root = try self.root_dir.realpathAlloc(a, ".");
+        defer a.free(abs_root);
+
+        if (self.build_arena) |*ba| ba.deinit();
+        var build_arena = std.heap.ArenaAllocator.init(a);
+        errdefer build_arena.deinit();
+        const ba = build_arena.allocator();
+
+        // Load config
+        var site_cfg = try config.loadSiteConfig(a, abs_root);
+        errdefer site_cfg.deinit();
+
+        const style_cfgs = try config.loadStyleConfigs(a, abs_root);
+        var data_result = try config.loadDataFiles(a, abs_root);
+        errdefer data_result.deinit();
+
+        // Output directory
+        const output_path = try fs.path.join(a, &.{ abs_root, "zig-out", "site" });
+        defer a.free(output_path);
+
+        if (options.clean) {
+            fs.deleteTreeAbsolute(output_path) catch {};
+        }
+
+        fs.makeDirAbsolute(output_path) catch {};
+        const parent_path = try fs.path.join(a, &.{ abs_root, "zig-out" });
+        defer a.free(parent_path);
+        fs.makeDirAbsolute(parent_path) catch {};
+        fs.makeDirAbsolute(output_path) catch {};
+
+        var output_dir = fs.openDirAbsolute(output_path, .{}) catch
+            return error.BuildFailed;
+        defer output_dir.close();
+
+        // Compute tokens + colours per style
+        var style_ctx = toupee.Context.init(ba);
+        for (style_cfgs) |style_cfg| {
+            const style_val = try context.combToToupee(ba, style_cfg.raw);
+            try style_ctx.putAt(
+                try std.fmt.allocPrint(ba, "styles.{s}", .{style_cfg.name}),
+                style_val,
+            );
+
+            if (style_cfg.raw.get("tokens")) |tok_val| {
+                const params = try tokens.extractParams(tok_val, ba);
+                var token_result = try tokens.compute(ba, params);
+                defer token_result.deinit();
+                try style_ctx.putAt(
+                    try std.fmt.allocPrint(ba, "styles.{s}.tokens", .{style_cfg.name}),
+                    token_result.value,
+                );
+            }
+        }
+
+        // Put site data into context
+        const site_val = try context.combToToupee(ba, site_cfg.raw);
+        try style_ctx.put("site", site_val);
+
+        // Put data files into context
+        if (data_result.value == .map) {
+            var data_it = data_result.value.map.iterator();
+            while (data_it.next()) |entry| {
+                try style_ctx.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
+        // CSS/JS bundles per style
+        var asset_entries: std.ArrayListUnmanaged(bundles.AssetEntry) = .{};
+
+        const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
+        defer a.free(styles_path);
+
+        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
+            var styles_dir = sd;
+            defer styles_dir.close();
+
+            for (style_cfgs) |style_cfg| {
+                if (style_cfg.raw.get("assets")) |assets_val| {
+                    if (assets_val == .object) {
+                        for (assets_val.object) |type_entry| {
+                            const bundle_type = switch (type_entry.key) {
+                                .string => |s| s,
+                                else => continue,
+                            };
+                            if (type_entry.value == .object) {
+                                for (type_entry.value.object) |bundle_entry| {
+                                    const bundle_name = switch (bundle_entry.key) {
+                                        .string => |s| s,
+                                        else => continue,
+                                    };
+                                    const file_list = switch (bundle_entry.value) {
+                                        .array => |arr| arr,
+                                        else => continue,
+                                    };
+
+                                    var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
+                                    defer file_patterns.deinit(ba);
+                                    for (file_list) |item| {
+                                        if (item == .string) try file_patterns.append(ba, item.string);
+                                    }
+
+                                    const result = try bundles.processBundle(
+                                        ba,
+                                        style_cfg.name,
+                                        bundle_type,
+                                        bundle_name,
+                                        file_patterns.items,
+                                        styles_dir,
+                                        &style_ctx,
+                                        output_dir,
+                                    );
+
+                                    try asset_entries.append(ba, .{
+                                        .style_name = style_cfg.name,
+                                        .bundle_type = bundle_type,
+                                        .bundle_name = bundle_name,
+                                        .result = result,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else |_| {}
+
+        // Build asset context
+        const asset_ctx = try bundles.buildAssetContext(ba, asset_entries.items);
+        try style_ctx.put("assets", asset_ctx);
+
+        // Scan pages
+        const pages_path = try fs.path.join(a, &.{ abs_root, "pages" });
+        defer a.free(pages_path);
+
+        var registered_exts: std.ArrayListUnmanaged([]const u8) = .{};
+        defer registered_exts.deinit(a);
+        for (self.options.content_parsers) |p| try registered_exts.append(a, p.extension);
+
+        var pages_dir = fs.openDirAbsolute(pages_path, .{ .iterate = true }) catch
+            return error.BuildFailed;
+        defer pages_dir.close();
+
+        var scan_result = try scanner.scan(
+            ba,
+            pages_dir,
+            site_cfg.url,
+            self.options.draft,
+            self.options.debug,
+            registered_exts.items,
+        );
+        _ = &scan_result;
+
+        // Build taxonomies
+        const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
+        try style_ctx.put("taxonomies", tax_ctx);
+
+        // Put collections into context
+        var coll_it = scan_result.collections.iterator();
+        while (coll_it.next()) |entry| {
+            try style_ctx.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        // Render pages
+        var engine = try toupee.Engine.init(ba);
+        engine.loadFromDirectory(styles_path, ".html") catch {};
+
+        const fs_loader = toupee.FileSystemLoader{ .base_path = styles_path };
+        const loader = fs_loader.loader();
+        _ = try pages.renderAll(
+            ba,
+            scan_result.pages,
+            &engine,
+            &style_ctx,
+            loader,
+            self.options.content_parsers,
+            output_dir,
+        );
+
+        // Generate feeds
+        for (site_cfg.feeds) |feed_cfg| {
+            try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, output_dir);
+        }
+
+        // Generate sitemap
+        try feeds.generateSitemap(ba, scan_result.pages, site_cfg.url, output_dir);
+
+        // Copy assets
+        try copyAssets(a, self.root_dir, output_dir);
+
+        // Store build state
+        if (self.site_config) |*c| c.deinit();
+        self.site_config = site_cfg;
+        if (self.data_result) |*d| d.deinit();
+        self.data_result = data_result;
+        if (self.style_configs) |cfgs| {
+            for (cfgs) |*c| @constCast(c).deinit();
+            self.allocator.free(cfgs);
+        }
+        self.style_configs = style_cfgs;
+        self.engine = engine;
+        self.build_arena = build_arena;
     }
 
     pub fn validate(self: *const Site, options: ValidateOptions) !void {
@@ -91,6 +311,42 @@ pub const Site = struct {
         return error.NotImplemented;
     }
 };
+
+/// Recursively copies `assets/` to the output directory.
+fn copyAssets(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir) !void {
+    var assets_dir = root_dir.openDir("assets", .{ .iterate = true }) catch return;
+    defer assets_dir.close();
+
+    output_dir.makePath("assets") catch {};
+    var out_assets = try output_dir.openDir("assets", .{});
+    defer out_assets.close();
+
+    try copyDirRecursive(a, assets_dir, out_assets);
+}
+
+fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
+    var it = src.iterate();
+    while (try it.next()) |entry| {
+        switch (entry.kind) {
+            .file => {
+                const content = try src.readFileAlloc(a, entry.name, 64 * 1024 * 1024);
+                defer a.free(content);
+                var f = try dst.createFile(entry.name, .{});
+                defer f.close();
+                try f.writeAll(content);
+            },
+            .directory => {
+                dst.makePath(entry.name) catch {};
+                var sub_src = try src.openDir(entry.name, .{ .iterate = true });
+                defer sub_src.close();
+                var sub_dst = try dst.openDir(entry.name, .{});
+                defer sub_dst.close();
+                try copyDirRecursive(a, sub_src, sub_dst);
+            },
+            else => {},
+        }
+    }
+}
 
 pub fn devServer(site: *Site) !*app.App {
     _ = site;
@@ -194,4 +450,39 @@ test "E2E: data pipeline loads config, computes tokens, renders template" {
         .{},
     );
     try std.testing.expectEqualStrings("has-tokens", html2);
+}
+
+test "copyAssets: copies files recursively" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("assets/images");
+    {
+        var assets = try tmp.dir.openDir("assets", .{});
+        defer assets.close();
+        var f = try assets.createFile("style.css", .{});
+        try f.writeAll("body{}");
+        f.close();
+
+        var images = try assets.openDir("images", .{});
+        defer images.close();
+        var img = try images.createFile("logo.png", .{});
+        try img.writeAll("PNG");
+        img.close();
+    }
+
+    try tmp.dir.makePath("output");
+    var output = try tmp.dir.openDir("output", .{});
+    defer output.close();
+
+    try copyAssets(a, tmp.dir, output);
+
+    const css = try output.readFileAlloc(a, "assets/style.css", 4096);
+    defer a.free(css);
+    try std.testing.expectEqualStrings("body{}", css);
+
+    const img = try output.readFileAlloc(a, "assets/images/logo.png", 4096);
+    defer a.free(img);
+    try std.testing.expectEqualStrings("PNG", img);
 }

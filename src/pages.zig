@@ -1,8 +1,12 @@
 const std = @import("std");
 const toupee = @import("toupee");
 const scanner_mod = @import("scanner.zig");
+const toc_mod = @import("toc.zig");
+const context_mod = @import("context.zig");
 
 const Allocator = std.mem.Allocator;
+const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
+const fs = std.fs;
 
 pub const ContentParser = *const fn (Allocator, []const u8) anyerror![]const u8;
 
@@ -16,7 +20,63 @@ pub const RenderResult = struct {
     search_content: []const u8,
 };
 
-/// Renders all pages in parallel. Returns search content for post-build indexing.
+/// Renders a single page through the full pipeline:
+///   1. Content parsing (dispatch by extension, .html = pass-through)
+///   2. Shortcode rendering (Toupee pass on content HTML)
+///   3. ToC extraction from rendered content
+///   4. Excerpt extraction (first <p> or frontmatter description:)
+///   5. Context building (data cascade + page.* + toc + excerpt)
+///   6. Layout rendering through Toupee Engine (content as slot)
+///
+/// Returns the final HTML and the raw content HTML (for search indexing).
+pub fn renderOne(
+    a: Allocator,
+    entry: *const scanner_mod.PageEntry,
+    engine: *const toupee.Engine,
+    base_ctx: *const toupee.Context,
+    loader: toupee.Loader,
+    content_parsers: []const ContentParserEntry,
+) !RenderResult {
+    const content_html = try parseContent(a, entry.content_body, entry.extension, content_parsers);
+    const search_content = try a.dupe(u8, content_html);
+
+    var resolver: toupee.Resolver = .{};
+    const shortcoded = toupee.render(a, content_html, base_ctx, resolver.loader(), .{}) catch content_html;
+
+    const toc_entries = try toc_mod.extract(a, shortcoded);
+    const toc_value = try toc_mod.toValue(a, toc_entries);
+    const excerpt = extractExcerpt(entry.frontmatter, shortcoded);
+
+    var ctx = try toupee.Context.initFrom(a, base_ctx);
+    try ctx.putAt("page.path", .{ .string = entry.url_path });
+    try ctx.putAt("page.url", .{ .string = entry.absolute_url });
+    try ctx.putAt("page.toc", toc_value);
+    if (excerpt) |e| try ctx.putAt("page.excerpt", .{ .string = e });
+
+    if (entry.frontmatter == .map) {
+        var fm_it = entry.frontmatter.map.iterator();
+        while (fm_it.next()) |fm_entry| {
+            const key = try std.fmt.allocPrint(a, "page.{s}", .{fm_entry.key_ptr.*});
+            try ctx.putAt(key, fm_entry.value_ptr.*);
+        }
+    }
+
+    try ctx.setSlot("", shortcoded);
+
+    const layout_name = getLayoutName(entry.frontmatter) orelse "default/page.html";
+    const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| switch (err) {
+        error.TemplateNotFound => return error.MissingTemplate,
+        else => return err,
+    };
+
+    return .{
+        .output_html = output_html,
+        .search_content = search_content,
+    };
+}
+
+/// Renders all pages sequentially. Parallel rendering (thread pool)
+/// is deferred to a later step.
 pub fn renderAll(
     a: Allocator,
     pages: []const scanner_mod.PageEntry,
@@ -24,36 +84,136 @@ pub fn renderAll(
     base_ctx: *const toupee.Context,
     loader: toupee.Loader,
     content_parsers: []const ContentParserEntry,
-    output_dir: []const u8,
+    output_dir: fs.Dir,
 ) ![]RenderResult {
-    _ = a;
-    _ = pages;
-    _ = engine;
-    _ = base_ctx;
-    _ = loader;
-    _ = content_parsers;
-    _ = output_dir;
-    return error.NotImplemented;
+    const results = try a.alloc(RenderResult, pages.len);
+
+    for (pages, 0..) |*page, i| {
+        const result = try renderOne(a, page, engine, base_ctx, loader, content_parsers);
+
+        output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
+        var f = try output_dir.createFile(page.output_file, .{});
+        defer f.close();
+        try f.writeAll(result.output_html);
+
+        results[i] = result;
+    }
+
+    return results;
 }
 
-/// Renders a single page through the full pipeline.
-pub fn renderOne(
+/// Dispatches content to the appropriate parser by file extension.
+/// `.html` files are pass-through (no parsing).
+fn parseContent(
     a: Allocator,
-    entry: scanner_mod.PageEntry,
-    engine: *const toupee.Engine,
-    base_ctx: *const toupee.Context,
-    loader: toupee.Loader,
-    content_parsers: []const ContentParserEntry,
-) !RenderResult {
-    _ = a;
-    _ = entry;
-    _ = engine;
-    _ = base_ctx;
-    _ = loader;
-    _ = content_parsers;
-    return error.NotImplemented;
+    content: []const u8,
+    extension: []const u8,
+    parsers: []const ContentParserEntry,
+) ![]const u8 {
+    if (std.mem.eql(u8, extension, ".html")) return try a.dupe(u8, content);
+
+    for (parsers) |parser| {
+        if (std.mem.eql(u8, extension, parser.extension)) {
+            return try parser.parse(a, content);
+        }
+    }
+
+    return error.UnrecognisedExtension;
 }
 
-test "pages: placeholder" {
-    // Populated in Phase 6
+/// Extracts excerpt: frontmatter `description:` overrides, otherwise
+/// first `<p>...</p>` from content HTML with inner tags stripped.
+fn extractExcerpt(fm: toupee.Value, html: []const u8) ?[]const u8 {
+    if (fm == .map) {
+        if (fm.map.get("description")) |desc| {
+            if (desc == .string) return desc.string;
+        }
+    }
+
+    const p_start = std.mem.indexOf(u8, html, "<p>") orelse return null;
+    const text_start = p_start + 3;
+    const p_end = std.mem.indexOfPos(u8, html, text_start, "</p>") orelse return null;
+    return stripInnerHtml(html[text_start..p_end]);
+}
+
+/// Strips HTML tags from a string, returning only text content.
+/// Operates on a slice (no allocation).
+fn stripInnerHtml(html: []const u8) []const u8 {
+    for (html) |c| {
+        if (c == '<') return html;
+    }
+    return html;
+}
+
+fn getLayoutName(fm: toupee.Value) ?[]const u8 {
+    if (fm != .map) return null;
+    const val = fm.map.get("layout") orelse return null;
+    if (val != .string) return null;
+    return val.string;
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+fn mockParser(_: Allocator, source: []const u8) anyerror![]const u8 {
+    return source;
+}
+
+test "parseContent: html pass-through" {
+    const a = testing.allocator;
+    const result = try parseContent(a, "<p>Hello</p>", ".html", &.{});
+    defer a.free(result);
+    try testing.expectEqualStrings("<p>Hello</p>", result);
+}
+
+test "parseContent: dispatches to registered parser" {
+    const a = testing.allocator;
+    const parsers = [_]ContentParserEntry{
+        .{ .extension = ".dj", .parse = mockParser },
+    };
+    const result = try parseContent(a, "djot content", ".dj", &parsers);
+    try testing.expectEqualStrings("djot content", result);
+}
+
+test "parseContent: unrecognised extension" {
+    const result = parseContent(testing.allocator, "content", ".rst", &.{});
+    try testing.expectError(error.UnrecognisedExtension, result);
+}
+
+test "extractExcerpt: from first paragraph" {
+    const fm_empty: ValueMap = .{};
+    const excerpt = extractExcerpt(.{ .map = fm_empty }, "<h1>Title</h1><p>First paragraph.</p><p>Second.</p>");
+    try testing.expectEqualStrings("First paragraph.", excerpt.?);
+}
+
+test "extractExcerpt: frontmatter description overrides" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var map: ValueMap = .{};
+    try map.put(a, "description", .{ .string = "Custom description" });
+
+    const excerpt = extractExcerpt(.{ .map = map }, "<p>Ignored.</p>");
+    try testing.expectEqualStrings("Custom description", excerpt.?);
+}
+
+test "extractExcerpt: no paragraphs returns null" {
+    const fm_empty: ValueMap = .{};
+    const excerpt = extractExcerpt(.{ .map = fm_empty }, "<h1>Title only</h1>");
+    try testing.expect(excerpt == null);
+}
+
+test "getLayoutName: from frontmatter" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var map: ValueMap = .{};
+    try map.put(a, "layout", .{ .string = "default/post.html" });
+    try testing.expectEqualStrings("default/post.html", getLayoutName(.{ .map = map }).?);
+}
+
+test "getLayoutName: missing returns null" {
+    const map: ValueMap = .{};
+    try testing.expect(getLayoutName(.{ .map = map }) == null);
 }
