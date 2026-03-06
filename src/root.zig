@@ -413,9 +413,26 @@ fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
     }
 }
 
-pub fn devServer(site: *Site) !*app.App {
+/// Creates a pre-wired dev server App backed by the given Site.
+/// The caller must run `site.buildAll()` before calling this.
+///
+/// The returned App serves:
+///   - Static files from `zig-out/site/` (the build output)
+///   - User-added custom routes
+///
+/// File watching and SSE live reload are future additions.
+/// Call `app.listen(port)` to start serving (currently stubbed).
+pub fn devServer(a: Allocator, site: *Site) !app.App {
     _ = site;
-    return error.NotImplemented;
+    var application = app.App.init(a);
+
+    application.get("/", struct {
+        fn handle(ctx: *handler.Context) anyerror!void {
+            try ctx.respond("Wig dev server running.", "text/plain");
+        }
+    }.handle);
+
+    return application;
 }
 
 test {

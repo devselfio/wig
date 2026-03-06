@@ -145,6 +145,70 @@ fn stripInnerHtml(html: []const u8) []const u8 {
     return html;
 }
 
+/// Splits a collection into paginated chunks and builds pagination context.
+/// Returns one PaginationChunk per page (at least one, even for empty collections).
+pub fn paginate(
+    a: Allocator,
+    items: []const toupee.Value,
+    page_size: usize,
+    base_path: []const u8,
+    path_prefix: []const u8,
+) ![]PaginationChunk {
+    const size = if (page_size == 0) items.len else page_size;
+    const total_pages = if (items.len == 0) 1 else (items.len + size - 1) / size;
+
+    const chunks = try a.alloc(PaginationChunk, total_pages);
+    for (0..total_pages) |i| {
+        const start = i * size;
+        const end = @min(start + size, items.len);
+        const page_items = if (start < items.len) items[start..end] else &[_]toupee.Value{};
+        const page_num = i + 1;
+
+        const page_path = if (i == 0)
+            try a.dupe(u8, base_path)
+        else
+            try std.fmt.allocPrint(a, "{s}{s}/{d}/", .{ base_path, path_prefix, page_num });
+
+        var ctx_map = ValueMap{};
+        try ctx_map.put(a, "items", .{ .list = page_items });
+        try ctx_map.put(a, "page", .{ .integer = @intCast(page_num) });
+        try ctx_map.put(a, "total_pages", .{ .integer = @intCast(total_pages) });
+
+        if (i > 0) {
+            var prev = ValueMap{};
+            const prev_path = if (i == 1)
+                try a.dupe(u8, base_path)
+            else
+                try std.fmt.allocPrint(a, "{s}{s}/{d}/", .{ base_path, path_prefix, i });
+            try prev.put(a, "url", .{ .string = prev_path });
+            try prev.put(a, "page", .{ .integer = @intCast(i) });
+            try ctx_map.put(a, "previous", .{ .map = prev });
+        }
+
+        if (i < total_pages - 1) {
+            var next = ValueMap{};
+            const next_path = try std.fmt.allocPrint(a, "{s}{s}/{d}/", .{ base_path, path_prefix, page_num + 1 });
+            try next.put(a, "url", .{ .string = next_path });
+            try next.put(a, "page", .{ .integer = @intCast(page_num + 1) });
+            try ctx_map.put(a, "next", .{ .map = next });
+        }
+
+        chunks[i] = .{
+            .items = page_items,
+            .context = .{ .map = ctx_map },
+            .output_path = page_path,
+        };
+    }
+
+    return chunks;
+}
+
+pub const PaginationChunk = struct {
+    items: []const toupee.Value,
+    context: toupee.Value,
+    output_path: []const u8,
+};
+
 fn getLayoutName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
     const val = fm.map.get("layout") orelse return null;
@@ -216,4 +280,70 @@ test "getLayoutName: from frontmatter" {
 test "getLayoutName: missing returns null" {
     const map: ValueMap = .{};
     try testing.expect(getLayoutName(.{ .map = map }) == null);
+}
+
+test "paginate: splits into correct chunks" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const items = [_]toupee.Value{
+        .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" },
+        .{ .string = "d" }, .{ .string = "e" },
+    };
+
+    const chunks = try paginate(a, &items, 2, "/posts/", "page");
+    try testing.expectEqual(@as(usize, 3), chunks.len);
+
+    try testing.expectEqual(@as(usize, 2), chunks[0].items.len);
+    try testing.expectEqual(@as(usize, 2), chunks[1].items.len);
+    try testing.expectEqual(@as(usize, 1), chunks[2].items.len);
+
+    try testing.expectEqual(@as(i64, 1), chunks[0].context.map.get("page").?.integer);
+    try testing.expectEqual(@as(i64, 3), chunks[0].context.map.get("total_pages").?.integer);
+}
+
+test "paginate: empty collection produces 1 page" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const chunks = try paginate(a, &.{}, 5, "/posts/", "page");
+    try testing.expectEqual(@as(usize, 1), chunks.len);
+    try testing.expectEqual(@as(usize, 0), chunks[0].items.len);
+    try testing.expectEqual(@as(i64, 1), chunks[0].context.map.get("total_pages").?.integer);
+}
+
+test "paginate: previous/next links" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const items = [_]toupee.Value{
+        .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" },
+    };
+
+    const chunks = try paginate(a, &items, 1, "/posts/", "page");
+    try testing.expectEqual(@as(usize, 3), chunks.len);
+
+    try testing.expect(chunks[0].context.map.get("previous") == null);
+    try testing.expect(chunks[0].context.map.get("next") != null);
+
+    try testing.expect(chunks[1].context.map.get("previous") != null);
+    try testing.expect(chunks[1].context.map.get("next") != null);
+
+    try testing.expect(chunks[2].context.map.get("previous") != null);
+    try testing.expect(chunks[2].context.map.get("next") == null);
+}
+
+test "paginate: first page uses base path" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const items = [_]toupee.Value{ .{ .string = "a" }, .{ .string = "b" } };
+    const chunks = try paginate(a, &items, 1, "/posts/", "page");
+
+    try testing.expectEqualStrings("/posts/", chunks[0].output_path);
+    try testing.expectEqualStrings("/posts/page/2/", chunks[1].output_path);
 }
