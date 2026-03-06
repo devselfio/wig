@@ -24,8 +24,6 @@ pub fn slugify(a: Allocator, term: []const u8) ![]const u8 {
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "taxonomies: placeholder" {
     // Populated in Phase 5
 }

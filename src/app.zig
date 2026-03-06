@@ -38,8 +38,6 @@ pub const App = struct {
     }
 };
 
-const NotImplemented = error{NotImplemented};
-
 test "app: placeholder" {
     // Populated in Phase 11
 }

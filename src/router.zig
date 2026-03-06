@@ -1,7 +1,4 @@
-const std = @import("std");
 const handler_mod = @import("handler.zig");
-
-const Allocator = std.mem.Allocator;
 
 pub const Route = struct {
     method: []const u8,

@@ -37,12 +37,8 @@ pub const WigError = error{
     BuildFailed,
 };
 
-pub const ContentParser = *const fn (Allocator, []const u8) anyerror![]const u8;
-
-pub const ContentParserEntry = struct {
-    extension: []const u8,
-    parse: ContentParser,
-};
+pub const ContentParser = pages.ContentParser;
+pub const ContentParserEntry = pages.ContentParserEntry;
 
 pub fn zjotParser(a: Allocator, source: []const u8) anyerror![]const u8 {
     return zjot.toHtml(a, source);
@@ -96,9 +92,9 @@ pub const Site = struct {
     }
 };
 
-pub fn devServer(site: *Site) *app.App {
+pub fn devServer(site: *Site) !*app.App {
     _ = site;
-    @panic("devServer not implemented");
+    return error.NotImplemented;
 }
 
 test {

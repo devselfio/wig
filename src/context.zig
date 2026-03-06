@@ -4,6 +4,8 @@ const toupee = @import("toupee");
 
 const Allocator = std.mem.Allocator;
 
+const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
+
 /// Translates a Comb YAML value to a Toupee template value.
 pub fn combToToupee(a: Allocator, val: comb.Value) !toupee.Value {
     return switch (val) {
@@ -20,7 +22,7 @@ pub fn combToToupee(a: Allocator, val: comb.Value) !toupee.Value {
             break :blk .{ .list = items };
         },
         .object => |entries| blk: {
-            var map: toupee.Value.Map = .{};
+            var map: ValueMap = .{};
             for (entries) |entry| {
                 const key = switch (entry.key) {
                     .string => |s| s,
@@ -51,7 +53,7 @@ pub fn jsonToToupee(a: Allocator, val: std.json.Value) !toupee.Value {
             break :blk .{ .list = items };
         },
         .object => |obj| blk: {
-            var map: toupee.Value.Map = .{};
+            var map: ValueMap = .{};
             var it = obj.iterator();
             while (it.next()) |entry| {
                 const v = try jsonToToupee(a, entry.value_ptr.*);

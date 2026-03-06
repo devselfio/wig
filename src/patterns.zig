@@ -27,8 +27,6 @@ pub fn generatePages(a: Allocator, docs: []const PatternDoc, style_name: []const
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "patterns: placeholder" {
     // Populated in Phase 9
 }

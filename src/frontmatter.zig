@@ -27,8 +27,6 @@ pub fn hasFrontmatter(source: []const u8) bool {
     return source.len >= 4 and std.mem.eql(u8, source[0..4], "---\n");
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "frontmatter: detection" {
     try std.testing.expect(hasFrontmatter("---\ntitle: hello\n---\nbody"));
     try std.testing.expect(!hasFrontmatter("no frontmatter here"));

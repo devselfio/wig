@@ -26,8 +26,6 @@ pub fn compute(a: Allocator, params: TokenParams) !toupee.Value {
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "tokens: placeholder" {
     // Populated in Phase 2.5
 }

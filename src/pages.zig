@@ -3,7 +3,13 @@ const toupee = @import("toupee");
 const scanner_mod = @import("scanner.zig");
 
 const Allocator = std.mem.Allocator;
-const root = @import("root.zig");
+
+pub const ContentParser = *const fn (Allocator, []const u8) anyerror![]const u8;
+
+pub const ContentParserEntry = struct {
+    extension: []const u8,
+    parse: ContentParser,
+};
 
 pub const RenderResult = struct {
     output_html: []const u8,
@@ -17,7 +23,7 @@ pub fn renderAll(
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
     loader: toupee.Loader,
-    content_parsers: []const root.ContentParserEntry,
+    content_parsers: []const ContentParserEntry,
     output_dir: []const u8,
 ) ![]RenderResult {
     _ = a;
@@ -37,7 +43,7 @@ pub fn renderOne(
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
     loader: toupee.Loader,
-    content_parsers: []const root.ContentParserEntry,
+    content_parsers: []const ContentParserEntry,
 ) !RenderResult {
     _ = a;
     _ = entry;
@@ -47,8 +53,6 @@ pub fn renderOne(
     _ = content_parsers;
     return error.NotImplemented;
 }
-
-const NotImplemented = error{NotImplemented};
 
 test "pages: placeholder" {
     // Populated in Phase 6

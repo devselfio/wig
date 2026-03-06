@@ -38,8 +38,6 @@ pub const Context = struct {
     }
 };
 
-const NotImplemented = error{NotImplemented};
-
 test "handler: placeholder" {
     // Populated in Phase 11
 }

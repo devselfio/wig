@@ -4,20 +4,20 @@ const Allocator = std.mem.Allocator;
 
 pub const SessionStore = struct {
     ptr: *const anyopaque,
-    loadFn: *const fn (*const anyopaque, []const u8) ?std.StringHashMap([]const u8),
-    saveFn: *const fn (*const anyopaque, []const u8, std.StringHashMap([]const u8)) void,
-    destroyFn: *const fn (*const anyopaque, []const u8) void,
+    load_fn: *const fn (*const anyopaque, []const u8) ?std.StringHashMap([]const u8),
+    save_fn: *const fn (*const anyopaque, []const u8, std.StringHashMap([]const u8)) void,
+    destroy_fn: *const fn (*const anyopaque, []const u8) void,
 
     pub fn load(self: SessionStore, id: []const u8) ?std.StringHashMap([]const u8) {
-        return self.loadFn(self.ptr, id);
+        return self.load_fn(self.ptr, id);
     }
 
     pub fn save(self: SessionStore, id: []const u8, data: std.StringHashMap([]const u8)) void {
-        return self.saveFn(self.ptr, id, data);
+        return self.save_fn(self.ptr, id, data);
     }
 
     pub fn destroy(self: SessionStore, id: []const u8) void {
-        return self.destroyFn(self.ptr, id);
+        return self.destroy_fn(self.ptr, id);
     }
 };
 
@@ -28,9 +28,9 @@ pub const MemoryStore = struct {
         return .{ .allocator = a };
     }
 
-    pub fn store(self: *const MemoryStore) SessionStore {
+    pub fn store(self: *const MemoryStore) !SessionStore {
         _ = self;
-        @panic("MemoryStore not implemented");
+        return error.NotImplemented;
     }
 };
 

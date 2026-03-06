@@ -39,8 +39,6 @@ pub fn generateSitemap(
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "feeds: placeholder" {
     // Populated in Phase 7
 }

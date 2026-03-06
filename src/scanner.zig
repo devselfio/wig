@@ -1,5 +1,4 @@
 const std = @import("std");
-const comb = @import("comb");
 const toupee = @import("toupee");
 
 const Allocator = std.mem.Allocator;
@@ -53,8 +52,6 @@ pub fn deriveUrlPath(output_file: []const u8) []const u8 {
     _ = output_file;
     return "/";
 }
-
-const NotImplemented = error{NotImplemented};
 
 test "scanner: placeholder" {
     // Populated in Phase 4

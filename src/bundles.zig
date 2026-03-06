@@ -41,8 +41,6 @@ pub fn expandGlob(a: Allocator, base_dir: []const u8, pattern: []const u8) ![][]
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "bundles: placeholder" {
     // Populated in Phase 3
 }

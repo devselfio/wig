@@ -33,8 +33,6 @@ pub fn extractExcerpt(a: Allocator, html: []const u8) !?[]const u8 {
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "search: placeholder" {
     // Populated in Phase 7
 }

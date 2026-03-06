@@ -25,8 +25,6 @@ pub fn toValue(a: Allocator, entries: []const TocEntry) !toupee.Value {
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "toc: placeholder" {
     // Populated in Phase 6
 }

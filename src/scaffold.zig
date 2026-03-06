@@ -40,8 +40,6 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
     return error.NotImplemented;
 }
 
-const NotImplemented = error{NotImplemented};
-
 test "scaffold: placeholder" {
     // Populated in Phase 12
 }
