@@ -33,3 +33,23 @@ index.html
 tutorials/zig/intro.dj
 <!-- out -->
 tutorials/zig/intro/index.html
+
+<!-- test: scan detects section _index -->
+<!-- scan-pages -->
+about.html|---\ntitle: About\n---\nAbout page
+_index.html|---\ntitle: Home\n---\nHome page
+<!-- out -->
+_index.html -> pages [section]
+
+<!-- test: scan excludes draft when not draft mode -->
+<!-- scan-pages -->
+about.html|---\ntitle: About\n---\nAbout page
+secret.html|---\ntitle: Secret\ndraft: true\n---\nSecret page
+<!-- out -->
+about.html -> pages
+
+<!-- test: scan collection key for nested pages -->
+<!-- scan-pages -->
+posts/first.html|---\ntitle: First\n---\nFirst post
+<!-- out -->
+posts/first.html -> pages.posts

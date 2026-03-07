@@ -4,11 +4,16 @@ const html_mod = @import("html.zig");
 const scanner_mod = @import("scanner.zig");
 const handler_mod = @import("handler.zig");
 const app_mod = @import("app.zig");
+const bundles_mod = @import("bundles.zig");
+const pages_mod = @import("pages.zig");
+const toc_import = @import("toc.zig");
 const feeds_mod = @import("feeds.zig");
 const search_mod = @import("search.zig");
 const scaffold_mod = @import("scaffold.zig");
 const config_mod = @import("config.zig");
 const context_mod = @import("context.zig");
+const tokens_mod = @import("tokens.zig");
+const colours_mod = @import("colours.zig");
 const toupee = @import("toupee");
 const comb = @import("comb");
 const fs = std.fs;
@@ -99,6 +104,26 @@ fn runOneCase(backing_a: Allocator, tc: *const TestCase, filename: []const u8) !
         return runScaffoldCase(a, tc, cmd);
     }
 
+    if (tc.sections.get("tokens")) |_| {
+        return runTokenCase(a, tc);
+    }
+
+    if (tc.sections.get("highlights")) |_| {
+        return runColourCase(a, tc);
+    }
+
+    if (tc.sections.get("css-files")) |_| {
+        return runBundleCase(a, tc);
+    }
+
+    if (tc.sections.get("scan-pages")) |_| {
+        return runScanCase(a, tc);
+    }
+
+    if (tc.sections.get("page-content")) |_| {
+        return runPageRenderCase(a, tc);
+    }
+
     if (tc.sections.get("config")) |_| {
         return runConfigCase(a, tc);
     }
@@ -143,12 +168,20 @@ fn runRouterCase(a: Allocator, tc: *const TestCase, route_spec: []const u8) !voi
     const expected = tc.expected_output orelse return;
     const request = tc.sections.get("request") orelse return;
 
-    var handler_response: []const u8 = "matched";
-    _ = &handler_response;
-
     const dummy = struct {
         fn handle(ctx: *handler_mod.Context) anyerror!void {
-            try ctx.respond("matched", "text/plain");
+            if (ctx.params.len > 0) {
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                for (ctx.params) |p| {
+                    if (buf.items.len > 0) buf.appendSlice(ctx.allocator, ",") catch {};
+                    buf.appendSlice(ctx.allocator, p.name) catch {};
+                    buf.appendSlice(ctx.allocator, "=") catch {};
+                    buf.appendSlice(ctx.allocator, p.value) catch {};
+                }
+                try ctx.respond(buf.items, "text/plain");
+            } else {
+                try ctx.respond("matched", "text/plain");
+            }
         }
     }.handle;
 
@@ -445,6 +478,301 @@ fn runContextCase(a: Allocator, tc: *const TestCase) !void {
     }
 }
 
+fn runTokenCase(a: Allocator, tc: *const TestCase) !void {
+    const expected = tc.expected_output orelse return;
+    const tokens_yaml = tc.sections.get("tokens") orelse return;
+
+    var parsed = comb.parse(a, tokens_yaml) catch {
+        std.debug.print("    FAIL [{s}]: failed to parse token YAML\n", .{tc.name});
+        return error.TestParseError;
+    };
+    defer parsed.deinit();
+
+    const params = tokens_mod.extractParams(parsed.value, a) catch {
+        std.debug.print("    FAIL [{s}]: failed to extract token params\n", .{tc.name});
+        return error.TestParseError;
+    };
+
+    var result = tokens_mod.compute(a, params) catch {
+        if (tc.expected_error) |err_name| {
+            _ = err_name;
+            return;
+        }
+        std.debug.print("    FAIL [{s}]: token computation failed\n", .{tc.name});
+        return error.TestUnexpectedResult;
+    };
+    defer result.deinit();
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(a);
+    try serializeValue(&buf, a, result.value);
+
+    if (!containsAll(buf.items, expected)) {
+        std.debug.print("    FAIL [{s}]: tokens\n      expected fragments: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, buf.items });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn runColourCase(a: Allocator, tc: *const TestCase) !void {
+    const expected = tc.expected_output orelse return;
+    const highlights_yaml = tc.sections.get("highlights") orelse return;
+
+    var hl_parsed = comb.parse(a, highlights_yaml) catch {
+        std.debug.print("    FAIL [{s}]: failed to parse highlights YAML\n", .{tc.name});
+        return error.TestParseError;
+    };
+    defer hl_parsed.deinit();
+
+    var scheme_files: std.ArrayListUnmanaged(colours_mod.SchemeFile) = .{};
+    defer scheme_files.deinit(a);
+
+    var section_it = tc.sections.iterator();
+    while (section_it.next()) |entry| {
+        if (std.mem.startsWith(u8, entry.key_ptr.*, "scheme:")) {
+            const name = std.mem.trim(u8, entry.key_ptr.*["scheme:".len..], " ");
+            var scheme_parsed = comb.parse(a, entry.value_ptr.*) catch {
+                std.debug.print("    FAIL [{s}]: failed to parse scheme '{s}'\n", .{ tc.name, name });
+                return error.TestParseError;
+            };
+            defer scheme_parsed.deinit();
+            try scheme_files.append(a, .{ .name = name, .data = scheme_parsed.value });
+        }
+    }
+
+    var colour_result = colours_mod.resolve(a, hl_parsed.value, scheme_files.items) catch |err| {
+        if (tc.expected_error) |err_name| {
+            if (std.mem.eql(u8, @errorName(err), err_name)) return;
+            std.debug.print("    FAIL [{s}]: expected error '{s}' but got '{s}'\n", .{ tc.name, err_name, @errorName(err) });
+            return error.TestWrongError;
+        }
+        std.debug.print("    FAIL [{s}]: colour resolution failed: {s}\n", .{ tc.name, @errorName(err) });
+        return err;
+    };
+    defer colour_result.deinit();
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(a);
+    try serializeValue(&buf, a, colour_result.value);
+
+    if (!containsAll(buf.items, expected)) {
+        std.debug.print("    FAIL [{s}]: colours\n      expected fragments: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, buf.items });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn runBundleCase(a: Allocator, tc: *const TestCase) !void {
+    const expected = tc.expected_output orelse return;
+    const file_spec = tc.sections.get("css-files") orelse return;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("styles");
+    try tmp.dir.makePath("output");
+
+    var file_list: std.ArrayListUnmanaged([]const u8) = .{};
+    defer file_list.deinit(a);
+
+    var lines = std.mem.splitScalar(u8, file_spec, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
+            const name = std.mem.trim(u8, trimmed[0..colon], " ");
+            const css_content = std.mem.trim(u8, trimmed[colon + 1 ..], " ");
+            const path = try std.fmt.allocPrint(a, "styles/{s}", .{name});
+            if (std.fs.path.dirname(path)) |dir| tmp.dir.makePath(dir) catch {};
+            var f = try tmp.dir.createFile(path, .{});
+            defer f.close();
+            try f.writeAll(css_content);
+            try file_list.append(a, name);
+        }
+    }
+
+    var styles_dir = try tmp.dir.openDir("styles", .{ .iterate = true });
+    defer styles_dir.close();
+    var output_dir = try tmp.dir.openDir("output", .{});
+    defer output_dir.close();
+
+    var ctx = toupee.Context.init(a);
+    const result = bundles_mod.processBundle(
+        a,
+        "test",
+        "css",
+        "bundle",
+        file_list.items,
+        styles_dir,
+        &ctx,
+        output_dir,
+    ) catch |err| {
+        std.debug.print("    FAIL [{s}]: bundle processing failed: {s}\n", .{ tc.name, @errorName(err) });
+        return err;
+    };
+
+    if (!containsAll(result.content, expected)) {
+        std.debug.print("    FAIL [{s}]: bundle content\n      expected fragment: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, result.content });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn runScanCase(a: Allocator, tc: *const TestCase) !void {
+    const expected = tc.expected_output orelse return;
+    const pages_spec = tc.sections.get("scan-pages") orelse return;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var lines = std.mem.splitScalar(u8, pages_spec, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.indexOf(u8, trimmed, "|")) |sep| {
+            const path = std.mem.trim(u8, trimmed[0..sep], " ");
+            const raw_content = std.mem.trim(u8, trimmed[sep + 1 ..], " ");
+            const content = try unescapeNewlines(a, raw_content);
+            if (std.fs.path.dirname(path)) |dir| tmp.dir.makePath(dir) catch {};
+            var f = try tmp.dir.createFile(path, .{});
+            defer f.close();
+            try f.writeAll(content);
+        }
+    }
+
+    const draft_mode = tc.sections.get("draft-mode") != null;
+
+    var pages_dir = tmp.dir.openDir(".", .{ .iterate = true }) catch {
+        std.debug.print("    FAIL [{s}]: could not open scan dir\n", .{tc.name});
+        return error.TestUnexpectedResult;
+    };
+    defer pages_dir.close();
+
+    var result = scanner_mod.scan(a, pages_dir, "https://example.com", draft_mode, false, &.{}) catch |err| {
+        if (tc.expected_error) |err_name| {
+            if (std.mem.eql(u8, @errorName(err), err_name)) return;
+            std.debug.print("    FAIL [{s}]: expected error '{s}' but got '{s}'\n", .{ tc.name, err_name, @errorName(err) });
+            return error.TestWrongError;
+        }
+        return err;
+    };
+    defer result.deinit();
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(a);
+
+    for (result.pages) |page| {
+        try buf.appendSlice(a, page.source_path);
+        try buf.appendSlice(a, " -> ");
+        try buf.appendSlice(a, page.collection_key);
+        if (page.is_section) try buf.appendSlice(a, " [section]");
+        try buf.appendSlice(a, "\n");
+    }
+
+    if (!containsAll(buf.items, expected)) {
+        std.debug.print("    FAIL [{s}]: scanner\n      expected fragments: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, buf.items });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn runPageRenderCase(a: Allocator, tc: *const TestCase) !void {
+    const expected = tc.expected_output orelse return;
+    const page_content = tc.sections.get("page-content") orelse return;
+
+    var engine = try toupee.Engine.init(a);
+    defer engine.deinit();
+
+    var section_it = tc.sections.iterator();
+    while (section_it.next()) |entry| {
+        if (std.mem.startsWith(u8, entry.key_ptr.*, "template:")) {
+            const name = std.mem.trim(u8, entry.key_ptr.*["template:".len..], " ");
+            try engine.addTemplate(name, entry.value_ptr.*);
+        }
+    }
+
+    const fm_yaml = tc.sections.get("frontmatter") orelse "layout: default/page.html";
+
+    var fm_parsed = comb.parse(a, fm_yaml) catch {
+        std.debug.print("    FAIL [{s}]: failed to parse frontmatter YAML\n", .{tc.name});
+        return error.TestParseError;
+    };
+    defer fm_parsed.deinit();
+    const fm_val = try context_mod.combToToupee(a, fm_parsed.value);
+
+    const layout_name = if (fm_val == .map)
+        if (fm_val.map.get("layout")) |l| (if (l == .string) l.string else "default/page.html") else "default/page.html"
+    else
+        "default/page.html";
+
+    const ext = tc.sections.get("extension") orelse ".html";
+
+    var entry = scanner_mod.PageEntry{
+        .source_path = "test-page.html",
+        .output_file = "test-page/index.html",
+        .url_path = "/test-page/",
+        .absolute_url = "https://example.com/test-page/",
+        .content_body = page_content,
+        .extension = ext,
+        .frontmatter = fm_val,
+        .collection_key = "pages",
+    };
+    _ = &entry;
+
+    const content_html = if (std.mem.eql(u8, ext, ".html")) try a.dupe(u8, page_content) else page_content;
+
+    var base_ctx = toupee.Context.init(a);
+    try base_ctx.putAt("page.title", if (fm_val == .map) fm_val.map.get("title") orelse .{ .string = "Test" } else .{ .string = "Test" });
+    try base_ctx.putAt("page.path", .{ .string = "/test-page/" });
+    try base_ctx.putAt("page.url", .{ .string = "https://example.com/test-page/" });
+
+    if (fm_val == .map) {
+        var fm_it = fm_val.map.iterator();
+        while (fm_it.next()) |fm_entry| {
+            const key = try std.fmt.allocPrint(a, "page.{s}", .{fm_entry.key_ptr.*});
+            try base_ctx.putAt(key, fm_entry.value_ptr.*);
+        }
+    }
+
+    const toc_entries = try toc_import.extract(a, content_html);
+
+    if (tc.sections.get("check") != null and std.mem.eql(u8, tc.sections.get("check").?, "toc")) {
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(a);
+        for (toc_entries) |toc_entry| {
+            try buf.appendSlice(a, try std.fmt.allocPrint(a, "h{d} {s} #{s}\n", .{ toc_entry.level, toc_entry.text, toc_entry.id }));
+        }
+        if (!containsAll(buf.items, expected)) {
+            std.debug.print("    FAIL [{s}]: ToC\n      expected: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, buf.items });
+            return error.TestUnexpectedResult;
+        }
+        return;
+    }
+
+    if (tc.sections.get("check") != null and std.mem.eql(u8, tc.sections.get("check").?, "excerpt")) {
+        const excerpt = pages_mod.extractExcerptPublic(a, fm_val, content_html) orelse "";
+        if (!std.mem.eql(u8, excerpt, expected)) {
+            std.debug.print("    FAIL [{s}]: excerpt\n      expected: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, excerpt });
+            return error.TestUnexpectedResult;
+        }
+        return;
+    }
+
+    const toc_value = try toc_import.toValue(a, toc_entries);
+    try base_ctx.putAt("page.toc", toc_value);
+    try base_ctx.setSlot("", content_html);
+
+    var resolver: toupee.Resolver = .{};
+    const rendered = engine.renderTemplate(a, layout_name, &base_ctx, resolver.loader(), .{}) catch |err| {
+        if (tc.expected_error) |err_name| {
+            if (std.mem.eql(u8, @errorName(err), err_name)) return;
+        }
+        std.debug.print("    FAIL [{s}]: render failed: {s}\n", .{ tc.name, @errorName(err) });
+        return err;
+    };
+
+    if (!containsAll(rendered, expected)) {
+        std.debug.print("    FAIL [{s}]: page render\n      expected fragment: '{s}'\n      actual: '{s}'\n", .{ tc.name, expected, rendered });
+        return error.TestUnexpectedResult;
+    }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 fn getPageStr(fm: toupee.Value, key: []const u8) ?[]const u8 {
@@ -598,18 +926,36 @@ fn parseTestCases(a: Allocator, content: []const u8, cases: *std.ArrayListUnmana
 
 fn finishSection(a: Allocator, content: []const u8, state: Section, name: []const u8, start: usize, end: usize, tc: *TestCase) void {
     if (state == .none) return;
-    if (start > content.len) return;
-    const clamped_end = @min(end, content.len);
-    if (start >= clamped_end) return;
 
-    const raw = content[start..clamped_end];
-    const trimmed = trimEnds(raw);
+    const clamped_end = @min(end, content.len);
+    const trimmed = if (start > content.len or start >= clamped_end)
+        ""
+    else
+        trimEnds(content[start..clamped_end]);
 
     switch (state) {
         .named => tc.sections.put(a, name, trimmed) catch {},
-        .out => tc.expected_output = trimmed,
+        .out => {
+            if (trimmed.len > 0) tc.expected_output = trimmed;
+        },
         .none => {},
     }
+}
+
+fn unescapeNewlines(a: Allocator, input: []const u8) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(a);
+    var i: usize = 0;
+    while (i < input.len) {
+        if (i + 1 < input.len and input[i] == '\\' and input[i + 1] == 'n') {
+            try buf.append(a, '\n');
+            i += 2;
+        } else {
+            try buf.append(a, input[i]);
+            i += 1;
+        }
+    }
+    return try a.dupe(u8, buf.items);
 }
 
 fn trimEnds(s: []const u8) []const u8 {
@@ -632,6 +978,8 @@ const test_file_names = [_][]const u8{
     "post-build.test",
     "scaffold.test",
     "data-pipeline.test",
+    "css-pipeline.test",
+    "page-rendering.test",
 };
 
 test "wig integration test suite" {

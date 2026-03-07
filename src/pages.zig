@@ -124,6 +124,10 @@ fn parseContent(
 
 /// Extracts excerpt: frontmatter `description:` overrides, otherwise
 /// first `<p>...</p>` from content HTML with inner tags stripped.
+pub fn extractExcerptPublic(a: Allocator, fm: toupee.Value, content: []const u8) ?[]const u8 {
+    return extractExcerpt(a, fm, content);
+}
+
 fn extractExcerpt(a: Allocator, fm: toupee.Value, content: []const u8) ?[]const u8 {
     if (fm == .map) {
         if (fm.map.get("description")) |desc| {

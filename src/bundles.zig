@@ -54,7 +54,8 @@ pub fn processBundle(
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(content);
     const digest = hasher.finalResult();
-    const hash = try std.fmt.allocPrint(a, "{s}", .{std.fmt.fmtSliceHexLower(digest[0..4])});
+    const hex = std.fmt.bytesToHex(digest[0..4].*, .lower);
+    const hash = try a.dupe(u8, &hex);
 
     const filename = try std.fmt.allocPrint(a, "{s}.{s}.{s}", .{ bundle_name, hash, bundle_type });
     defer a.free(filename);

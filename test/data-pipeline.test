@@ -17,3 +17,80 @@ site:
   title: Test
 <!-- out -->
 site:{title:"Test"}
+
+<!-- test: context converts list -->
+<!-- comb-input -->
+tags:
+  - zig
+  - css
+<!-- out -->
+tags:["zig","css"]
+
+<!-- test: token computation produces typography steps -->
+<!-- tokens -->
+viewport:
+  min: 320
+  max: 1240
+typography:
+  base:
+    min: 18
+    max: 20
+  scale:
+    min: 1.2
+    max: 1.25
+  steps:
+    above: 2
+    below: 1
+<!-- out -->
+step--1
+step-0
+step-1
+step-2
+
+<!-- test: token computation produces spacing -->
+<!-- tokens -->
+viewport:
+  min: 320
+  max: 1240
+typography:
+  base:
+    min: 18
+    max: 20
+  scale:
+    min: 1.2
+    max: 1.25
+  steps:
+    above: 1
+    below: 0
+spacing:
+  negative: [0.75, 0.5]
+  positive: [1.5]
+<!-- out -->
+spacing:{individual:
+name:"xs"
+name:"s"
+name:"m"
+
+<!-- test: colour resolution default scheme -->
+<!-- highlights -->
+default:
+  scheme: test
+  mode: light
+schemes:
+  - test.light
+<!-- scheme: test -->
+light:
+  meta:
+    name: Test Light
+  palette:
+    white: "#ffffff"
+    black: "#000000"
+  styles:
+    text:
+      primary: black
+    background:
+      primary: white
+<!-- out -->
+default_id:"test-light"
+default_scheme:"test"
+default_mode:"light"

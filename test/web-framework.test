@@ -12,7 +12,7 @@ GET /about
 <!-- request -->
 GET /missing
 <!-- out -->
-404 
+404 Not Found
 
 <!-- test: method dispatch POST on GET route -->
 <!-- route -->
@@ -20,7 +20,15 @@ POST /submit
 <!-- request -->
 GET /submit
 <!-- out -->
-404 
+404 Not Found
+
+<!-- test: path parameter extraction -->
+<!-- route -->
+GET /users/:id
+<!-- request -->
+GET /users/42
+<!-- out -->
+200 id=42
 
 <!-- test: middleware passthrough -->
 <!-- middleware -->

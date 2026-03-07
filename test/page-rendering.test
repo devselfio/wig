@@ -1,0 +1,53 @@
+<!-- test: basic template rendering -->
+<!-- template: default/page.html -->
+<html><body><t-slot></t-slot></body></html>
+<!-- frontmatter -->
+layout: default/page.html
+title: Hello
+<!-- page-content -->
+<p>Hello world</p>
+<!-- out -->
+<html><body><p>Hello world</p></body></html>
+
+<!-- test: frontmatter title in context -->
+<!-- template: default/page.html -->
+<html><head><title><t-var name="page.title">Untitled</t-var></title></head><body><t-slot></t-slot></body></html>
+<!-- frontmatter -->
+layout: default/page.html
+title: My Page
+<!-- page-content -->
+<p>Content here</p>
+<!-- out -->
+<title>My Page</title>
+
+<!-- test: excerpt strips inner html tags -->
+<!-- check -->
+excerpt
+<!-- page-content -->
+<p>Hello <em>world</em> and <strong>friends</strong></p>
+<!-- out -->
+Hello world and friends
+
+<!-- test: excerpt from plain paragraph -->
+<!-- check -->
+excerpt
+<!-- page-content -->
+<p>No tags here</p>
+<!-- out -->
+No tags here
+
+<!-- test: toc extracts heading with id -->
+<!-- check -->
+toc
+<!-- page-content -->
+<section id="intro"><h2>Introduction</h2><p>text</p></section>
+<!-- out -->
+h2 Introduction #intro
+
+<!-- test: toc strips inner tags from heading -->
+<!-- check -->
+toc
+<!-- page-content -->
+<section id="code"><h2>Code <code>foo</code></h2><p>text</p></section>
+<!-- out -->
+h2 Code foo #code
