@@ -294,7 +294,7 @@ pub const Site = struct {
         }
 
         // Generate sitemap
-        try feeds.generateSitemap(ba, scan_result.pages, site_cfg.url, output_dir);
+        try feeds.generateSitemap(ba, scan_result.pages, output_dir);
 
         // Copy assets
         try copyAssets(a, self.root_dir, output_dir);
@@ -426,7 +426,7 @@ pub fn devServer(a: Allocator, site: *Site) !app.App {
     _ = site;
     var application = app.App.init(a);
 
-    application.get("/", struct {
+    try application.get("/", struct {
         fn handle(ctx: *handler.Context) anyerror!void {
             try ctx.respond("Wig dev server running.", "text/plain");
         }

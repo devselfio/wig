@@ -1,4 +1,5 @@
 const std = @import("std");
+const html = @import("html.zig");
 
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
@@ -73,63 +74,7 @@ fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), a: Allocator, s: []const u8
 }
 
 /// Strips HTML tags from content and decodes common entities.
-pub fn stripHtml(a: Allocator, html: []const u8) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    defer buf.deinit(a);
-
-    var in_tag = false;
-    var i: usize = 0;
-    while (i < html.len) {
-        if (html[i] == '<') {
-            in_tag = true;
-            i += 1;
-            continue;
-        }
-        if (html[i] == '>') {
-            in_tag = false;
-            i += 1;
-            continue;
-        }
-        if (in_tag) {
-            i += 1;
-            continue;
-        }
-
-        if (html[i] == '&') {
-            if (decodeEntity(html, i)) |result| {
-                try buf.append(a, result.char);
-                i = result.end;
-                continue;
-            }
-        }
-
-        try buf.append(a, html[i]);
-        i += 1;
-    }
-
-    return try a.dupe(u8, buf.items);
-}
-
-const EntityResult = struct { char: u8, end: usize };
-
-fn decodeEntity(html: []const u8, start: usize) ?EntityResult {
-    const entities = .{
-        .{ "&amp;", '&' },
-        .{ "&lt;", '<' },
-        .{ "&gt;", '>' },
-        .{ "&quot;", '"' },
-        .{ "&apos;", '\'' },
-        .{ "&#39;", '\'' },
-    };
-    inline for (entities) |pair| {
-        if (start + pair[0].len <= html.len and
-            std.mem.eql(u8, html[start .. start + pair[0].len], pair[0]))
-        {
-            return .{ .char = pair[1], .end = start + pair[0].len };
-        }
-    }
-    return null;
-}
+pub const stripHtml = html.stripTags;
 
 // ── Tests ───────────────────────────────────────────────────────────────
 

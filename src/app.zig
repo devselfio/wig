@@ -22,24 +22,24 @@ pub const App = struct {
         self.middleware.deinit(self.allocator);
     }
 
-    pub fn get(self: *App, path: []const u8, h: handler_mod.HandlerFn) void {
-        self.routes.append(self.allocator, .{ .method = "GET", .path = path, .handler = h }) catch {};
+    pub fn get(self: *App, path: []const u8, h: handler_mod.HandlerFn) !void {
+        try self.routes.append(self.allocator, .{ .method = "GET", .path = path, .handler = h });
     }
 
-    pub fn post(self: *App, path: []const u8, h: handler_mod.HandlerFn) void {
-        self.routes.append(self.allocator, .{ .method = "POST", .path = path, .handler = h }) catch {};
+    pub fn post(self: *App, path: []const u8, h: handler_mod.HandlerFn) !void {
+        try self.routes.append(self.allocator, .{ .method = "POST", .path = path, .handler = h });
     }
 
-    pub fn put(self: *App, path: []const u8, h: handler_mod.HandlerFn) void {
-        self.routes.append(self.allocator, .{ .method = "PUT", .path = path, .handler = h }) catch {};
+    pub fn put(self: *App, path: []const u8, h: handler_mod.HandlerFn) !void {
+        try self.routes.append(self.allocator, .{ .method = "PUT", .path = path, .handler = h });
     }
 
-    pub fn delete(self: *App, path: []const u8, h: handler_mod.HandlerFn) void {
-        self.routes.append(self.allocator, .{ .method = "DELETE", .path = path, .handler = h }) catch {};
+    pub fn delete(self: *App, path: []const u8, h: handler_mod.HandlerFn) !void {
+        try self.routes.append(self.allocator, .{ .method = "DELETE", .path = path, .handler = h });
     }
 
-    pub fn use(self: *App, m: handler_mod.MiddlewareFn) void {
-        self.middleware.append(self.allocator, m) catch {};
+    pub fn use(self: *App, m: handler_mod.MiddlewareFn) !void {
+        try self.middleware.append(self.allocator, m);
     }
 
     pub fn group(self: *App, prefix: []const u8) router_mod.RouteGroup {
@@ -47,13 +47,13 @@ pub const App = struct {
     }
 
     /// Adds all routes from a RouteGroup into this App.
-    pub fn mount(self: *App, route_group: *const router_mod.RouteGroup) void {
+    pub fn mount(self: *App, route_group: *const router_mod.RouteGroup) !void {
         for (route_group.routes.items) |route| {
-            self.routes.append(self.allocator, route) catch {};
+            try self.routes.append(self.allocator, route);
         }
     }
 
-    /// Dispatches a request context through the matched handler.
+    /// Dispatches a request context through middleware then the matched handler.
     pub fn dispatch(self: *App, ctx: *handler_mod.Context) !void {
         const result = try router_mod.match(self.allocator, self.routes.items, @tagName(ctx.method), ctx.path);
         if (result) |r| {
@@ -69,15 +69,21 @@ pub const App = struct {
             ctx.params = context_params;
             defer self.allocator.free(context_params);
 
-            try r.handler(ctx);
+            ctx._middleware = self.middleware.items;
+            ctx._mw_index = 0;
+            ctx._final_handler = r.handler;
+            try ctx.next();
         } else {
             ctx.response_status = 404;
             try ctx.respond("Not Found", "text/plain");
         }
     }
 
-    /// Starts listening on the given port. Stub -- actual networking is
-    /// a future integration piece.
+    /// Starts listening on the given port.
+    ///
+    /// **Deferred:** TCP server implementation requires `std.net.Server`
+    /// integration and is planned for a future phase. Currently returns
+    /// `error.NotImplemented`. Use `dispatch()` directly for testing.
     pub fn listen(self: *App, port: u16) !void {
         _ = self;
         _ = port;
@@ -99,7 +105,7 @@ test "App: route registration and dispatch" {
     var app = App.init(testing.allocator);
     defer app.deinit();
 
-    app.get("/hello", hello);
+    try app.get("/hello", hello);
 
     var ctx = handler_mod.Context{
         .allocator = testing.allocator,
@@ -123,8 +129,38 @@ test "App: 404 on no match" {
     try testing.expectEqual(@as(u16, 404), ctx.response_status);
 }
 
+test "App: middleware runs before handler" {
+    const mw = struct {
+        fn handle(ctx: *handler_mod.Context) anyerror!void {
+            ctx.response_status = 201;
+            try ctx.next();
+        }
+    }.handle;
+
+    const hello = struct {
+        fn handle(ctx: *handler_mod.Context) anyerror!void {
+            try ctx.respond("hello", "text/plain");
+        }
+    }.handle;
+
+    var a = App.init(testing.allocator);
+    defer a.deinit();
+
+    try a.use(mw);
+    try a.get("/hello", hello);
+
+    var ctx = handler_mod.Context{
+        .allocator = testing.allocator,
+        .method = .GET,
+        .path = "/hello",
+    };
+    try a.dispatch(&ctx);
+    try testing.expectEqual(@as(u16, 201), ctx.response_status);
+    try testing.expectEqualStrings("hello", ctx.response_body);
+}
+
 test "App: listen returns NotImplemented" {
-    var app = App.init(testing.allocator);
-    defer app.deinit();
-    try testing.expectError(error.NotImplemented, app.listen(8080));
+    var a = App.init(testing.allocator);
+    defer a.deinit();
+    try testing.expectError(error.NotImplemented, a.listen(8080));
 }

@@ -3,6 +3,7 @@ const toupee = @import("toupee");
 const scanner_mod = @import("scanner.zig");
 const toc_mod = @import("toc.zig");
 const context_mod = @import("context.zig");
+const html = @import("html.zig");
 
 const Allocator = std.mem.Allocator;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
@@ -45,7 +46,7 @@ pub fn renderOne(
 
     const toc_entries = try toc_mod.extract(a, shortcoded);
     const toc_value = try toc_mod.toValue(a, toc_entries);
-    const excerpt = extractExcerpt(entry.frontmatter, shortcoded);
+    const excerpt = extractExcerpt(a, entry.frontmatter, shortcoded);
 
     var ctx = try toupee.Context.initFrom(a, base_ctx);
     try ctx.putAt("page.path", .{ .string = entry.url_path });
@@ -123,26 +124,17 @@ fn parseContent(
 
 /// Extracts excerpt: frontmatter `description:` overrides, otherwise
 /// first `<p>...</p>` from content HTML with inner tags stripped.
-fn extractExcerpt(fm: toupee.Value, html: []const u8) ?[]const u8 {
+fn extractExcerpt(a: Allocator, fm: toupee.Value, content: []const u8) ?[]const u8 {
     if (fm == .map) {
         if (fm.map.get("description")) |desc| {
             if (desc == .string) return desc.string;
         }
     }
 
-    const p_start = std.mem.indexOf(u8, html, "<p>") orelse return null;
+    const p_start = std.mem.indexOf(u8, content, "<p>") orelse return null;
     const text_start = p_start + 3;
-    const p_end = std.mem.indexOfPos(u8, html, text_start, "</p>") orelse return null;
-    return stripInnerHtml(html[text_start..p_end]);
-}
-
-/// Strips HTML tags from a string, returning only text content.
-/// Operates on a slice (no allocation).
-fn stripInnerHtml(html: []const u8) []const u8 {
-    for (html) |c| {
-        if (c == '<') return html;
-    }
-    return html;
+    const p_end = std.mem.indexOfPos(u8, content, text_start, "</p>") orelse return null;
+    return html.stripTags(a, content[text_start..p_end]) catch return null;
 }
 
 /// Splits a collection into paginated chunks and builds pagination context.
@@ -246,9 +238,19 @@ test "parseContent: unrecognised extension" {
 }
 
 test "extractExcerpt: from first paragraph" {
+    const a = testing.allocator;
     const fm_empty: ValueMap = .{};
-    const excerpt = extractExcerpt(.{ .map = fm_empty }, "<h1>Title</h1><p>First paragraph.</p><p>Second.</p>");
+    const excerpt = extractExcerpt(a, .{ .map = fm_empty }, "<h1>Title</h1><p>First paragraph.</p><p>Second.</p>");
+    defer a.free(excerpt.?);
     try testing.expectEqualStrings("First paragraph.", excerpt.?);
+}
+
+test "extractExcerpt: strips inner tags from paragraph" {
+    const a = testing.allocator;
+    const fm_empty: ValueMap = .{};
+    const excerpt = extractExcerpt(a, .{ .map = fm_empty }, "<h1>Title</h1><p>Hello <em>world</em></p>");
+    defer a.free(excerpt.?);
+    try testing.expectEqualStrings("Hello world", excerpt.?);
 }
 
 test "extractExcerpt: frontmatter description overrides" {
@@ -258,13 +260,13 @@ test "extractExcerpt: frontmatter description overrides" {
     var map: ValueMap = .{};
     try map.put(a, "description", .{ .string = "Custom description" });
 
-    const excerpt = extractExcerpt(.{ .map = map }, "<p>Ignored.</p>");
+    const excerpt = extractExcerpt(a, .{ .map = map }, "<p>Ignored.</p>");
     try testing.expectEqualStrings("Custom description", excerpt.?);
 }
 
 test "extractExcerpt: no paragraphs returns null" {
     const fm_empty: ValueMap = .{};
-    const excerpt = extractExcerpt(.{ .map = fm_empty }, "<h1>Title only</h1>");
+    const excerpt = extractExcerpt(testing.allocator, .{ .map = fm_empty }, "<h1>Title only</h1>");
     try testing.expect(excerpt == null);
 }
 

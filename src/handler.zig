@@ -3,50 +3,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const HandlerFn = *const fn (*Context) anyerror!void;
-pub const NextFn = *const fn (*Context) anyerror!void;
-pub const MiddlewareFn = *const fn (*Context, NextFn) anyerror!void;
 
-/// Builds a single handler function that chains middleware in order,
-/// terminating at the final handler.
-pub fn buildChain(
-    a: Allocator,
-    middleware: []const MiddlewareFn,
-    final_handler: HandlerFn,
-) !HandlerFn {
-    if (middleware.len == 0) return final_handler;
-
-    var current: HandlerFn = final_handler;
-    var i: usize = middleware.len;
-    while (i > 0) {
-        i -= 1;
-        const mw = middleware[i];
-        const next_handler = current;
-        const wrapper = try ChainWrapper.create(a, mw, next_handler);
-        current = wrapper.handler();
-    }
-    return current;
-}
-
-const ChainWrapper = struct {
-    mw: MiddlewareFn,
-    next_handler: HandlerFn,
-
-    fn create(a: Allocator, mw: MiddlewareFn, next_handler: HandlerFn) !*ChainWrapper {
-        const self = try a.create(ChainWrapper);
-        self.* = .{ .mw = mw, .next_handler = next_handler };
-        return self;
-    }
-
-    fn handler(self: *const ChainWrapper) HandlerFn {
-        _ = self;
-        return &dispatch;
-    }
-
-    fn dispatch(ctx: *Context) anyerror!void {
-        _ = ctx;
-        return error.NotImplemented;
-    }
-};
+/// Middleware receives the request context and calls `ctx.next()` to
+/// pass control to the next middleware (or the final handler).
+/// Omitting the `ctx.next()` call short-circuits the chain.
+pub const MiddlewareFn = *const fn (*Context) anyerror!void;
 
 pub const Method = enum {
     GET,
@@ -85,6 +46,10 @@ pub const Context = struct {
     response_headers: std.ArrayListUnmanaged(Header) = .{},
     responded: bool = false,
 
+    _middleware: []const MiddlewareFn = &.{},
+    _mw_index: usize = 0,
+    _final_handler: ?HandlerFn = null,
+
     pub const Param = struct {
         name: []const u8,
         value: []const u8,
@@ -94,6 +59,17 @@ pub const Context = struct {
         name: []const u8,
         value: []const u8,
     };
+
+    /// Advances the middleware chain. Calls the next middleware if any
+    /// remain, otherwise calls the final handler.
+    pub fn next(self: *Context) anyerror!void {
+        if (self._mw_index < self._middleware.len) {
+            const mw = self._middleware[self._mw_index];
+            self._mw_index += 1;
+            return mw(self);
+        }
+        if (self._final_handler) |h| return h(self);
+    }
 
     pub fn param(self: *const Context, name: []const u8) ?[]const u8 {
         for (self.params) |p| {
@@ -189,4 +165,108 @@ test "Method.fromString: parses known methods" {
     try testing.expectEqual(Method.GET, Method.fromString("GET").?);
     try testing.expectEqual(Method.POST, Method.fromString("POST").?);
     try testing.expect(Method.fromString("UNKNOWN") == null);
+}
+
+test "next: empty middleware calls final handler" {
+    const final = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            try ctx.respond("final", "text/plain");
+        }
+    }.handle;
+
+    var ctx = Context{
+        .allocator = testing.allocator,
+        ._final_handler = final,
+    };
+    try ctx.next();
+    try testing.expectEqualStrings("final", ctx.response_body);
+}
+
+test "next: single middleware executes and chains" {
+    const mw = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            ctx.response_status = 201;
+            try ctx.next();
+        }
+    }.handle;
+
+    const final = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            try ctx.respond("done", "text/plain");
+        }
+    }.handle;
+
+    const middleware = [_]MiddlewareFn{mw};
+    var ctx = Context{
+        .allocator = testing.allocator,
+        ._middleware = &middleware,
+        ._final_handler = final,
+    };
+    try ctx.next();
+    try testing.expectEqual(@as(u16, 201), ctx.response_status);
+    try testing.expectEqualStrings("done", ctx.response_body);
+}
+
+test "next: two middleware execute in order" {
+    const first = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            ctx.response_status = 201;
+            try ctx.next();
+        }
+    }.handle;
+
+    const second = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            ctx.response_content_type = "text/html";
+            try ctx.next();
+        }
+    }.handle;
+
+    const final = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            try ctx.respond("result", ctx.response_content_type);
+        }
+    }.handle;
+
+    const middleware = [_]MiddlewareFn{ first, second };
+    var ctx = Context{
+        .allocator = testing.allocator,
+        ._middleware = &middleware,
+        ._final_handler = final,
+    };
+    try ctx.next();
+    try testing.expectEqual(@as(u16, 201), ctx.response_status);
+    try testing.expectEqualStrings("text/html", ctx.response_content_type);
+    try testing.expectEqualStrings("result", ctx.response_body);
+}
+
+test "next: middleware can short-circuit" {
+    const auth = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            ctx.response_status = 403;
+            try ctx.respond("Forbidden", "text/plain");
+        }
+    }.handle;
+
+    const final = struct {
+        fn handle(ctx: *Context) anyerror!void {
+            try ctx.respond("should not reach", "text/plain");
+        }
+    }.handle;
+
+    const middleware = [_]MiddlewareFn{auth};
+    var ctx = Context{
+        .allocator = testing.allocator,
+        ._middleware = &middleware,
+        ._final_handler = final,
+    };
+    try ctx.next();
+    try testing.expectEqual(@as(u16, 403), ctx.response_status);
+    try testing.expectEqualStrings("Forbidden", ctx.response_body);
+}
+
+test "next: no middleware and no handler is a no-op" {
+    var ctx = Context{ .allocator = testing.allocator };
+    try ctx.next();
+    try testing.expectEqualStrings("", ctx.response_body);
 }

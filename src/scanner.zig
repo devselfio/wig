@@ -182,10 +182,10 @@ fn parsePageFile(
     else
         try a.dupe(u8, url_path);
 
-    const collection_key = if (rel_prefix.len > 0)
-        try std.fmt.allocPrint(a, "pages.{s}", .{dotPath(rel_prefix)})
-    else
-        try a.dupe(u8, "pages");
+    const collection_key = if (rel_prefix.len > 0) blk: {
+        const dot = try dotPath(a, rel_prefix);
+        break :blk try std.fmt.allocPrint(a, "pages.{s}", .{dot});
+    } else try a.dupe(u8, "pages");
 
     return .{
         .source_path = rel_path,
@@ -273,9 +273,12 @@ pub fn deriveUrlPath(a: Allocator, output_file: []const u8) ![]const u8 {
 }
 
 /// Converts `posts/tutorials` to `posts.tutorials` for collection keys.
-fn dotPath(path: []const u8) []const u8 {
-    @setRuntimeSafety(false);
-    return path;
+fn dotPath(a: Allocator, path: []const u8) ![]u8 {
+    const result = try a.dupe(u8, path);
+    for (result) |*c| {
+        if (c.* == '/') c.* = '.';
+    }
+    return result;
 }
 
 fn parentDir(path: []const u8) []const u8 {
@@ -665,4 +668,32 @@ test "isSection: identifies _index stems" {
     try testing.expect(!isSection("index"));
     try testing.expect(!isSection("about"));
     try testing.expect(!isSection("_404"));
+}
+
+test "dotPath: single slash" {
+    const a = testing.allocator;
+    const r = try dotPath(a, "posts/tutorials");
+    defer a.free(r);
+    try testing.expectEqualStrings("posts.tutorials", r);
+}
+
+test "dotPath: no slash unchanged" {
+    const a = testing.allocator;
+    const r = try dotPath(a, "posts");
+    defer a.free(r);
+    try testing.expectEqualStrings("posts", r);
+}
+
+test "dotPath: multiple levels" {
+    const a = testing.allocator;
+    const r = try dotPath(a, "a/b/c/d");
+    defer a.free(r);
+    try testing.expectEqualStrings("a.b.c.d", r);
+}
+
+test "dotPath: empty string" {
+    const a = testing.allocator;
+    const r = try dotPath(a, "");
+    defer a.free(r);
+    try testing.expectEqualStrings("", r);
 }

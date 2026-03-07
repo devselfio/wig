@@ -87,7 +87,6 @@ pub fn generateAtom(
 pub fn generateSitemap(
     a: Allocator,
     pages: []const scanner_mod.PageEntry,
-    _: []const u8,
     output_dir: fs.Dir,
 ) !void {
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -250,7 +249,7 @@ test "generateSitemap: produces valid XML" {
         },
     };
 
-    try generateSitemap(a, &pages, "https://example.com", tmp.dir);
+    try generateSitemap(a, &pages, tmp.dir);
 
     const content = try tmp.dir.readFileAlloc(a, "sitemap.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "<urlset xmlns=") != null);
@@ -262,7 +261,7 @@ test "generateSitemap: empty pages" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try generateSitemap(a, &.{}, "https://example.com", tmp.dir);
+    try generateSitemap(a, &.{}, tmp.dir);
 
     const content = try tmp.dir.readFileAlloc(a, "sitemap.xml", 64 * 1024);
     defer a.free(content);

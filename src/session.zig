@@ -5,14 +5,14 @@ const Allocator = std.mem.Allocator;
 pub const SessionStore = struct {
     ptr: *const anyopaque,
     load_fn: *const fn (*const anyopaque, []const u8) ?std.StringHashMap([]const u8),
-    save_fn: *const fn (*const anyopaque, []const u8, std.StringHashMap([]const u8)) void,
+    save_fn: *const fn (*const anyopaque, []const u8, std.StringHashMap([]const u8)) anyerror!void,
     destroy_fn: *const fn (*const anyopaque, []const u8) void,
 
     pub fn load(self: SessionStore, id: []const u8) ?std.StringHashMap([]const u8) {
         return self.load_fn(self.ptr, id);
     }
 
-    pub fn save(self: SessionStore, id: []const u8, data: std.StringHashMap([]const u8)) void {
+    pub fn save(self: SessionStore, id: []const u8, data: std.StringHashMap([]const u8)) !void {
         return self.save_fn(self.ptr, id, data);
     }
 
@@ -45,8 +45,8 @@ pub const MemoryStore = struct {
         return self.sessions.get(id);
     }
 
-    pub fn saveSession(self: *MemoryStore, id: []const u8, data: std.StringHashMap([]const u8)) void {
-        self.sessions.put(id, data) catch {};
+    pub fn saveSession(self: *MemoryStore, id: []const u8, data: std.StringHashMap([]const u8)) !void {
+        try self.sessions.put(id, data);
     }
 
     pub fn destroySession(self: *MemoryStore, id: []const u8) void {
@@ -65,8 +65,8 @@ pub const MemoryStore = struct {
                 }
             }.load),
             .save_fn = @ptrCast(&struct {
-                fn save(ptr: *MemoryStore, id: []const u8, data: std.StringHashMap([]const u8)) void {
-                    ptr.saveSession(id, data);
+                fn save(ptr: *MemoryStore, id: []const u8, data: std.StringHashMap([]const u8)) anyerror!void {
+                    try ptr.saveSession(id, data);
                 }
             }.save),
             .destroy_fn = @ptrCast(&struct {
@@ -138,7 +138,7 @@ test "MemoryStore: save and load" {
 
     var data = std.StringHashMap([]const u8).init(testing.allocator);
     try data.put("user", "alice");
-    ms.saveSession("sess1", data);
+    try ms.saveSession("sess1", data);
 
     const loaded = ms.loadSession("sess1");
     try testing.expect(loaded != null);
@@ -151,7 +151,7 @@ test "MemoryStore: destroy removes session" {
 
     var data = std.StringHashMap([]const u8).init(testing.allocator);
     try data.put("key", "val");
-    ms.saveSession("sess2", data);
+    try ms.saveSession("sess2", data);
 
     ms.destroySession("sess2");
     try testing.expect(ms.loadSession("sess2") == null);

@@ -53,7 +53,7 @@ pub fn main() !void {
             std.debug.print("wig add: unknown subcommand '{s}'\n", .{sub});
         }
     } else if (std.mem.eql(u8, command, "styles")) {
-        std.debug.print("wig styles: not implemented\n", .{});
+        return error.NotImplemented;
     } else {
         std.debug.print("wig: unknown command '{s}'\n", .{command});
         printUsage();

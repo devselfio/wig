@@ -48,7 +48,9 @@ pub fn init(a: Allocator, target_path: []const u8) !void {
 
 /// Installs a style from wig-stand or a git URL.
 ///
-/// Full HTTP fetch is deferred; this is a stub that returns NotImplemented.
+/// **Deferred:** Requires HTTP client and tar/zip extraction, which depend
+/// on external networking not yet integrated. Currently returns
+/// `error.NotImplemented`.
 pub fn install(_: Allocator, _: []const u8, _: []const u8, _: InstallOptions) !void {
     return error.NotImplemented;
 }
@@ -72,7 +74,7 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
     {
         var f = try fs.createFileAbsolute(manifest_path, .{});
         defer f.close();
-        try f.writeAll(std.fmt.comptimePrint(
+        const content = try std.fmt.allocPrint(a,
             \\# Style: {s}
             \\#
             \\# Tokens, colour schemes, and asset bundles for this style.
@@ -92,7 +94,9 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
             \\    above: 2
             \\    below: 1
             \\
-        , .{"{s}"}));
+        , .{name});
+        defer a.free(content);
+        try f.writeAll(content);
     }
 }
 
@@ -113,7 +117,12 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
         defer f.close();
         const header = try std.fmt.allocPrint(a,
             \\/* {s}
-            \\ * TODO: Describe this block.
+            \\ *
+            \\ * Custom properties:
+            \\ *   (none yet)
+            \\ *
+            \\ * Exceptions:
+            \\ *   (none yet)
             \\ */
             \\.{s} {{}}
             \\
@@ -169,7 +178,7 @@ test "init: creates project directories" {
     cfg.close();
 }
 
-test "addStyle: creates manifest" {
+test "addStyle: creates manifest with correct name" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -182,8 +191,12 @@ test "addStyle: creates manifest" {
 
     const manifest_path = try fs.path.join(testing.allocator, &.{ abs, "modern", "style.yaml" });
     defer testing.allocator.free(manifest_path);
-    const f = try fs.openFileAbsolute(manifest_path, .{});
-    f.close();
+    const content = try fs.openFileAbsolute(manifest_path, .{});
+    defer content.close();
+    var buf: [512]u8 = undefined;
+    const len = try content.readAll(&buf);
+    const text = buf[0..len];
+    try testing.expect(std.mem.indexOf(u8, text, "# Style: modern") != null);
 }
 
 test "addBlock: creates CSS and HTML files" {
