@@ -1,0 +1,17 @@
+<!-- test: scaffold init creates site config -->
+<!-- scaffold-cmd -->
+init
+<!-- out -->
+url: https://example.com
+
+<!-- test: addStyle interpolates name -->
+<!-- scaffold-cmd -->
+add-style mytheme
+<!-- out -->
+# Style: mytheme
+
+<!-- test: addBlock creates CSS with name -->
+<!-- scaffold-cmd -->
+add-block default card
+<!-- out -->
+/* card

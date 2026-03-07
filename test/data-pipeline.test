@@ -1,0 +1,19 @@
+<!-- test: config loads url and title -->
+<!-- config -->
+url: https://example.com
+title: My Site
+<!-- out -->
+url=https://example.com title=My Site
+
+<!-- test: context converts string value -->
+<!-- comb-input -->
+name: hello
+<!-- out -->
+name:"hello"
+
+<!-- test: context converts nested map -->
+<!-- comb-input -->
+site:
+  title: Test
+<!-- out -->
+site:{title:"Test"}

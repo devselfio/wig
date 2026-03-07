@@ -1,0 +1,33 @@
+<!-- test: atom feed with entries -->
+<!-- pages-json -->
+[{"title": "First Post", "date": "2026-03-01", "source": "posts/first.dj", "url_path": "/posts/first/", "absolute_url": "https://example.com/posts/first/", "collection": "pages.posts"}]
+<!-- feed-config -->
+name: blog
+collection: pages.posts
+title: Blog Feed
+<!-- out -->
+<feed xmlns=
+First Post
+2026-03-01T00:00:00Z
+
+<!-- test: sitemap with urls -->
+<!-- pages-json -->
+[{"absolute_url": "https://example.com/about/", "url_path": "/about/"}]
+<!-- sitemap -->
+<!-- out -->
+<urlset xmlns=
+https://example.com/about/
+
+<!-- test: search index contains page data -->
+<!-- pages-json -->
+[{"title": "Test Page", "url_path": "/test/", "absolute_url": "https://example.com/test/", "content": "<p>Search body</p>"}]
+<!-- out -->
+Test Page
+/test/
+
+<!-- test: empty pages sitemap no crash -->
+<!-- pages-json -->
+[]
+<!-- sitemap -->
+<!-- out -->
+<urlset

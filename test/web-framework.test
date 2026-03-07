@@ -1,0 +1,42 @@
+<!-- test: exact route match -->
+<!-- route -->
+GET /hello
+<!-- request -->
+GET /hello
+<!-- out -->
+200 matched
+
+<!-- test: no route match 404 -->
+<!-- route -->
+GET /about
+<!-- request -->
+GET /missing
+<!-- out -->
+404 
+
+<!-- test: method dispatch POST on GET route -->
+<!-- route -->
+POST /submit
+<!-- request -->
+GET /submit
+<!-- out -->
+404 
+
+<!-- test: middleware passthrough -->
+<!-- middleware -->
+passthrough
+<!-- out -->
+mw>handler
+
+<!-- test: two middleware in order -->
+<!-- middleware -->
+passthrough
+passthrough
+<!-- out -->
+mw>mw>handler
+
+<!-- test: middleware short-circuit -->
+<!-- middleware -->
+block
+<!-- out -->
+blocked

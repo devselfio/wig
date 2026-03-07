@@ -273,7 +273,7 @@ pub fn deriveUrlPath(a: Allocator, output_file: []const u8) ![]const u8 {
 }
 
 /// Converts `posts/tutorials` to `posts.tutorials` for collection keys.
-fn dotPath(a: Allocator, path: []const u8) ![]u8 {
+pub fn dotPath(a: Allocator, path: []const u8) ![]u8 {
     const result = try a.dupe(u8, path);
     for (result) |*c| {
         if (c.* == '/') c.* = '.';

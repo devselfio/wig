@@ -1,0 +1,35 @@
+<!-- test: dotPath single slash -->
+<!-- path -->
+posts/tutorials
+<!-- out -->
+posts.tutorials
+
+<!-- test: dotPath no slash -->
+<!-- path -->
+posts
+<!-- out -->
+posts
+
+<!-- test: dotPath multiple levels -->
+<!-- path -->
+a/b/c/d
+<!-- out -->
+a.b.c.d
+
+<!-- test: deriveOutputPath regular page -->
+<!-- source-path -->
+about.dj
+<!-- out -->
+about/index.html
+
+<!-- test: deriveOutputPath root index -->
+<!-- source-path -->
+index.dj
+<!-- out -->
+index.html
+
+<!-- test: deriveOutputPath nested -->
+<!-- source-path -->
+tutorials/zig/intro.dj
+<!-- out -->
+tutorials/zig/intro/index.html

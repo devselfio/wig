@@ -24,6 +24,8 @@ pub const router = @import("router.zig");
 pub const handler = @import("handler.zig");
 pub const session = @import("session.zig");
 pub const scaffold = @import("scaffold.zig");
+pub const html_utils = @import("html.zig");
+pub const test_runner = @import("test_runner.zig");
 
 pub const Diagnostic = struct {
     kind: Kind = .err,
@@ -454,6 +456,8 @@ test {
     _ = handler;
     _ = session;
     _ = scaffold;
+    _ = html_utils;
+    _ = test_runner;
 }
 
 test "E2E: data pipeline loads config, computes tokens, renders template" {
