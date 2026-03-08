@@ -1,0 +1,32 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  _core:
+    layouts:
+      base.html: |
+        <html><body><t-slot name="body" /></body></html>
+  default:
+    style.yaml: |
+      name: default
+      templates:
+        - _core/base.html
+    layouts:
+      page.html: |
+        <t-extend template="_core/base.html">
+        <t-define name="body"><main><t-slot /></main></t-define>
+        </t-extend>
+
+pages:
+  _index.html: |
+    ---
+    style: default
+    layout: page.html
+    ---
+    <p>Hello</p>
+
+_output:
+  index.html: |
+    <html><body><main><p>Hello</p></main></body></html>

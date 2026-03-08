@@ -1,0 +1,52 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  s:
+    style.yaml: |
+      name: s
+    layouts:
+      page.html: |
+        <t-slot />
+
+pages:
+  _index.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    root
+  about.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    about
+  posts/first.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    first
+  posts/second.dj: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    second
+  docs/guide/intro.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    intro
+
+_output:
+  index.html: root
+  about/index.html: about
+  posts/first/index.html: first
+  posts/second/index.html: |
+    <p>second</p>
+  docs/guide/intro/index.html: intro

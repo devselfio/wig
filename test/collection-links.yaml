@@ -1,0 +1,45 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  s:
+    style.yaml: |
+      name: s
+    layouts:
+      page.html: |
+        <t-slot />
+
+pages:
+  _index.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    <ul>
+    <t-for post in pages.posts>
+    <li><a t-var:href="post.path"><t-var name="post.title" /></a></li>
+    </t-for>
+    </ul>
+  posts/hello.html: |
+    ---
+    style: s
+    layout: page.html
+    title: Hello
+    ---
+    content
+  posts/world.html: |
+    ---
+    style: s
+    layout: page.html
+    title: World
+    ---
+    content
+
+_output:
+  index.html: |
+    <ul>
+    <li><a href="/posts/world/">World</a></li>
+    <li><a href="/posts/hello/">Hello</a></li>
+    </ul>

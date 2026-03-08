@@ -1,0 +1,40 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  s:
+    style.yaml: |
+      name: s
+    layouts:
+      page.html: |
+        <t-slot />
+
+pages:
+  _index.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    <t-for post in pages.posts><t-var name="post.title" />,</t-for>
+  posts/a-first.html: |
+    ---
+    style: s
+    layout: page.html
+    title: First
+    ---
+    A
+  posts/b-second.html: |
+    ---
+    style: s
+    layout: page.html
+    title: Second
+    ---
+    B
+
+_output:
+  index.html: |
+    Second,First,
+  posts/a-first/index.html: A
+  posts/b-second/index.html: B

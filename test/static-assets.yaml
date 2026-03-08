@@ -1,0 +1,30 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  s:
+    style.yaml: |
+      name: s
+    layouts:
+      page.html: |
+        <t-slot />
+
+assets:
+  js/app.js: |
+    // application code
+
+pages:
+  _index.html: |
+    ---
+    style: s
+    layout: page.html
+    ---
+    <script src="/assets/js/app.js"></script>
+
+_output:
+  assets/js/app.js: |
+    // application code
+  index.html: |
+    <script src="/assets/js/app.js"></script>

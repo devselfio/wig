@@ -1,0 +1,68 @@
+data:
+  site.yaml: |
+    url: https://example.com
+    title: Test
+
+styles:
+  default:
+    style.yaml: |
+      name: default
+    layouts:
+      base.html: |
+        <html>
+        <head><title><t-slot name="title">Untitled</t-slot></title></head>
+        <body><t-slot name="body" /></body>
+        </html>
+      page.html: |
+        <t-extend template="base.html">
+        <t-define name="body">
+        <t-include template="header.html" />
+        <main><t-slot /></main>
+        <t-include template="footer.html" />
+        </t-define>
+        </t-extend>
+      post.html: |
+        <t-extend template="page.html">
+        <t-define name="title"><t-var name="page.title" /> | Test</t-define>
+        </t-extend>
+    includes:
+      header.html: |
+        <header><a href="/">Test</a></header>
+      footer.html: |
+        <footer><p>Built with Wig</p></footer>
+
+pages:
+  about.html: |
+    ---
+    style: default
+    layout: page.html
+    title: About
+    ---
+    <p>About us</p>
+  posts/hello.html: |
+    ---
+    style: default
+    layout: post.html
+    title: Hello World
+    ---
+    <p>First post</p>
+
+_output:
+  about/index.html: |
+    <html>
+    <head><title>Untitled</title></head>
+    <body>
+    <header><a href="/">Test</a></header>
+    <main><p>About us</p></main>
+    <footer><p>Built with Wig</p></footer>
+    </body>
+    </html>
+  posts/hello/index.html: |
+    <html>
+    <head><title>Hello World | Test</title></head>
+    <body>
+    <header><a href="/">Test</a></header>
+    <main><p>First post</p></main>
+    <footer><p>Built with Wig</p></footer>
+    </body>
+    </html>
