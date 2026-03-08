@@ -45,6 +45,10 @@ wig/
     handler.zig     # request Context, Response, handler signatures
     session.zig     # cookie-based sessions, MemoryStore
     scaffold.zig    # wig init, add style, add block, install
+    html.zig        # shared HTML utilities (stripTags)
+    test_runner.zig # integration test runner (Toupee-style .test files)
+  test/
+    *.test          # integration test suites (HTML comment delimited)
 ```
 
 ## Architecture
@@ -70,16 +74,25 @@ try site.buildAll(.{ .clean = clean });
 // Dev server
 var site = try wig.Site.init(allocator, .{ .root = ".", .draft = true });
 try site.buildAll(.{ .clean = false });
-var app = wig.devServer(&site);
+var app = try wig.devServer(&site);
 try app.listen(8080);
 ```
 
 ### Content parsers
 
-Pluggable via `Site.init()`. Default: zjot (Djot). The `ContentParser` type is a function pointer:
+Pluggable via `Site.init()`. Default: zjot (Djot). The `ContentParser` type is a function pointer, defined in `pages.zig` and re-exported by `root.zig`:
 
 ```zig
 pub const ContentParser = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;
+pub const ContentParserEntry = struct { extension: []const u8, parse: ContentParser };
+```
+
+### Validation
+
+`Site.validate()` performs a dry run (no rendering). Options:
+
+```zig
+try site.validate(.{ .external_links = true }); // also check external URLs via HTTP HEAD
 ```
 
 ### Toupee API (template engine)
@@ -152,6 +165,45 @@ Always `zig-out/site/`. Production builds error if unclean. Draft builds overlay
 - CSS templates use `<t-raw>` for value output (prevents HTML escaping).
 - zjot shortcodes in Djot use `` `<t-include ...>`{=html} `` syntax.
 - Heading IDs: zjot puts IDs on `<section>` elements, not headings. `toc.zig` extracts accordingly.
+
+## Testing
+
+### Inline unit tests
+
+Every module has inline `test` blocks covering its public API. Run with `zig build test`.
+
+### Integration tests
+
+File-based integration tests live in `wig/test/*.test`. The format uses HTML comment delimiters (same format as Toupee and Comb):
+
+```
+<!-- test: name of test -->
+<!-- section-name -->
+content
+<!-- out -->
+expected output
+```
+
+Each test case is dispatched to a domain-specific runner in `test_runner.zig` based on which sections are present. Supported domains:
+
+| Section(s)             | Domain                                    |
+|------------------------|-------------------------------------------|
+| `html`                 | HTML tag stripping (`html.zig`)           |
+| `path`                 | Collection key dotPath (`scanner.zig`)    |
+| `source-path`          | Clean URL derivation (`scanner.zig`)      |
+| `route` + `request`    | HTTP routing (`router.zig` + `app.zig`)   |
+| `middleware`            | Middleware chain (`handler.zig`)          |
+| `pages-json` + variants| Feeds, sitemap, search index              |
+| `scaffold-cmd`         | Project scaffolding (`scaffold.zig`)      |
+| `tokens`               | Fluid token computation (`tokens.zig`)    |
+| `highlights` + `scheme:`| Colour scheme resolution (`colours.zig`) |
+| `config`               | Site config loading (`config.zig`)        |
+| `comb-input`           | YAML-to-Toupee conversion (`context.zig`)|
+| `css-files`            | CSS bundle concatenation (`bundles.zig`)  |
+| `scan-pages`           | Directory scanning (`scanner.zig`)        |
+| `page-content`         | Page rendering + ToC + excerpts           |
+
+Test files: `smoke.test`, `html.test`, `scanner.test`, `web-framework.test`, `post-build.test`, `scaffold.test`, `data-pipeline.test`, `css-pipeline.test`, `page-rendering.test`.
 
 ## Dependency API Reference
 
