@@ -47,6 +47,52 @@ pub const WigError = error{
     MissingTemplate,
     BuildFailed,
     OutputDirNotClean,
+    TemplateConflict,
+};
+
+/// Resolves template names relative to a style during rendering.
+/// Short names (e.g. `base.html`) resolve within the current style's
+/// `layouts/` then `includes/` directories. Names prefixed with `_core/`
+/// resolve from the shared `_core` directories. Full paths are tried as-is.
+pub const StyleLoader = struct {
+    templates: *const std.StringArrayHashMapUnmanaged([]const u8),
+    style_name: []const u8,
+
+    pub fn loader(self: *const StyleLoader) toupee.Loader {
+        return .{
+            .ptr = @ptrCast(self),
+            .getSourceFn = getSource,
+        };
+    }
+
+    fn getSource(ptr: *const anyopaque, a: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
+        const self: *const StyleLoader = @ptrCast(@alignCast(ptr));
+
+        if (std.mem.startsWith(u8, name, "_core/")) {
+            const short = name["_core/".len..];
+            const paths = [_][]const u8{ "_core/layouts/", "_core/includes/" };
+            for (paths) |prefix| {
+                const full = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, short });
+                defer a.free(full);
+                if (self.templates.get(full)) |src| return try a.dupe(u8, src);
+            }
+            return null;
+        }
+
+        if (std.mem.indexOf(u8, name, "/") != null) {
+            if (self.templates.get(name)) |src| return try a.dupe(u8, src);
+            return null;
+        }
+
+        const prefixes = [_][]const u8{ "/layouts/", "/includes/" };
+        for (prefixes) |suffix| {
+            const full = try std.fmt.allocPrint(a, "{s}{s}{s}", .{ self.style_name, suffix, name });
+            defer a.free(full);
+            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
+        }
+
+        return null;
+    }
 };
 
 pub const ContentParser = pages.ContentParser;
@@ -99,8 +145,8 @@ pub const Site = struct {
     }
 
     pub fn deinit(self: *Site) void {
-        if (self.build_arena) |*ba| ba.deinit();
         if (self.engine) |*e| e.deinit();
+        if (self.build_arena) |*ba| ba.deinit();
         if (self.data_result) |*d| d.deinit();
         if (self.style_configs) |cfgs| {
             for (cfgs) |*c| @constCast(c).deinit();
@@ -189,7 +235,8 @@ pub const Site = struct {
             defer styles_dir.close();
 
             for (style_cfgs) |style_cfg| {
-                if (style_cfg.raw.get("assets")) |assets_val| {
+                const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
+                if (assets_val_opt) |assets_val| {
                     if (assets_val == .object) {
                         for (assets_val.object) |type_entry| {
                             const bundle_type = switch (type_entry.key) {
@@ -268,24 +315,94 @@ pub const Site = struct {
         const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
         try style_ctx.put("taxonomies", tax_ctx);
 
-        // Put collections into context
+        // Put collections into context using putAt for dot-path resolution.
+        // Skip the root "pages" collection when nested collections exist,
+        // because putAt("pages", list) followed by putAt("pages.posts", list)
+        // would conflict (pages can't be both a list and a map).
+        const has_nested = blk: {
+            var coll_check = scan_result.collections.iterator();
+            while (coll_check.next()) |entry| {
+                if (std.mem.indexOf(u8, entry.key_ptr.*, ".") != null) break :blk true;
+            }
+            break :blk false;
+        };
+
         var coll_it = scan_result.collections.iterator();
         while (coll_it.next()) |entry| {
-            try style_ctx.put(entry.key_ptr.*, entry.value_ptr.*);
+            if (has_nested and std.mem.eql(u8, entry.key_ptr.*, "pages")) continue;
+            try style_ctx.putAt(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        // Render pages
-        var engine = try toupee.Engine.init(ba);
-        engine.loadFromDirectory(styles_path, ".html") catch {};
+        // Load templates per-style into engine and a shared template map.
+        // Engine manages its own memory (dupes names/sources, creates per-template
+        // arenas), so it uses the main allocator to avoid lifetime coupling with
+        // the build arena.
+        var engine = try toupee.Engine.init(a);
+        var template_map = std.StringArrayHashMapUnmanaged([]const u8){};
 
-        const fs_loader = toupee.FileSystemLoader{ .base_path = styles_path };
-        const loader = fs_loader.loader();
+        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd2| {
+            var styles_dir2 = sd2;
+            defer styles_dir2.close();
+
+            // Load _core templates (shared across all styles)
+            for ([_][]const u8{ "layouts", "includes" }) |subdir| {
+                const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
+                if (styles_dir2.openDir(core_subdir, .{ .iterate = true })) |cd| {
+                    var core_dir = cd;
+                    defer core_dir.close();
+                    var cit = core_dir.iterate();
+                    while (try cit.next()) |entry| {
+                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                        const tmpl_name = try std.fmt.allocPrint(ba, "_core/{s}/{s}", .{ subdir, entry.name });
+                        const content = try core_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                        try engine.addTemplate(tmpl_name, content);
+                        try template_map.put(ba, tmpl_name, content);
+                    }
+                } else |_| {}
+            }
+
+            // Load per-style templates
+            for (style_cfgs) |style_cfg| {
+                for ([_][]const u8{ "layouts", "includes" }) |subdir| {
+                    const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
+                    if (styles_dir2.openDir(style_subdir, .{ .iterate = true })) |sd3| {
+                        var tmpl_dir = sd3;
+                        defer tmpl_dir.close();
+                        var tit = tmpl_dir.iterate();
+                        while (try tit.next()) |entry| {
+                            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                            const tmpl_name = try std.fmt.allocPrint(ba, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name });
+                            const content = try tmpl_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                            try engine.addTemplate(tmpl_name, content);
+                            try template_map.put(ba, tmpl_name, content);
+                        }
+                    } else |_| {}
+                }
+
+                // Backward compatibility: load from html/ subdirectory
+                const html_subdir = try std.fmt.allocPrint(ba, "{s}/html", .{style_cfg.name});
+                if (styles_dir2.openDir(html_subdir, .{ .iterate = true })) |sd3| {
+                    var html_dir = sd3;
+                    defer html_dir.close();
+                    var hit = html_dir.iterate();
+                    while (try hit.next()) |entry| {
+                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                        const tmpl_name = try std.fmt.allocPrint(ba, "{s}/html/{s}", .{ style_cfg.name, entry.name });
+                        const content = try html_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                        try engine.addTemplate(tmpl_name, content);
+                        try template_map.put(ba, tmpl_name, content);
+                    }
+                } else |_| {}
+            }
+        } else |_| {}
+
+        // Render pages with per-style template resolution
         _ = try pages.renderAll(
             ba,
             scan_result.pages,
             &engine,
             &style_ctx,
-            loader,
+            &template_map,
             self.options.content_parsers,
             output_dir,
         );
@@ -360,7 +477,47 @@ pub const Site = struct {
         };
         defer engine.deinit();
 
-        engine.loadFromDirectory(styles_path, ".html") catch {};
+        // Load templates for validation (same logic as buildAll)
+        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
+            var sdir = sd;
+            defer sdir.close();
+            for ([_][]const u8{ "layouts", "includes", "html" }) |subdir| {
+                const core_subdir_str = std.fmt.allocPrint(a, "_core/{s}", .{subdir}) catch continue;
+                defer a.free(core_subdir_str);
+                if (sdir.openDir(core_subdir_str, .{ .iterate = true })) |cd| {
+                    var core_dir = cd;
+                    defer core_dir.close();
+                    var cit = core_dir.iterate();
+                    while (cit.next() catch null) |entry| {
+                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                        const tmpl_name = std.fmt.allocPrint(a, "_core/{s}/{s}", .{ subdir, entry.name }) catch continue;
+                        defer a.free(tmpl_name);
+                        const content = core_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024) catch continue;
+                        defer a.free(content);
+                        engine.addTemplate(tmpl_name, content) catch {};
+                    }
+                } else |_| {}
+            }
+            for (style_cfgs) |style_cfg| {
+                for ([_][]const u8{ "layouts", "includes", "html" }) |subdir| {
+                    const ssd = std.fmt.allocPrint(a, "{s}/{s}", .{ style_cfg.name, subdir }) catch continue;
+                    defer a.free(ssd);
+                    if (sdir.openDir(ssd, .{ .iterate = true })) |sd2| {
+                        var tmpl_dir = sd2;
+                        defer tmpl_dir.close();
+                        var tit = tmpl_dir.iterate();
+                        while (tit.next() catch null) |entry| {
+                            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                            const tmpl_name = std.fmt.allocPrint(a, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name }) catch continue;
+                            defer a.free(tmpl_name);
+                            const content = tmpl_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024) catch continue;
+                            defer a.free(content);
+                            engine.addTemplate(tmpl_name, content) catch {};
+                        }
+                    } else |_| {}
+                }
+            }
+        } else |_| {}
 
         var resolver: toupee.Resolver = .{};
         const toupee_diags = engine.validate(a, resolver.loader()) catch

@@ -193,7 +193,7 @@ fn parsePageFile(
         .url_path = url_path,
         .absolute_url = absolute_url,
         .content_body = fm.content,
-        .extension = ext,
+        .extension = try a.dupe(u8, ext),
         .frontmatter = fm_toupee,
         .collection_key = collection_key,
         .is_section = isSection(stem),

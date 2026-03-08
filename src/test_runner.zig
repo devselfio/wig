@@ -968,7 +968,7 @@ fn trimEnds(s: []const u8) []const u8 {
     return s[start..end];
 }
 
-// ── Test file list ──────────────────────────────────────────────────────
+// ── Test file lists ─────────────────────────────────────────────────────
 
 const test_file_names = [_][]const u8{
     "smoke.test",
@@ -980,6 +980,18 @@ const test_file_names = [_][]const u8{
     "data-pipeline.test",
     "css-pipeline.test",
     "page-rendering.test",
+};
+
+const yaml_test_file_names = [_][]const u8{
+    "minimal-site.yaml",
+    "template-chain.yaml",
+    "core-templates.yaml",
+    "clean-urls.yaml",
+    "content-formats.yaml",
+    "collections.yaml",
+    "collection-links.yaml",
+    "css-bundle.yaml",
+    "static-assets.yaml",
 };
 
 test "wig integration test suite" {
@@ -1013,4 +1025,369 @@ test "wig integration test suite" {
     std.debug.print("\n  Total: {d}/{d} passed\n\n", .{ total.passed, total.total() });
 
     if (any_failed) return error.TestSuiteFailure;
+}
+
+// ── YAML integration test runner ────────────────────────────────────────
+
+const root = @import("root.zig");
+
+/// Runs a single YAML integration test. Parses the YAML file, creates a
+/// temporary directory with the input file tree, runs Site.buildAll(),
+/// then verifies the output directory matches the _output assertions.
+pub fn runYamlTest(backing_a: Allocator, test_dir: fs.Dir, filename: []const u8) !TestResults {
+    var arena = std.heap.ArenaAllocator.init(backing_a);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const content = try test_dir.readFileAlloc(a, filename, 1024 * 1024);
+    var parsed = comb.parse(a, content) catch {
+        std.debug.print("    FAIL [{s}]: YAML parse error\n", .{filename});
+        return .{ .failed = 1 };
+    };
+    _ = &parsed;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Walk YAML tree and create input files
+    const top_val = parsed.value;
+    if (top_val != .object) {
+        std.debug.print("    FAIL [{s}]: top-level value is not a map\n", .{filename});
+        return .{ .failed = 1 };
+    }
+
+    var output_spec: ?comb.Value = null;
+    for (top_val.object) |entry| {
+        const key = switch (entry.key) {
+            .string => |s| s,
+            else => continue,
+        };
+
+        if (std.mem.eql(u8, key, "_output")) {
+            output_spec = entry.value;
+            continue;
+        }
+
+        try writeFileTree(a, tmp.dir, key, entry.value);
+    }
+
+    if (output_spec == null) {
+        std.debug.print("    FAIL [{s}]: no _output block\n", .{filename});
+        return .{ .failed = 1 };
+    }
+
+    // Run the build
+    const abs_root = try tmp.dir.realpathAlloc(a, ".");
+    var site = root.Site.init(a, .{
+        .root = abs_root,
+    }) catch {
+        std.debug.print("    FAIL [{s}]: Site.init failed\n", .{filename});
+        return .{ .failed = 1 };
+    };
+    defer site.deinit();
+
+    site.buildAll(.{ .clean = true }) catch |err| {
+        std.debug.print("    FAIL [{s}]: buildAll failed: {s}\n", .{ filename, @errorName(err) });
+        return .{ .failed = 1 };
+    };
+
+    // Open output directory
+    var output_dir = tmp.dir.openDir("zig-out/site", .{ .iterate = true }) catch {
+        std.debug.print("    FAIL [{s}]: could not open output directory\n", .{filename});
+        return .{ .failed = 1 };
+    };
+    defer output_dir.close();
+
+    // Verify output
+    var results = TestResults{};
+    try verifyOutput(a, output_dir, "", output_spec.?, &results, filename);
+
+    return results;
+}
+
+/// Recursively creates files from a YAML map structure.
+/// String values are file contents. Map values are subdirectories.
+/// Boolean true means use a fixture (not yet implemented -- creates empty).
+fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value) !void {
+    switch (value) {
+        .string => |content| {
+            if (std.fs.path.dirname(name)) |parent| {
+                dir.makePath(parent) catch {};
+            }
+            var f = try dir.createFile(name, .{});
+            defer f.close();
+            try f.writeAll(content);
+        },
+        .object => |entries| {
+            dir.makePath(name) catch {};
+            var sub_dir = try dir.openDir(name, .{});
+            defer sub_dir.close();
+            for (entries) |entry| {
+                const key = switch (entry.key) {
+                    .string => |s| s,
+                    else => continue,
+                };
+                try writeFileTree(a, sub_dir, key, entry.value);
+            }
+        },
+        .boolean => |b| {
+            if (b) {
+                if (std.fs.path.dirname(name)) |parent| {
+                    dir.makePath(parent) catch {};
+                }
+                var f = try dir.createFile(name, .{});
+                f.close();
+            }
+        },
+        else => {},
+    }
+}
+
+/// Recursively verifies output files against the _output spec.
+/// Keys may contain glob patterns (e.g. `main.*.css`) to match
+/// files with dynamic names like content hashes.
+fn verifyOutput(
+    a: Allocator,
+    output_dir: fs.Dir,
+    prefix: []const u8,
+    spec: comb.Value,
+    results: *TestResults,
+    test_name: []const u8,
+) !void {
+    const entries = switch (spec) {
+        .object => |o| o,
+        else => return,
+    };
+
+    for (entries) |entry| {
+        const key = switch (entry.key) {
+            .string => |s| s,
+            else => continue,
+        };
+
+        const full_path = if (prefix.len > 0)
+            try std.fmt.allocPrint(a, "{s}/{s}", .{ prefix, key })
+        else
+            try a.dupe(u8, key);
+
+        if (std.mem.indexOf(u8, full_path, "*") != null) {
+            try verifyGlobPath(a, output_dir, full_path, entry.value, results, test_name);
+            continue;
+        }
+
+        switch (entry.value) {
+            .string => |expected| {
+                const actual = output_dir.readFileAlloc(a, full_path, 4 * 1024 * 1024) catch {
+                    std.debug.print("    FAIL [{s}]: output file missing: {s}\n", .{ test_name, full_path });
+                    results.failed += 1;
+                    continue;
+                };
+
+                if (!normalizedEql(actual, expected)) {
+                    std.debug.print("    FAIL [{s}]: content mismatch for {s}\n      expected: '{s}'\n      actual:   '{s}'\n", .{ test_name, full_path, std.mem.trim(u8, expected, " \t\r\n"), std.mem.trim(u8, actual, " \t\r\n") });
+                    results.failed += 1;
+                } else {
+                    results.passed += 1;
+                }
+            },
+            .boolean => |b| {
+                const exists = output_dir.access(full_path, .{}) != error.FileNotFound;
+                if (b and !exists) {
+                    std.debug.print("    FAIL [{s}]: expected file to exist: {s}\n", .{ test_name, full_path });
+                    results.failed += 1;
+                } else if (!b and exists) {
+                    std.debug.print("    FAIL [{s}]: expected file to NOT exist: {s}\n", .{ test_name, full_path });
+                    results.failed += 1;
+                } else {
+                    results.passed += 1;
+                }
+            },
+            .object => {
+                try verifyOutput(a, output_dir, full_path, entry.value, results, test_name);
+            },
+            else => {},
+        }
+    }
+}
+
+/// Matches a glob pattern (containing `*`) against files in the output.
+/// Splits the pattern into directory and filename parts, lists the
+/// directory, and finds a file matching the glob.
+fn verifyGlobPath(
+    a: Allocator,
+    output_dir: fs.Dir,
+    pattern: []const u8,
+    value: comb.Value,
+    results: *TestResults,
+    test_name: []const u8,
+) !void {
+    const dir_part = if (std.mem.lastIndexOfScalar(u8, pattern, '/')) |idx|
+        pattern[0..idx]
+    else
+        ".";
+    const file_pattern = if (std.mem.lastIndexOfScalar(u8, pattern, '/')) |idx|
+        pattern[idx + 1 ..]
+    else
+        pattern;
+
+    var sub_dir = output_dir.openDir(dir_part, .{ .iterate = true }) catch {
+        std.debug.print("    FAIL [{s}]: glob directory not found: {s}\n", .{ test_name, dir_part });
+        results.failed += 1;
+        return;
+    };
+    defer sub_dir.close();
+
+    var it = sub_dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (globMatch(file_pattern, entry.name)) {
+            switch (value) {
+                .string => |expected| {
+                    const actual = try sub_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024);
+                    if (!normalizedEql(actual, expected)) {
+                        const full = try std.fmt.allocPrint(a, "{s}/{s}", .{ dir_part, entry.name });
+                        std.debug.print("    FAIL [{s}]: content mismatch for {s} (matched {s})\n      expected: '{s}'\n      actual:   '{s}'\n", .{ test_name, full, pattern, std.mem.trim(u8, expected, " \t\r\n"), std.mem.trim(u8, actual, " \t\r\n") });
+                        results.failed += 1;
+                    } else {
+                        results.passed += 1;
+                    }
+                },
+                .boolean => |b| {
+                    if (!b) {
+                        std.debug.print("    FAIL [{s}]: expected no match for glob {s}\n", .{ test_name, pattern });
+                        results.failed += 1;
+                    } else {
+                        results.passed += 1;
+                    }
+                },
+                else => results.passed += 1,
+            }
+            return;
+        }
+    }
+
+    switch (value) {
+        .boolean => |b| {
+            if (b) {
+                std.debug.print("    FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
+                results.failed += 1;
+            } else {
+                results.passed += 1;
+            }
+        },
+        else => {
+            std.debug.print("    FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
+            results.failed += 1;
+        },
+    }
+}
+
+/// Simple glob matching: `*` matches any sequence of characters.
+fn globMatch(pattern: []const u8, name: []const u8) bool {
+    var pi: usize = 0;
+    var ni: usize = 0;
+    var star_pi: ?usize = null;
+    var star_ni: usize = 0;
+
+    while (ni < name.len) {
+        if (pi < pattern.len and pattern[pi] == '*') {
+            star_pi = pi;
+            star_ni = ni;
+            pi += 1;
+        } else if (pi < pattern.len and pattern[pi] == name[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if (star_pi) |sp| {
+            pi = sp + 1;
+            star_ni += 1;
+            ni = star_ni;
+        } else {
+            return false;
+        }
+    }
+    while (pi < pattern.len and pattern[pi] == '*') pi += 1;
+    return pi == pattern.len;
+}
+
+/// Compares two strings after normalizing whitespace for HTML:
+/// - Whitespace between `>` and `<` is removed entirely.
+/// - Other whitespace runs are collapsed to a single space.
+/// - Leading/trailing whitespace is trimmed.
+fn normalizedEql(actual: []const u8, expected: []const u8) bool {
+    var a_buf: [64 * 1024]u8 = undefined;
+    var e_buf: [64 * 1024]u8 = undefined;
+    const a_norm = normalizeHtml(actual, &a_buf);
+    const e_norm = normalizeHtml(expected, &e_buf);
+    return std.mem.eql(u8, a_norm, e_norm);
+}
+
+fn normalizeHtml(input: []const u8, buf: []u8) []const u8 {
+    var len: usize = 0;
+    var last_non_ws: u8 = 0;
+    var in_ws = true;
+
+    for (input) |c| {
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+            if (!in_ws) in_ws = true;
+        } else {
+            if (in_ws and len > 0) {
+                if (last_non_ws != '>' and c != '<') {
+                    if (len < buf.len) {
+                        buf[len] = ' ';
+                        len += 1;
+                    }
+                }
+            }
+            in_ws = false;
+            if (len < buf.len) {
+                buf[len] = c;
+                len += 1;
+            }
+            last_non_ws = c;
+        }
+    }
+
+    return buf[0..len];
+}
+
+test "wig yaml integration test suite" {
+    var test_dir = fs.cwd().openDir("test", .{}) catch |err| {
+        std.debug.print("\nCould not open test directory: {}\n", .{err});
+        return err;
+    };
+    defer test_dir.close();
+
+    var total = TestResults{};
+    var any_failed = false;
+
+    for (yaml_test_file_names) |filename| {
+        if (!fileExistsInDir(test_dir, filename)) {
+            std.debug.print("  {s}: SKIP (file not found)\n", .{filename});
+            continue;
+        }
+
+        const results = runYamlTest(std.testing.allocator, test_dir, filename) catch |err| {
+            std.debug.print("  {s}: ERROR ({})\n", .{ filename, err });
+            total.failed += 1;
+            any_failed = true;
+            continue;
+        };
+
+        const dot_pos = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
+        const name = filename[0..dot_pos];
+        std.debug.print("  {s}: {d}/{d} passed\n", .{ name, results.passed, results.total() });
+        if (results.failed > 0) any_failed = true;
+        total.add(results);
+    }
+
+    if (total.total() > 0) {
+        std.debug.print("\n  YAML Total: {d}/{d} passed\n\n", .{ total.passed, total.total() });
+    }
+
+    if (any_failed) return error.TestSuiteFailure;
+}
+
+fn fileExistsInDir(dir: fs.Dir, name: []const u8) bool {
+    dir.access(name, .{}) catch return false;
+    return true;
 }

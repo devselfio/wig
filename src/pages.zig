@@ -4,6 +4,7 @@ const scanner_mod = @import("scanner.zig");
 const toc_mod = @import("toc.zig");
 const context_mod = @import("context.zig");
 const html = @import("html.zig");
+const root_mod = @import("root.zig");
 
 const Allocator = std.mem.Allocator;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
@@ -29,13 +30,14 @@ pub const RenderResult = struct {
 ///   5. Context building (data cascade + page.* + toc + excerpt)
 ///   6. Layout rendering through Toupee Engine (content as slot)
 ///
+/// Accepts either a Loader directly or a template map (for style-aware resolution).
 /// Returns the final HTML and the raw content HTML (for search indexing).
 pub fn renderOne(
     a: Allocator,
     entry: *const scanner_mod.PageEntry,
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
-    loader: toupee.Loader,
+    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
     content_parsers: []const ContentParserEntry,
 ) !RenderResult {
     const content_html = try parseContent(a, entry.content_body, entry.extension, content_parsers);
@@ -64,8 +66,29 @@ pub fn renderOne(
 
     try ctx.setSlot("", shortcoded);
 
-    const layout_name = getLayoutName(entry.frontmatter) orelse "default/page.html";
-    const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| switch (err) {
+    const style_name = getStyleName(entry.frontmatter) orelse "default";
+    const layout_short = getLayoutName(entry.frontmatter) orelse "page.html";
+
+    // Build the full layout name, trying layouts/ first, then html/ for backward compat
+    const layout_name = blk: {
+        const layouts_name = try std.fmt.allocPrint(a, "{s}/layouts/{s}", .{ style_name, layout_short });
+        if (engine.cache.contains(layouts_name)) break :blk layouts_name;
+        a.free(layouts_name);
+
+        const html_name = try std.fmt.allocPrint(a, "{s}/html/{s}", .{ style_name, layout_short });
+        if (engine.cache.contains(html_name)) break :blk html_name;
+        a.free(html_name);
+
+        // Try the layout value as-is (full path in frontmatter)
+        break :blk try a.dupe(u8, layout_short);
+    };
+
+    const style_loader = root_mod.StyleLoader{
+        .templates = template_map,
+        .style_name = style_name,
+    };
+
+    const output_html = engine.renderTemplate(a, layout_name, &ctx, style_loader.loader(), .{}) catch |err| switch (err) {
         error.TemplateNotFound => return error.MissingTemplate,
         else => return err,
     };
@@ -80,17 +103,17 @@ pub fn renderOne(
 /// is deferred to a later step.
 pub fn renderAll(
     a: Allocator,
-    pages: []const scanner_mod.PageEntry,
+    all_pages: []const scanner_mod.PageEntry,
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
-    loader: toupee.Loader,
+    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
     content_parsers: []const ContentParserEntry,
     output_dir: fs.Dir,
 ) ![]RenderResult {
-    const results = try a.alloc(RenderResult, pages.len);
+    const results = try a.alloc(RenderResult, all_pages.len);
 
-    for (pages, 0..) |*page, i| {
-        const result = try renderOne(a, page, engine, base_ctx, loader, content_parsers);
+    for (all_pages, 0..) |*page, i| {
+        const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers);
 
         output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
         var f = try output_dir.createFile(page.output_file, .{});
@@ -208,6 +231,13 @@ pub const PaginationChunk = struct {
 fn getLayoutName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
     const val = fm.map.get("layout") orelse return null;
+    if (val != .string) return null;
+    return val.string;
+}
+
+fn getStyleName(fm: toupee.Value) ?[]const u8 {
+    if (fm != .map) return null;
+    const val = fm.map.get("style") orelse return null;
     if (val != .string) return null;
     return val.string;
 }
