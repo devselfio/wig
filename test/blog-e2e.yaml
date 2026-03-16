@@ -1,0 +1,16 @@
+test:
+  name: Full blog with template chain, collections, CSS, and assets
+  command: build
+  fixtures:
+    - blog-10-posts
+output:
+  files:
+    index.html: true
+    posts/260310-post-10/index.html: true
+    posts/260301-post-01/index.html: true
+    posts/260305-post-05/index.html: true
+    css/default/main.*.css: |
+      * { margin: 0; box-sizing: border-box; }
+      body { font-family: sans-serif; line-height: 1.6; }
+    assets/js/app.js: |
+      // application code

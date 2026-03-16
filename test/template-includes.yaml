@@ -1,0 +1,31 @@
+test:
+  name: Template includes for reusable components
+  command: build
+  fixtures:
+    - minimal
+  files:
+    styles:
+      s:
+        layouts:
+          page.html: |
+            <t-include template="header.html" />
+            <main><t-slot /></main>
+            <t-include template="footer.html" />
+        includes:
+          header.html: |
+            <header><a href="/">Test Site</a></header>
+          footer.html: |
+            <footer><p>Footer</p></footer>
+    pages:
+      _index.html: |
+        ---
+        style: s
+        layout: page.html
+        ---
+        <p>Content</p>
+output:
+  files:
+    index.html: |
+      <header><a href="/">Test Site</a></header>
+      <main><p>Content</p></main>
+      <footer><p>Footer</p></footer>

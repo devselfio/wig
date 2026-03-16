@@ -1,0 +1,6 @@
+test:
+  name: Missing site.yaml causes build failure
+  command: build
+  files: {}
+output:
+  exit: 1

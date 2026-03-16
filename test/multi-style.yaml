@@ -1,0 +1,54 @@
+test:
+  name: Two styles with independent layouts and CSS bundles
+  command: build
+  fixtures:
+    - base
+  files:
+    styles:
+      alpha:
+        style.yaml: |
+          name: alpha
+          bundles:
+            css:
+              main.css:
+                - alpha/alpha.css
+        layouts:
+          page.html: |
+            <div class="alpha"><t-slot /></div>
+        alpha.css: |
+          .alpha { color: red; }
+      beta:
+        style.yaml: |
+          name: beta
+          bundles:
+            css:
+              main.css:
+                - beta/beta.css
+        layouts:
+          page.html: |
+            <div class="beta"><t-slot /></div>
+        beta.css: |
+          .beta { color: blue; }
+    pages:
+      page-a.html: |
+        ---
+        style: alpha
+        layout: page.html
+        ---
+        <p>Alpha page</p>
+      page-b.html: |
+        ---
+        style: beta
+        layout: page.html
+        ---
+        <p>Beta page</p>
+output:
+  files:
+    page-a/index.html: |
+      <div class="alpha"><p>Alpha page</p></div>
+    page-b/index.html: |
+      <div class="beta"><p>Beta page</p></div>
+    css/alpha/main.*.css: |
+      .alpha { color: red; }
+    css/beta/main.*.css: |
+      .beta { color: blue; }

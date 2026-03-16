@@ -1,0 +1,54 @@
+fixtures:
+  - base
+files:
+  styles:
+    default:
+      style.yaml: |
+        name: default
+        bundles:
+          css:
+            main.css:
+              - default/reset.css
+              - default/main.css
+      layouts:
+        base.html: |
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8" />
+          <title><t-slot name="title">My Blog</t-slot></title>
+          <t-slot name="head" />
+          </head>
+          <body>
+          <t-slot name="body" />
+          <script src="/assets/js/app.js"></script>
+          </body>
+          </html>
+        page.html: |
+          <t-extend template="base.html">
+          <t-define name="head">
+          <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+          </t-define>
+          <t-define name="body">
+          <t-include template="header.html" />
+          <main><t-slot /></main>
+          <t-include template="footer.html" />
+          </t-define>
+          </t-extend>
+        post.html: |
+          <t-extend template="page.html">
+          <t-define name="title"><t-var name="page.title" /> | My Blog</t-define>
+          </t-extend>
+      includes:
+        header.html: |
+          <header><a href="/">My Blog</a></header>
+        footer.html: |
+          <footer><p>Built with Wig</p></footer>
+      reset.css: |
+        * { margin: 0; box-sizing: border-box; }
+      main.css: |
+        body { font-family: sans-serif; line-height: 1.6; }
+  assets:
+    js:
+      app.js: |
+        // application code

@@ -1,0 +1,10 @@
+fixtures:
+  - base
+files:
+  styles:
+    s:
+      style.yaml: |
+        name: s
+      layouts:
+        page.html: |
+          <t-slot />

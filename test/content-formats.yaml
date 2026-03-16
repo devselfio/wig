@@ -1,32 +1,25 @@
-data:
-  site.yaml: |
-    url: https://example.com
-    title: Test
-
-styles:
-  s:
-    style.yaml: |
-      name: s
-    layouts:
-      page.html: |
-        <t-slot />
-
-pages:
-  plain.html: |
-    ---
-    style: s
-    layout: page.html
-    ---
-    <p>HTML stays as-is. <strong>Bold</strong>.</p>
-  rich.dj: |
-    ---
-    style: s
-    layout: page.html
-    ---
-    _Emphasis_ and a [link](https://example.com).
-
-_output:
-  plain/index.html: |
-    <p>HTML stays as-is. <strong>Bold</strong>.</p>
-  rich/index.html: |
-    <p><em>Emphasis</em> and a <a href="https://example.com">link</a>.</p>
+test:
+  name: HTML passes through, djot renders to HTML
+  command: build
+  fixtures:
+    - minimal
+  files:
+    pages:
+      html-page.html: |
+        ---
+        style: s
+        layout: page.html
+        ---
+        <p>HTML <strong>bold</strong></p>
+      djot-page.dj: |
+        ---
+        style: s
+        layout: page.html
+        ---
+        _Emphasis_ and a [link](https://example.com).
+output:
+  files:
+    html-page/index.html: |
+      <p>HTML <strong>bold</strong></p>
+    djot-page/index.html: |
+      <p><em>Emphasis</em> and a <a href="https://example.com">link</a>.</p>

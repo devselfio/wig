@@ -1,36 +1,36 @@
-data:
-  site.yaml: |
-    url: https://example.com
-    title: Test
-
-styles:
-  theme:
-    style.yaml: |
-      name: theme
-      bundles:
-        css:
-          main.css:
-            - theme/reset.css
-            - theme/styles.css
-    layouts:
-      page.html: |
-        <link rel="stylesheet" t-var:href="assets.theme.css.main.path" />
-        <t-slot />
-    reset.css: |
+test:
+  name: CSS bundle concatenation with fingerprinted filename
+  command: build
+  fixtures:
+    - minimal
+  files:
+    styles:
+      s:
+        style.yaml: |
+          name: s
+          bundles:
+            css:
+              main.css:
+                - s/reset.css
+                - s/styles.css
+        layouts:
+          page.html: |
+            <link rel="stylesheet" t-var:href="assets.s.css.main.path" />
+            <t-slot />
+        reset.css: |
+          * { margin: 0; }
+        styles.css: |
+          body { color: #333; }
+    pages:
+      _index.html: |
+        ---
+        style: s
+        layout: page.html
+        ---
+        <p>Styled</p>
+output:
+  files:
+    css/s/main.*.css: |
       * { margin: 0; }
-    styles.css: |
       body { color: #333; }
-
-pages:
-  _index.html: |
-    ---
-    style: theme
-    layout: page.html
-    ---
-    <p>Styled</p>
-
-_output:
-  css/theme/main.*.css: |
-    * { margin: 0; }
-    body { color: #333; }
-  index.html: true
+    index.html: true
