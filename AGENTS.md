@@ -94,7 +94,9 @@ For Toupee tags in Djot content, use Djot's raw HTML passthrough:
 
 ### Content parsers
 
-Pluggable via `Site.init()`. Default: zjot (Djot). The `ContentParser` type is a function pointer, defined in `pages.zig` and re-exported by `root.zig`:
+Pluggable via `Site.init()`. Default: zjot (Djot). The architecture supports additional content formats (e.g. Markdown via `.md` extension) by registering additional parsers. Markdown support is planned but not at launch.
+
+The `ContentParser` type is a function pointer, defined in `pages.zig` and re-exported by `root.zig`:
 
 ```zig
 pub const ContentParser = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;
@@ -148,10 +150,10 @@ Toupee uses `<t-*>` HTML elements. Key tags:
 
 ### Frontmatter
 
-YAML only, delimited by `---`. Required for all pages in `pages/`. Frontmatter uses explicit namespaces:
+YAML only, delimited by `---`. Required for all pages in `pages/`. Frontmatter has exactly one top-level key: `document:`.
 
-- `document:` -- metadata for this page (title, layout override, style override, etc.). Merged into `document.*` in the rendering context.
-- `data:` -- cascading data for child pages. Mirrors the `data/` directory concept but scoped to the current directory. `data.document:` provides document defaults for children.
+- `document:` -- all page metadata (title, layout, style, date, tags, etc.). Merged into `document.*` in the rendering context.
+- `document.data:` -- cascading data for child pages. Wig processes this at build time and **strips it from the template context**. It is a build instruction, not template data.
 
 Example leaf page:
 ```yaml
@@ -167,16 +169,16 @@ Example section index (`_index.dj`) with cascading defaults:
 document:
   layout: blog-index.html
   title: Blog Posts
-data:
-  document:
-    style: blog
-    layout: blog-post.html
+  data:
+    document:
+      style: blog
+      layout: blog-post.html
 ---
 ```
 
 Pages inherit `document.*` values from the cascade (see Data cascade below). Frontmatter `document:` values override inherited defaults.
 
-Files in `styles/` with frontmatter are template-rendered; without are plain text.
+Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colours.*`, `site.*`, etc.).
 
 ### Clean URLs
 
@@ -197,12 +199,12 @@ Sources merged in priority order (highest priority last -- later sources overrid
 2. Render flags (`site.draft`, `site.debug`)
 3. Style manifest data (`styles.{name}.*`)
 4. Page collection (`pages.*`) and taxonomies (`taxonomies.tags`)
-5. Directory-level cascading data (from `data:` in `_index.dj` frontmatter, applied to child pages)
+5. Directory-level cascading data (from `document.data:` in `_index.dj` frontmatter, applied to child pages)
 6. Page frontmatter `document:` (highest priority -- overrides all inherited `document.*` values)
 
 **Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
 
-**Directory-level data overrides:** The `data:` key in `_index.dj` frontmatter can override any data key, not just `document:`. For example, `data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value.
+**Directory-level data overrides:** The `document.data:` key in `_index.dj` frontmatter can override any data key, not just `document:`. For example, `document: data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
 
 ### Page collection (`pages.*`)
 
@@ -288,9 +290,31 @@ Wig uses the three-layer colour indirection system from the prototype:
 2. **Styles** -- maps semantic roles (`text.primary`, `background.primary`, `text.link`) to palette names.
 3. **Syntax** -- maps code highlighting roles (`keyword`, `string`, `comment`) to palette names.
 
-Schemes have `light` and `dark` variants. CSS files with frontmatter use `<t-raw>` to resolve palette names to hex values via Toupee. Scheme data lives in `data/colours/{name}.yaml`.
+Schemes have `light` and `dark` variants. Scheme data lives in `data/colours/{name}.yaml`. The style manifest declares which scheme to use: `scheme: mono`.
 
-The style manifest declares which scheme to use: `scheme: mono`.
+**Palette pre-resolution:** Wig resolves palette indirection at load time. When colour scheme data is loaded, Wig walks the `styles` and `syntax` maps and replaces palette names with their hex values. Template authors access resolved values directly (e.g. `colours.mono.light.styles.text.primary` contains `"#000000"`, not `"black"`).
+
+**Future: dynamic path resolution.** Toupee will support `$()` syntax for dynamic key lookup: `mode.palette.$(mode.styles.text.primary)`. This resolves the inner expression first, then uses its value as part of the outer path. Planned but not yet implemented.
+
+### CSS rendering context
+
+CSS files with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style assets, not pages). They receive the full site context minus `document.*`:
+- `styles.*` -- all style manifests
+- `colours.*` -- all colour scheme data (pre-resolved)
+- `site.*` -- site configuration
+- All other data directory keys
+
+### Template reusability
+
+Templates should use `document.children` rather than hardcoded collection paths like `pages.posts`. This makes templates section-agnostic -- the same list template works for any section:
+
+```html
+<t-include template="blocks/list-posts.html" context="document.children as posts" />
+```
+
+### Pattern library
+
+Each style may have a `patterns/` directory for block documentation and examples. This is separate from `blocks/` (which contains the components themselves). Detailed spec deferred.
 
 ### Feeds
 

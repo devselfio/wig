@@ -36,12 +36,12 @@ input:
             ---
             ---
             :root {
-              --type-base: <t-raw name="document.style.tokens.type.base" />px;
-              --type-scale: <t-raw name="document.style.tokens.type.scale" />;
-              --spacing-base: <t-raw name="document.style.tokens.spacing.base" />px;
-              --spacing-scale: <t-raw name="document.style.tokens.spacing.scale" />;
-              --viewport-min: <t-raw name="document.style.tokens.viewport.min" />px;
-              --viewport-max: <t-raw name="document.style.tokens.viewport.max" />px;
+              --type-base: <t-raw name="styles.default.tokens.type.base" />px;
+              --type-scale: <t-raw name="styles.default.tokens.type.scale" />;
+              --spacing-base: <t-raw name="styles.default.tokens.spacing.base" />px;
+              --spacing-scale: <t-raw name="styles.default.tokens.spacing.scale" />;
+              --viewport-min: <t-raw name="styles.default.tokens.viewport.min" />px;
+              --viewport-max: <t-raw name="styles.default.tokens.viewport.max" />px;
             }
     pages:
       _index.dj: |

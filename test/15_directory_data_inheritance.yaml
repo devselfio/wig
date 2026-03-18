@@ -39,10 +39,10 @@ input:
           ---
           document:
             title: Guest Section
-          data:
-            site:
-              author: GuestAuthor
-              title: Guest Site
+            data:
+              site:
+                author: GuestAuthor
+                title: Guest Site
           ---
           guest index
         post.dj: |

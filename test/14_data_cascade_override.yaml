@@ -18,7 +18,7 @@ input:
           name: default
         templates:
           base.html: |
-            [<t-var name="document.style" />:<t-var name="document.layout" />] <t-slot />
+            [<t-var name="document.style.name" />:<t-var name="document.layout" />] <t-slot />
           blog-post.html: |
             [blog-post] <t-slot />
           special.html: |
@@ -26,17 +26,19 @@ input:
     pages:
       _index.dj: |
         ---
-        data:
-          document:
-            style: default
+        document:
+          data:
+            document:
+              style: default
         ---
         root
       blog:
         _index.dj: |
           ---
-          data:
-            document:
-              layout: blog-post.html
+          document:
+            data:
+              document:
+                layout: blog-post.html
           ---
           blog index
         post_a.dj: |
@@ -48,9 +50,10 @@ input:
         special:
           _index.dj: |
             ---
-            data:
-              document:
-                layout: special.html
+            document:
+              data:
+                document:
+                  layout: special.html
             ---
             special index
           post_b.dj: |

@@ -1,6 +1,6 @@
 test:
   name: Colour scheme CSS generation.
-  comment: Tests palette indirection -- palette names resolved to hex in CSS custom properties.
+  comment: Tests palette indirection -- Wig pre-resolves palette names to hex at load time.
   action:
     wig: build
   fixtures: []
@@ -59,9 +59,9 @@ input:
             ---
             ---
             :root {
-              --text-primary: <t-raw name="colours.mono.light.palette" />;
-              --text-link: <t-raw name="colours.mono.light.palette" />;
-              --bg-primary: <t-raw name="colours.mono.light.palette" />;
+              --text-primary: <t-raw name="colours.mono.light.styles.text.primary" />;
+              --text-link: <t-raw name="colours.mono.light.styles.text.link" />;
+              --bg-primary: <t-raw name="colours.mono.light.styles.background.primary" />;
             }
     pages:
       _index.dj: |

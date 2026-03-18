@@ -32,7 +32,7 @@ input:
             <t-extend template="base.html">
               <t-define>
                 <t-slot />
-                <t-include template="blocks/list-posts.html" context="pages.posts as posts" />
+                <t-include template="blocks/list-posts.html" context="document.children as posts" />
               </t-define>
             </t-extend>
           post.html: |
@@ -67,9 +67,9 @@ input:
           document:
             title: Post List
             layout: post-list.html
-          data:
-            document:
-              layout: post.html
+            data:
+              document:
+                layout: post.html
           ---
           Welcome to the blog.
         001_first.dj: |
