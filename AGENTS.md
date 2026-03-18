@@ -78,6 +78,20 @@ var app = try wig.devServer(&site);
 try app.listen(8080);
 ```
 
+### Rendering pipeline
+
+Content rendering is a three-phase pipeline:
+
+1. **Wig preprocess** -- resolve `{{ variable }}` interpolations in the Djot source. Uses Toupee's existing value resolution and transform system. Supports pipe-chained transforms: `{{ document.date | date:%B %e, %Y }}`.
+2. **zjot** -- parse the preprocessed Djot into HTML. Toupee `<t-*>` tags and `t-var:*` attribute bindings pass through as raw HTML.
+3. **Toupee** -- single render pass on the layout template with zjot's output slotted in via `<t-slot />`. Resolves all remaining template tags (`<t-var>`, `<t-if>`, `<t-for>`, `t-var:href`, etc.).
+
+**Content authors** use `{{ }}` for value interpolation in Djot (e.g. links, inline values). **Template authors** use Toupee's `<t-*>` elements and attribute bindings in layout HTML.
+
+For Toupee tags in Djot content, use Djot's raw HTML passthrough:
+- Inline: `` `<t-include template="nav.html" />`{=html} ``
+- Block: bare `<t-include template="nav.html" />` on its own line (Djot auto-detects block HTML)
+
 ### Content parsers
 
 Pluggable via `Site.init()`. Default: zjot (Djot). The `ContentParser` type is a function pointer, defined in `pages.zig` and re-exported by `root.zig`:
@@ -134,7 +148,35 @@ Toupee uses `<t-*>` HTML elements. Key tags:
 
 ### Frontmatter
 
-YAML only, delimited by `---`. Required for all pages in `pages/`. Files in `styles/` with frontmatter are template-rendered; without are plain text. Frontmatter on style files is data-bearing (augments the rendering context).
+YAML only, delimited by `---`. Required for all pages in `pages/`. Frontmatter uses explicit namespaces:
+
+- `document:` -- metadata for this page (title, layout override, style override, etc.). Merged into `document.*` in the rendering context.
+- `data:` -- cascading data for child pages. Mirrors the `data/` directory concept but scoped to the current directory. `data.document:` provides document defaults for children.
+
+Example leaf page:
+```yaml
+---
+document:
+  title: About Us
+---
+```
+
+Example section index (`_index.dj`) with cascading defaults:
+```yaml
+---
+document:
+  layout: blog-index.html
+  title: Blog Posts
+data:
+  document:
+    style: blog
+    layout: blog-post.html
+---
+```
+
+Pages inherit `document.*` values from the cascade (see Data cascade below). Frontmatter `document:` values override inherited defaults.
+
+Files in `styles/` with frontmatter are template-rendered; without are plain text.
 
 ### Clean URLs
 
@@ -145,13 +187,56 @@ YAML only, delimited by `---`. Required for all pages in `pages/`. Files in `sty
 
 ### Data cascade
 
-1. Global data (`data/` -> nested keys by directory)
+Sources merged in priority order (highest priority last -- later sources override earlier):
+
+1. Global data files (`data/` -> top-level keys by filename, e.g. `data/site.yaml` -> `site.*`, `data/document.yaml` -> `document.*`)
 2. Render flags (`site.draft`, `site.debug`)
 3. Style manifest data (`styles.{name}.*`)
-4. Collections (`pages.posts`) and taxonomies (`taxonomies.tags`)
-5. Page frontmatter (`page.*`)
+4. Page collection (`pages.*`) and taxonomies (`taxonomies.tags`)
+5. Directory-level cascading data (from `data:` in `_index.dj` frontmatter, applied to child pages)
+6. Page frontmatter `document:` (highest priority -- overrides all inherited `document.*` values)
 
-`page.path` = URL path (`/about/`). `page.url` = absolute URL. `page.excerpt` = first paragraph (or frontmatter `description:`).
+**Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
+
+### Page collection (`pages.*`)
+
+The `pages` context key is a nested map mirroring the `pages/` directory tree. Each page's metadata lives under a reserved `document` key:
+
+- `pages/_index.dj` -> `pages.document` (root page metadata)
+- `pages/about.dj` -> `pages.about.document` (leaf page metadata)
+- `pages/blog/_index.dj` -> `pages.blog.document` (section index metadata)
+- `pages/blog/post_one.dj` -> `pages.blog.post_one.document` (child page metadata)
+
+Metadata keys include `path` (URL path), `title`, `date`, and all other frontmatter `document:` values. Example: `pages.blog.post_one.document.path` -> `/blog/post-one/`.
+
+**`document` is a reserved key.** A page or directory named `document` is an error.
+
+**File/directory collision:** `pages/blog.dj` is an error if `pages/blog/` also exists.
+
+**Iteration:** `<t-for post in pages.blog>` iterates child pages (skips the `document` key). Access metadata inside the loop via `post.document.path`, `post.document.title`, etc.
+
+### Current page (`document.*`)
+
+When rendering a page, `document.*` is populated by merging (in priority order):
+
+1. `data/document.yaml` -- global document defaults
+2. Directory-level `data.document:` from ancestor `_index.dj` files
+3. The page's own frontmatter `document:` values (highest priority)
+
+Wig also injects computed values:
+
+- `document.path` -- URL path (e.g. `/about/`)
+- `document.url` -- absolute URL (e.g. `https://example.com/about/`)
+- `document.breadcrumbs` -- list of ancestor pages from root to parent, each a map with `path` and `title`. The current page is NOT included. Example for `pages/posts/001_first.dj`:
+  ```
+  [
+    { path: "/", title: "Root" },
+    { path: "/posts/", title: "Post List" }
+  ]
+  ```
+  Root page has an empty breadcrumbs list. Breadcrumb titles come from each ancestor's `document.title`.
+
+This is the same data as `pages.{key}.document` but accessible without knowing the page's collection key.
 
 ### Output
 
@@ -163,8 +248,11 @@ Always `zig-out/site/`. Production builds error if unclean. Draft builds overlay
 - Error messages: include file path. Where possible, line number and suggestion.
 - Module soft limit: ~800 lines.
 - CSS templates use `<t-raw>` for value output (prevents HTML escaping).
-- zjot shortcodes in Djot use `` `<t-include ...>`{=html} `` syntax.
-- Heading IDs: zjot puts IDs on `<section>` elements, not headings. `toc.zig` extracts accordingly.
+- Content interpolation uses `{{ variable }}` syntax (resolved before zjot). Supports transforms: `{{ name | upper }}`.
+- Toupee tags in Djot content use raw HTML passthrough: `` `<t-include ...>`{=html} `` (inline) or bare tags on own line (block).
+- Heading IDs: zjot puts IDs on `<section>` elements (case-preserving), not headings. `toc.zig` extracts accordingly.
+- `wig build` outputs HTML with content placed at slot depth but no internal re-indentation.
+- `wig build --pretty` applies full HTML-aware re-indentation to output.
 
 ## Testing
 

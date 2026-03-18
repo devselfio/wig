@@ -1,0 +1,77 @@
+test:
+  name: Two-Page website build.
+  comment: Tests links between pages and path decisions.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        layouts:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Page One
+        ---
+        # Page 1
+
+        [Page 2]({{ pages.two.document.path }})
+      two.dj: |
+        ---
+        document:
+          title: Page Two
+        ---
+        # Page 2
+
+        [Page 1]({{ pages.document.path }})
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Page One ~ Untitled Site</title>
+        </head>
+        <body>
+          <section id="Page-1">
+          <h1>Page 1</h1>
+          <p><a href="/two/">Page 2</a></p>
+          </section>
+        </body>
+      </html>
+    two:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Page Two ~ Untitled Site</title>
+          </head>
+          <body>
+            <section id="Page-2">
+            <h1>Page 2</h1>
+            <p><a href="/">Page 1</a></p>
+            </section>
+          </body>

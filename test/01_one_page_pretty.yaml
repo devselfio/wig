@@ -1,0 +1,53 @@
+test:
+  name: One-Page website build --pretty.
+  comment: Minimal POC test that verifies output prettification.
+  action:
+    wig: build --pretty
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        layouts:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        # One-Page Example
+
+        A simple page properly indented.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Untitled Document ~ Untitled Site</title>
+        </head>
+        <body>
+          <section id="One-Page-Example">
+            <h1>One-Page Example</h1>
+            <p>A simple page properly indented.</p>
+          </section>
+        </body>
+      </html>

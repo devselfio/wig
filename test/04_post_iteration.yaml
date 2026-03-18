@@ -1,0 +1,174 @@
+test:
+  name: Post iteration with section cascade.
+  comment: Tests t-for iteration over child pages and data cascade from _index.dj.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: base.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        layouts:
+          base.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+          post-list.html: |
+            <t-extend template="base.html">
+              <t-define>
+                <t-include template="includes/breadcrumbs.html" context="document.breadcrumbs as crumbs" />
+                <t-slot />
+                <t-include template="includes/list-posts.html" context="pages.posts as posts" />
+              </t-define>
+            </t-extend>
+          post.html: |
+            <t-extend template="base.html">
+              <t-define>
+                <t-include template="includes/breadcrumbs.html" context="document.breadcrumbs as crumbs" />
+                <article>
+                  <h1><t-var name="document.title">Untitled Document</t-var></h1>
+                  <t-slot />
+                </article>
+              </t-define>
+            </t-extend>
+        includes:
+          breadcrumbs.html: |
+            <nav aria-label="Breadcrumb">
+            <p>
+            <t-for crumb in crumbs as loop>
+            <t-if var="loop.first" not-exists> / </t-if>
+            <a t-var:href="crumb.path"><t-var name="crumb.title" /></a>
+            </t-for>
+            </p>
+            </nav>
+          list-posts.html: |
+            <ul>
+            <t-for post in posts>
+            <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
+            </t-for>
+            </ul>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Root
+          layout: base.html
+        ---
+        # Root
+
+        [Posts]({{ pages.posts.document.path }})
+      posts:
+        _index.dj: |
+          ---
+          document:
+            title: Post List
+            layout: post-list.html
+          data:
+            document:
+              layout: post.html
+          ---
+          Welcome to the blog.
+        001_first.dj: |
+          ---
+          document:
+            title: First Post
+          ---
+          The first post.
+        002_second.dj: |
+          ---
+          document:
+            title: Second Post
+          ---
+          The second post.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Root ~ Untitled Site</title>
+        </head>
+        <body>
+          <section id="Root">
+          <h1>Root</h1>
+          <p><a href="/posts/">Posts</a></p>
+          </section>
+        </body>
+      </html>
+    posts:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Post List ~ Untitled Site</title>
+          </head>
+          <body>
+            <nav aria-label="Breadcrumb">
+            <p>
+            <a href="/">Root</a>
+            </p>
+            </nav>
+            <p>Welcome to the blog.</p>
+            <ul>
+            <li><a href="/posts/001_first/">First Post</a></li>
+            <li><a href="/posts/002_second/">Second Post</a></li>
+            </ul>
+          </body>
+        </html>
+      001_first:
+        index.html: |
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>First Post ~ Untitled Site</title>
+            </head>
+            <body>
+              <nav aria-label="Breadcrumb">
+              <p>
+              <a href="/">Root</a> / <a href="/posts/">Post List</a>
+              </p>
+              </nav>
+              <article>
+                <h1>First Post</h1>
+                <p>The first post.</p>
+              </article>
+            </body>
+          </html>
+      002_second:
+        index.html: |
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>Second Post ~ Untitled Site</title>
+            </head>
+            <body>
+              <nav aria-label="Breadcrumb">
+              <p>
+              <a href="/">Root</a> / <a href="/posts/">Post List</a>
+              </p>
+              </nav>
+              <article>
+                <h1>Second Post</h1>
+                <p>The second post.</p>
+              </article>
+            </body>
+          </html>
