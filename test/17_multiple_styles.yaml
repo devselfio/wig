@@ -1,0 +1,70 @@
+test:
+  name: Multiple styles.
+  comment: Tests two styles with different templates and document.style as full manifest.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: base.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          version: "1.0"
+        templates:
+          base.html: |
+            <!DOCTYPE html>
+            <html>
+              <head><title>[default] <t-var name="document.title" /></title></head>
+              <body>
+                <p>Style: <t-var name="document.style.name" /> v<t-var name="document.style.version" /></p>
+                <t-slot />
+              </body>
+            </html>
+      minimal:
+        style.yaml: |
+          name: minimal
+          version: "0.1"
+        templates:
+          base.html: |
+            <html>
+              <head><title><t-var name="document.title" /></title></head>
+              <body><t-slot /></body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Default style page.
+      alt.dj: |
+        ---
+        document:
+          title: Alt
+          style: minimal
+        ---
+        Minimal style page.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html>
+        <head><title>[default] Home</title></head>
+        <body>
+          <p>Style: default v1.0</p>
+          <p>Default style page.</p>
+        </body>
+      </html>
+    alt:
+      index.html: |
+        <html>
+          <head><title>Alt</title></head>
+          <body><p>Minimal style page.</p></body>
+        </html>

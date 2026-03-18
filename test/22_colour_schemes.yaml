@@ -1,0 +1,81 @@
+test:
+  name: Colour scheme CSS generation.
+  comment: Tests palette indirection -- palette names resolved to hex in CSS custom properties.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+      colours:
+        mono.yaml: |
+          light:
+            meta:
+              name: Mono Light
+            palette:
+              white: "#ffffff"
+              black: "#000000"
+              grey: "#888888"
+              blue: "#0066cc"
+            styles:
+              text:
+                primary: black
+                secondary: grey
+                link: blue
+              background:
+                primary: white
+          dark:
+            meta:
+              name: Mono Dark
+            palette:
+              white: "#ffffff"
+              black: "#111111"
+              grey: "#aaaaaa"
+              blue: "#66aaff"
+            styles:
+              text:
+                primary: white
+                secondary: grey
+                link: blue
+              background:
+                primary: black
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          scheme: mono
+          bundles:
+            - css/colours.css
+        templates:
+          page.html: |
+            <t-slot />
+        css:
+          colours.css: |
+            ---
+            ---
+            :root {
+              --text-primary: <t-raw name="colours.mono.light.palette" />;
+              --text-link: <t-raw name="colours.mono.light.palette" />;
+              --bg-primary: <t-raw name="colours.mono.light.palette" />;
+            }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    css:
+      colours.css: |
+        :root {
+          --text-primary: #000000;
+          --text-link: #0066cc;
+          --bg-primary: #ffffff;
+        }

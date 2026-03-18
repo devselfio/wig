@@ -1,0 +1,77 @@
+test:
+  name: Content transforms via {{ }}.
+  comment: Tests Wig preprocessor piping values through Toupee transforms.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title" /></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Hello World
+          date: 2026-03-16
+          author: quiteclose
+        ---
+        Title: {{ document.title | upper }}
+
+        Date: {{ document.date | date:%B %e, %Y }}
+      about.dj: |
+        ---
+        document:
+          title: About Us
+          author: quiteclose
+        ---
+        Slug: {{ document.title | slugify }}
+
+        Author: {{ document.author | capitalize }}
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Hello World</title>
+        </head>
+        <body>
+          <p>Title: HELLO WORLD</p>
+          <p>Date: March 16, 2026</p>
+        </body>
+      </html>
+    about:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>About Us</title>
+          </head>
+          <body>
+            <p>Slug: about-us</p>
+            <p>Author: Quiteclose</p>
+          </body>
+        </html>

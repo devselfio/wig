@@ -1,0 +1,89 @@
+test:
+  name: Search index generation.
+  comment: Tests search.json with rich fields per page.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: https://example.com
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Welcome to the site.
+      blog:
+        _index.dj: |
+          ---
+          document:
+            title: Blog
+          ---
+          Blog index.
+        post.dj: |
+          ---
+          document:
+            title: My Post
+            date: 2026-03-16
+            description: A post about things.
+            tags: [zig, web]
+          ---
+          # My Post
+
+          This is the **full content** of the post.
+output:
+  files:
+    index.html: |
+      <p>Welcome to the site.</p>
+    blog:
+      index.html: |
+        <p>Blog index.</p>
+      post:
+        index.html: |
+          <section id="My-Post">
+          <h1>My Post</h1>
+          <p>This is the <strong>full content</strong> of the post.</p>
+          </section>
+    search.json: |
+      [
+        {
+          "url": "https://example.com/",
+          "title": "Home",
+          "content": "Welcome to the site.",
+          "excerpt": "Welcome to the site.",
+          "tags": [],
+          "date": null,
+          "section": null
+        },
+        {
+          "url": "https://example.com/blog/",
+          "title": "Blog",
+          "content": "Blog index.",
+          "excerpt": "Blog index.",
+          "tags": [],
+          "date": null,
+          "section": null
+        },
+        {
+          "url": "https://example.com/blog/post/",
+          "title": "My Post",
+          "content": "My Post\nThis is the full content of the post.",
+          "excerpt": "A post about things.",
+          "tags": ["zig", "web"],
+          "date": "2026-03-16",
+          "section": "blog"
+        }
+      ]

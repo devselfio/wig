@@ -1,0 +1,76 @@
+test:
+  name: Site data in templates.
+  comment: Tests site.title, site.url, and site.author flowing into templates.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: https://example.com
+        title: My Site
+        author: QuiteClose
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title" /> ~ <t-var name="site.title" /></title>
+                <meta name="author" t-var:content="site.author" />
+                <link rel="canonical" t-var:href="document.url" />
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Welcome.
+      about.dj: |
+        ---
+        document:
+          title: About
+        ---
+        About page.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Home ~ My Site</title>
+          <meta name="author" content="QuiteClose" />
+          <link rel="canonical" href="https://example.com/" />
+        </head>
+        <body>
+          <p>Welcome.</p>
+        </body>
+      </html>
+    about:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>About ~ My Site</title>
+            <meta name="author" content="QuiteClose" />
+            <link rel="canonical" href="https://example.com/about/" />
+          </head>
+          <body>
+            <p>About page.</p>
+          </body>
+        </html>

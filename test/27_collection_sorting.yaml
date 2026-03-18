@@ -1,0 +1,89 @@
+test:
+  name: Collection sorting by date.
+  comment: Tests t-for with sort="document.date" in both desc and asc order.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <t-slot />
+          list.html: |
+            <h2>Newest first</h2>
+            <t-for post in pages.blog sort="document.date" order="desc">
+            <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
+            </t-for>
+            <h2>Oldest first</h2>
+            <t-for post in pages.blog sort="document.date" order="asc">
+            <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
+            </t-for>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Home.
+      blog:
+        _index.dj: |
+          ---
+          document:
+            title: Blog
+            layout: list.html
+          ---
+          Blog.
+        alpha.dj: |
+          ---
+          document:
+            title: Alpha
+            date: 2026-03-10
+          ---
+          Alpha.
+        beta.dj: |
+          ---
+          document:
+            title: Beta
+            date: 2026-03-15
+          ---
+          Beta.
+        gamma.dj: |
+          ---
+          document:
+            title: Gamma
+            date: 2026-03-01
+          ---
+          Gamma.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    blog:
+      index.html: |
+        <h2>Newest first</h2>
+        <p>2026-03-15: Beta</p>
+        <p>2026-03-10: Alpha</p>
+        <p>2026-03-01: Gamma</p>
+        <h2>Oldest first</h2>
+        <p>2026-03-01: Gamma</p>
+        <p>2026-03-10: Alpha</p>
+        <p>2026-03-15: Beta</p>
+      alpha:
+        index.html: |
+          <p>Alpha.</p>
+      beta:
+        index.html: |
+          <p>Beta.</p>
+      gamma:
+        index.html: |
+          <p>Gamma.</p>

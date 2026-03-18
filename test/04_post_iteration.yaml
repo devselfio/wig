@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
+        templates:
           base.html: |
             <!DOCTYPE html>
             <html lang="en">
@@ -31,31 +31,20 @@ input:
           post-list.html: |
             <t-extend template="base.html">
               <t-define>
-                <t-include template="includes/breadcrumbs.html" context="document.breadcrumbs as crumbs" />
                 <t-slot />
-                <t-include template="includes/list-posts.html" context="pages.posts as posts" />
+                <t-include template="blocks/list-posts.html" context="pages.posts as posts" />
               </t-define>
             </t-extend>
           post.html: |
             <t-extend template="base.html">
               <t-define>
-                <t-include template="includes/breadcrumbs.html" context="document.breadcrumbs as crumbs" />
                 <article>
                   <h1><t-var name="document.title">Untitled Document</t-var></h1>
                   <t-slot />
                 </article>
               </t-define>
             </t-extend>
-        includes:
-          breadcrumbs.html: |
-            <nav aria-label="Breadcrumb">
-            <p>
-            <t-for crumb in crumbs as loop>
-            <t-if var="loop.first" not-exists> / </t-if>
-            <a t-var:href="crumb.path"><t-var name="crumb.title" /></a>
-            </t-for>
-            </p>
-            </nav>
+        blocks:
           list-posts.html: |
             <ul>
             <t-for post in posts>
@@ -120,11 +109,6 @@ output:
             <title>Post List ~ Untitled Site</title>
           </head>
           <body>
-            <nav aria-label="Breadcrumb">
-            <p>
-            <a href="/">Root</a>
-            </p>
-            </nav>
             <p>Welcome to the blog.</p>
             <ul>
             <li><a href="/posts/001_first/">First Post</a></li>
@@ -141,11 +125,6 @@ output:
               <title>First Post ~ Untitled Site</title>
             </head>
             <body>
-              <nav aria-label="Breadcrumb">
-              <p>
-              <a href="/">Root</a> / <a href="/posts/">Post List</a>
-              </p>
-              </nav>
               <article>
                 <h1>First Post</h1>
                 <p>The first post.</p>
@@ -161,11 +140,6 @@ output:
               <title>Second Post ~ Untitled Site</title>
             </head>
             <body>
-              <nav aria-label="Breadcrumb">
-              <p>
-              <a href="/">Root</a> / <a href="/posts/">Post List</a>
-              </p>
-              </nav>
               <article>
                 <h1>Second Post</h1>
                 <p>The second post.</p>

@@ -1,0 +1,70 @@
+test:
+  name: _index.dj vs index.dj naming.
+  comment: Only _index is the section convention. index.dj is a normal page.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled</t-var></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Root
+        ---
+        Root page.
+      sub:
+        index.dj: |
+          ---
+          document:
+            title: Index Page
+          ---
+          This is a normal page named index, not a section index.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Root</title>
+        </head>
+        <body>
+          <p>Root page.</p>
+        </body>
+      </html>
+    sub:
+      index:
+        index.html: |
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>Index Page</title>
+            </head>
+            <body>
+              <p>This is a normal page named index, not a section index.</p>
+            </body>
+          </html>

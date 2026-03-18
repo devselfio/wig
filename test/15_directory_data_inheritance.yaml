@@ -1,0 +1,85 @@
+test:
+  name: Directory-level non-document data override.
+  comment: Tests data.site.author and data.site.title overridden on a directory.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+        title: Global Site
+        author: GlobalAuthor
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            [<t-var name="site.author" />@<t-var name="site.title" />] <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        home
+      normal.dj: |
+        ---
+        document:
+          title: Normal
+        ---
+        normal
+      guest:
+        _index.dj: |
+          ---
+          document:
+            title: Guest Section
+          data:
+            site:
+              author: GuestAuthor
+              title: Guest Site
+          ---
+          guest index
+        post.dj: |
+          ---
+          document:
+            title: Guest Post
+          ---
+          guest post
+        deep:
+          _index.dj: |
+            ---
+            document:
+              title: Deep Section
+            ---
+            deep section
+          leaf.dj: |
+            ---
+            document:
+              title: Deep Leaf
+            ---
+            deep leaf
+output:
+  files:
+    index.html: |
+      [GlobalAuthor@Global Site] <p>home</p>
+    normal:
+      index.html: |
+        [GlobalAuthor@Global Site] <p>normal</p>
+    guest:
+      index.html: |
+        [GuestAuthor@Guest Site] <p>guest index</p>
+      post:
+        index.html: |
+          [GuestAuthor@Guest Site] <p>guest post</p>
+      deep:
+        index.html: |
+          [GuestAuthor@Guest Site] <p>deep section</p>
+        leaf:
+          index.html: |
+            [GuestAuthor@Guest Site] <p>deep leaf</p>

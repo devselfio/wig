@@ -1,0 +1,64 @@
+test:
+  name: Fluid design tokens in CSS via Toupee.
+  comment: CSS file with frontmatter renders token data into clamp() custom properties.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          tokens:
+            viewport:
+              min: 320
+              max: 1240
+            type:
+              base: 16
+              scale: 1.25
+            spacing:
+              base: 16
+              scale: 1.5
+          bundles:
+            - css/tokens.css
+        templates:
+          page.html: |
+            <t-slot />
+        css:
+          tokens.css: |
+            ---
+            ---
+            :root {
+              --type-base: <t-raw name="document.style.tokens.type.base" />px;
+              --type-scale: <t-raw name="document.style.tokens.type.scale" />;
+              --spacing-base: <t-raw name="document.style.tokens.spacing.base" />px;
+              --spacing-scale: <t-raw name="document.style.tokens.spacing.scale" />;
+              --viewport-min: <t-raw name="document.style.tokens.viewport.min" />px;
+              --viewport-max: <t-raw name="document.style.tokens.viewport.max" />px;
+            }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    css:
+      tokens.css: |
+        :root {
+          --type-base: 16px;
+          --type-scale: 1.25;
+          --spacing-base: 16px;
+          --spacing-scale: 1.5;
+          --viewport-min: 320px;
+          --viewport-max: 1240px;
+        }

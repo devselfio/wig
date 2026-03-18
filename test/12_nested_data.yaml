@@ -1,0 +1,77 @@
+test:
+  name: Nested data directory.
+  comment: Tests data files in subdirectories mapping to nested context keys.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+      meta:
+        social.yaml: |
+          twitter: "@quiteclose"
+          github: "QuiteClose"
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled</t-var></title>
+              </head>
+              <body>
+                <t-slot />
+              </body>
+            </html>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Djot Data
+        ---
+        Twitter: {{ meta.social.twitter }}
+
+        GitHub: {{ meta.social.github }}
+      html_page.html: |
+        ---
+        document:
+          title: HTML Data
+        ---
+        <p>Twitter: <t-var name="meta.social.twitter" /></p>
+        <p>GitHub: <t-var name="meta.social.github" /></p>
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Djot Data</title>
+        </head>
+        <body>
+          <p>Twitter: @quiteclose</p>
+          <p>GitHub: QuiteClose</p>
+        </body>
+      </html>
+    html_page:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>HTML Data</title>
+          </head>
+          <body>
+            <p>Twitter: @quiteclose</p>
+            <p>GitHub: QuiteClose</p>
+          </body>
+        </html>

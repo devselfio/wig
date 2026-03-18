@@ -181,9 +181,13 @@ Files in `styles/` with frontmatter are template-rendered; without are plain tex
 ### Clean URLs
 
 - `pages/about.dj` -> `about/index.html`
-- `pages/index.dj` -> `index.html` (root exception)
-- `pages/posts/_index.dj` -> `posts/index.html` (section exception)
-- `pages/_404.dj` -> `404.html` (error page exception)
+- `pages/_index.dj` -> `index.html` (section index -- only `_index` is special)
+- `pages/sub/index.dj` -> `sub/index/index.html` (regular page named "index")
+- `pages/posts/_index.dj` -> `posts/index.html` (section index)
+- `pages/_404.dj` -> `404.html` (error page -- no directory wrapping)
+- `pages/_500.dj` -> `500.html` (error page pattern for any `_NNN` prefix)
+
+**Only `_index.dj` / `_index.html`** is the section index convention. A file named `index.dj` is treated as a normal page and gets clean URL wrapping (`index/index.html`).
 
 ### Data cascade
 
@@ -197,6 +201,8 @@ Sources merged in priority order (highest priority last -- later sources overrid
 6. Page frontmatter `document:` (highest priority -- overrides all inherited `document.*` values)
 
 **Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
+
+**Directory-level data overrides:** The `data:` key in `_index.dj` frontmatter can override any data key, not just `document:`. For example, `data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value.
 
 ### Page collection (`pages.*`)
 
@@ -226,17 +232,128 @@ When rendering a page, `document.*` is populated by merging (in priority order):
 Wig also injects computed values:
 
 - `document.path` -- URL path (e.g. `/about/`)
-- `document.url` -- absolute URL (e.g. `https://example.com/about/`)
-- `document.breadcrumbs` -- list of ancestor pages from root to parent, each a map with `path` and `title`. The current page is NOT included. Example for `pages/posts/001_first.dj`:
-  ```
-  [
-    { path: "/", title: "Root" },
-    { path: "/posts/", title: "Post List" }
-  ]
-  ```
-  Root page has an empty breadcrumbs list. Breadcrumb titles come from each ancestor's `document.title`.
+- `document.url` -- absolute URL (e.g. `https://example.com/about/`), built from `site.url` + `document.path`
+- `document.style` -- full style manifest map (parsed from `style.yaml`). Access fields via `document.style.name`, `document.style.version`, etc.
+- `document.parent` -- map with the parent page's document data (`path`, `title`, etc.). Nil for the root page.
+- `document.children` -- list of child page document maps. Empty list for leaf pages.
+- `document.ancestors` -- list of ancestor page document maps, from parent to root (nearest first). Empty list for the root page.
+- `document.excerpt` -- from `description:` in frontmatter, or falls back to the first paragraph of content (text-only).
+- `document.thumbnail` -- from `thumbnail:` in frontmatter. Asset path (e.g. `/images/hero.jpg`).
+- `document.toc` -- list of heading maps extracted from rendered content: `{id, text, level}`. Headings come from zjot `<section>` elements.
+- `document.draft` -- boolean from frontmatter. When true, page is excluded from `wig build` but included with `wig build --draft`.
+
+These are primitives -- features like breadcrumbs are built by template authors, not provided by Wig. For example, breadcrumbs can be implemented by iterating `document.ancestors` with `order="reverse"` on `<t-for>` to get root-first order.
 
 This is the same data as `pages.{key}.document` but accessible without knowing the page's collection key.
+
+### Date format
+
+Dates in frontmatter use ISO 8601 format with optional time: `2026-03-16` (date only) or `2026-03-16T14:30:00Z` (with time). String comparison on `YYYY-MM-DD` gives correct chronological order. Used for sorting (`<t-for ... sort="document.date">`), feeds, sitemaps, and the `date` transform.
+
+### Style directory structure
+
+Each style lives under `styles/{name}/` with this structure:
+
+```
+styles/default/
+  style.yaml         # style manifest (name, bundles, tokens, scheme, custom fields)
+  templates/         # page-level templates (base.html, post.html, post-list.html)
+  blocks/            # reusable HTML components (breadcrumbs.html, card.html)
+  css/               # CSS files (with optional frontmatter for Toupee rendering)
+```
+
+- `templates/` -- page shells that extend a base and define the document structure. Referenced via `document.layout`.
+- `blocks/` -- reusable components included via `<t-include template="blocks/name.html" />`. CUBE CSS "blocks" -- UI components with associated HTML structure.
+- `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colours). Files without frontmatter are plain text.
+
+### Bundles
+
+Asset bundles are declared explicitly in `style.yaml`:
+
+```yaml
+name: default
+bundles:
+  - css/tokens.css
+  - css/global.css
+  - css/utilities.css
+```
+
+Bundles are concatenated in declared order. Files with frontmatter are rendered through Toupee first, then concatenated. Output location follows the style's directory structure.
+
+### Colour schemes
+
+Wig uses the three-layer colour indirection system from the prototype:
+
+1. **Palette** -- maps colour names to hex values. Each scheme uses its own native naming.
+2. **Styles** -- maps semantic roles (`text.primary`, `background.primary`, `text.link`) to palette names.
+3. **Syntax** -- maps code highlighting roles (`keyword`, `string`, `comment`) to palette names.
+
+Schemes have `light` and `dark` variants. CSS files with frontmatter use `<t-raw>` to resolve palette names to hex values via Toupee. Scheme data lives in `data/colours/{name}.yaml`.
+
+The style manifest declares which scheme to use: `scheme: mono`.
+
+### Feeds
+
+Atom feeds are declared in `data/site.yaml`:
+
+```yaml
+feeds:
+  - posts
+  - tech
+```
+
+Pages opt into feeds via frontmatter:
+
+```yaml
+document:
+  feeds: [posts, tech]
+```
+
+Output: `feeds/{name}.xml` as valid Atom XML. Entries sorted by `document.date` (newest first). Each entry includes title, URL, date, and excerpt (from `document.excerpt`).
+
+### Sitemap
+
+Wig generates `sitemap.xml` automatically. Each page gets a `<url>` entry with:
+- `<loc>` -- absolute URL (from `site.url` + `document.path`)
+- `<lastmod>` -- from `document.date` (omitted if no date)
+
+Draft pages are excluded from the sitemap.
+
+### Search index
+
+Wig generates `search.json` with one entry per page:
+
+```json
+{
+  "url": "https://example.com/blog/post/",
+  "title": "My Post",
+  "content": "Plain text content with HTML stripped.",
+  "excerpt": "From description or first paragraph.",
+  "tags": ["zig", "web"],
+  "date": "2026-03-16",
+  "section": "blog"
+}
+```
+
+Fields: `url`, `title`, `content` (text-only), `excerpt`, `tags` (list or empty), `date` (or null), `section` (parent directory name or null).
+
+### Static assets
+
+Files in `static/` are copied verbatim to the output directory without rendering or frontmatter processing. Directory structure is preserved:
+
+- `static/robots.txt` -> `zig-out/site/robots.txt`
+- `static/css/reset.css` -> `zig-out/site/css/reset.css`
+- `static/images/logo.png` -> `zig-out/site/images/logo.png`
+
+### Collection sorting
+
+`<t-for>` supports sorting page collections by any document field:
+
+```html
+<t-for post in pages.blog sort="document.date" order="desc">
+```
+
+`sort` specifies the dot-path into each item's data. `order` is `asc` (default) or `desc`. Combined with `order="reverse"` on `document.ancestors` for breadcrumbs.
 
 ### Output
 
@@ -292,6 +409,30 @@ Each test case is dispatched to a domain-specific runner in `test_runner.zig` ba
 | `page-content`         | Page rendering + ToC + excerpts           |
 
 Test files: `smoke.test`, `html.test`, `scanner.test`, `web-framework.test`, `post-build.test`, `scaffold.test`, `data-pipeline.test`, `css-pipeline.test`, `page-rendering.test`.
+
+### Spec tests (YAML)
+
+Full-site build tests in `wig/test/NN_name.yaml`. Each defines a complete site (data, styles, pages), an action (`wig: build`), and expected output files.
+
+```yaml
+test:
+  name: Test name.
+  comment: What this tests.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data: { ... }
+    styles: { ... }
+    pages: { ... }
+output:
+  files:
+    index.html: |
+      expected content
+```
+
+Tests 00-27 cover: minimal builds, pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets, CSS tokens, colour schemes, sitemap, Atom feeds, search index, table of contents, and collection sorting.
 
 ## Dependency API Reference
 

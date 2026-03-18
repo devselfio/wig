@@ -1,0 +1,93 @@
+test:
+  name: document.parent and document.children links.
+  comment: Tests parent/children primitives for inter-page navigation.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <t-slot />
+          section.html: |
+            <h1><t-var name="document.title" /></h1>
+            <t-slot />
+            <ul>
+            <t-for child in document.children>
+            <li><a t-var:href="child.path"><t-var name="child.title" /></a></li>
+            </t-for>
+            </ul>
+          child.html: |
+            <p>Parent: <a t-var:href="document.parent.path"><t-var name="document.parent.title" /></a></p>
+            <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Root
+        ---
+        root
+      docs:
+        _index.dj: |
+          ---
+          document:
+            title: Docs
+            layout: section.html
+          data:
+            document:
+              layout: child.html
+          ---
+          Documentation hub.
+        alpha.dj: |
+          ---
+          document:
+            title: Alpha
+          ---
+          Alpha content.
+        beta.dj: |
+          ---
+          document:
+            title: Beta
+          ---
+          Beta content.
+        gamma.dj: |
+          ---
+          document:
+            title: Gamma
+          ---
+          Gamma content.
+output:
+  files:
+    index.html: |
+      <p>root</p>
+    docs:
+      index.html: |
+        <h1>Docs</h1>
+        <p>Documentation hub.</p>
+        <ul>
+        <li><a href="/docs/alpha/">Alpha</a></li>
+        <li><a href="/docs/beta/">Beta</a></li>
+        <li><a href="/docs/gamma/">Gamma</a></li>
+        </ul>
+      alpha:
+        index.html: |
+          <p>Parent: <a href="/docs/">Docs</a></p>
+          <p>Alpha content.</p>
+      beta:
+        index.html: |
+          <p>Parent: <a href="/docs/">Docs</a></p>
+          <p>Beta content.</p>
+      gamma:
+        index.html: |
+          <p>Parent: <a href="/docs/">Docs</a></p>
+          <p>Gamma content.</p>

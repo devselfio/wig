@@ -1,0 +1,82 @@
+test:
+  name: Nested directory path resolution.
+  comment: Tests sibling sections, nested sections, and leaf pages at different depths.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <t-var name="document.path" />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        root
+      about.dj: |
+        ---
+        ---
+        about
+      docs:
+        _index.dj: |
+          ---
+          ---
+          docs
+        intro.dj: |
+          ---
+          ---
+          intro
+        api:
+          _index.dj: |
+            ---
+            ---
+            api
+          auth.dj: |
+            ---
+            ---
+            auth
+      blog:
+        _index.dj: |
+          ---
+          ---
+          blog
+        post.dj: |
+          ---
+          ---
+          post
+output:
+  files:
+    index.html: |
+      /
+    about:
+      index.html: |
+        /about/
+    docs:
+      index.html: |
+        /docs/
+      intro:
+        index.html: |
+          /docs/intro/
+      api:
+        index.html: |
+          /docs/api/
+        auth:
+          index.html: |
+            /docs/api/auth/
+    blog:
+      index.html: |
+        /blog/
+      post:
+        index.html: |
+          /blog/post/

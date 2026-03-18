@@ -1,0 +1,281 @@
+test:
+  name: Breadcrumbs via document.ancestors.
+  comment: Tests document.ancestors with 10 levels of nesting and order="reverse" on t-for.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title><t-var name="document.title">Untitled</t-var></title>
+              </head>
+              <body>
+                <t-include template="blocks/breadcrumbs.html" context="document.ancestors as ancestors" />
+                <t-slot />
+              </body>
+            </html>
+        blocks:
+          breadcrumbs.html: |
+            <nav aria-label="Breadcrumb">
+            <p>
+            <t-for crumb in ancestors order="reverse" as loop>
+            <t-if var="loop.first" not-exists> / </t-if>
+            <a t-var:href="crumb.path"><t-var name="crumb.title" /></a>
+            </t-for>
+            </p>
+            </nav>
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: L0
+        ---
+        Level 0.
+      a:
+        _index.dj: |
+          ---
+          document:
+            title: L1
+          ---
+          Level 1.
+        b:
+          _index.dj: |
+            ---
+            document:
+              title: L2
+            ---
+            Level 2.
+          c:
+            _index.dj: |
+              ---
+              document:
+                title: L3
+              ---
+              Level 3.
+            d:
+              _index.dj: |
+                ---
+                document:
+                  title: L4
+                ---
+                Level 4.
+              e:
+                _index.dj: |
+                  ---
+                  document:
+                    title: L5
+                  ---
+                  Level 5.
+                f:
+                  _index.dj: |
+                    ---
+                    document:
+                      title: L6
+                    ---
+                    Level 6.
+                  g:
+                    _index.dj: |
+                      ---
+                      document:
+                        title: L7
+                      ---
+                      Level 7.
+                    h:
+                      _index.dj: |
+                        ---
+                        document:
+                          title: L8
+                        ---
+                        Level 8.
+                      i:
+                        _index.dj: |
+                          ---
+                          document:
+                            title: L9
+                          ---
+                          Level 9.
+output:
+  files:
+    index.html: |
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>L0</title>
+        </head>
+        <body>
+          <nav aria-label="Breadcrumb">
+          <p>
+          </p>
+          </nav>
+          <p>Level 0.</p>
+        </body>
+      </html>
+    a:
+      index.html: |
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>L1</title>
+          </head>
+          <body>
+            <nav aria-label="Breadcrumb">
+            <p>
+            <a href="/">L0</a>
+            </p>
+            </nav>
+            <p>Level 1.</p>
+          </body>
+        </html>
+      b:
+        index.html: |
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>L2</title>
+            </head>
+            <body>
+              <nav aria-label="Breadcrumb">
+              <p>
+              <a href="/">L0</a> / <a href="/a/">L1</a>
+              </p>
+              </nav>
+              <p>Level 2.</p>
+            </body>
+          </html>
+        c:
+          index.html: |
+            <!DOCTYPE html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title>L3</title>
+              </head>
+              <body>
+                <nav aria-label="Breadcrumb">
+                <p>
+                <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a>
+                </p>
+                </nav>
+                <p>Level 3.</p>
+              </body>
+            </html>
+          d:
+            index.html: |
+              <!DOCTYPE html>
+              <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <title>L4</title>
+                </head>
+                <body>
+                  <nav aria-label="Breadcrumb">
+                  <p>
+                  <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a>
+                  </p>
+                  </nav>
+                  <p>Level 4.</p>
+                </body>
+              </html>
+            e:
+              index.html: |
+                <!DOCTYPE html>
+                <html lang="en">
+                  <head>
+                    <meta charset="utf-8">
+                    <title>L5</title>
+                  </head>
+                  <body>
+                    <nav aria-label="Breadcrumb">
+                    <p>
+                    <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a> / <a href="/a/b/c/d/">L4</a>
+                    </p>
+                    </nav>
+                    <p>Level 5.</p>
+                  </body>
+                </html>
+              f:
+                index.html: |
+                  <!DOCTYPE html>
+                  <html lang="en">
+                    <head>
+                      <meta charset="utf-8">
+                      <title>L6</title>
+                    </head>
+                    <body>
+                      <nav aria-label="Breadcrumb">
+                      <p>
+                      <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a> / <a href="/a/b/c/d/">L4</a> / <a href="/a/b/c/d/e/">L5</a>
+                      </p>
+                      </nav>
+                      <p>Level 6.</p>
+                    </body>
+                  </html>
+                g:
+                  index.html: |
+                    <!DOCTYPE html>
+                    <html lang="en">
+                      <head>
+                        <meta charset="utf-8">
+                        <title>L7</title>
+                      </head>
+                      <body>
+                        <nav aria-label="Breadcrumb">
+                        <p>
+                        <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a> / <a href="/a/b/c/d/">L4</a> / <a href="/a/b/c/d/e/">L5</a> / <a href="/a/b/c/d/e/f/">L6</a>
+                        </p>
+                        </nav>
+                        <p>Level 7.</p>
+                      </body>
+                    </html>
+                  h:
+                    index.html: |
+                      <!DOCTYPE html>
+                      <html lang="en">
+                        <head>
+                          <meta charset="utf-8">
+                          <title>L8</title>
+                        </head>
+                        <body>
+                          <nav aria-label="Breadcrumb">
+                          <p>
+                          <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a> / <a href="/a/b/c/d/">L4</a> / <a href="/a/b/c/d/e/">L5</a> / <a href="/a/b/c/d/e/f/">L6</a> / <a href="/a/b/c/d/e/f/g/">L7</a>
+                          </p>
+                          </nav>
+                          <p>Level 8.</p>
+                        </body>
+                      </html>
+                    i:
+                      index.html: |
+                        <!DOCTYPE html>
+                        <html lang="en">
+                          <head>
+                            <meta charset="utf-8">
+                            <title>L9</title>
+                          </head>
+                          <body>
+                            <nav aria-label="Breadcrumb">
+                            <p>
+                            <a href="/">L0</a> / <a href="/a/">L1</a> / <a href="/a/b/">L2</a> / <a href="/a/b/c/">L3</a> / <a href="/a/b/c/d/">L4</a> / <a href="/a/b/c/d/e/">L5</a> / <a href="/a/b/c/d/e/f/">L6</a> / <a href="/a/b/c/d/e/f/g/">L7</a> / <a href="/a/b/c/d/e/f/g/h/">L8</a>
+                            </p>
+                            </nav>
+                            <p>Level 9.</p>
+                          </body>
+                        </html>

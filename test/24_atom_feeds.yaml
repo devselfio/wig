@@ -1,0 +1,101 @@
+test:
+  name: Atom feed generation.
+  comment: Tests feed declared in site.yaml, pages opt in via document.feeds.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: https://example.com
+        title: My Site
+        author: QuiteClose
+        feeds:
+          - posts
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Home.
+      blog:
+        _index.dj: |
+          ---
+          document:
+            title: Blog
+          ---
+          Blog index.
+        first.dj: |
+          ---
+          document:
+            title: First Post
+            date: 2026-03-10
+            description: The first post ever.
+            feeds: [posts]
+          ---
+          First post content.
+        second.dj: |
+          ---
+          document:
+            title: Second Post
+            date: 2026-03-15
+            description: A follow-up post.
+            feeds: [posts]
+          ---
+          Second post content.
+        no_feed.dj: |
+          ---
+          document:
+            title: No Feed
+            date: 2026-03-12
+          ---
+          This page is not in any feed.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    blog:
+      index.html: |
+        <p>Blog index.</p>
+      first:
+        index.html: |
+          <p>First post content.</p>
+      second:
+        index.html: |
+          <p>Second post content.</p>
+      no_feed:
+        index.html: |
+          <p>This page is not in any feed.</p>
+    feeds:
+      posts.xml: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>My Site - posts</title>
+          <link href="https://example.com/" />
+          <link href="https://example.com/feeds/posts.xml" rel="self" />
+          <author><name>QuiteClose</name></author>
+          <entry>
+            <title>Second Post</title>
+            <link href="https://example.com/blog/second/" />
+            <updated>2026-03-15</updated>
+            <summary>A follow-up post.</summary>
+          </entry>
+          <entry>
+            <title>First Post</title>
+            <link href="https://example.com/blog/first/" />
+            <updated>2026-03-10</updated>
+            <summary>The first post ever.</summary>
+          </entry>
+        </feed>

@@ -1,0 +1,77 @@
+test:
+  name: Multi-level data cascade override.
+  comment: Tests data.document overrides at multiple _index.dj levels.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: base.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          base.html: |
+            [<t-var name="document.style" />:<t-var name="document.layout" />] <t-slot />
+          blog-post.html: |
+            [blog-post] <t-slot />
+          special.html: |
+            [special] <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        data:
+          document:
+            style: default
+        ---
+        root
+      blog:
+        _index.dj: |
+          ---
+          data:
+            document:
+              layout: blog-post.html
+          ---
+          blog index
+        post_a.dj: |
+          ---
+          document:
+            title: Post A
+          ---
+          Post A content.
+        special:
+          _index.dj: |
+            ---
+            data:
+              document:
+                layout: special.html
+            ---
+            special index
+          post_b.dj: |
+            ---
+            document:
+              title: Post B
+            ---
+            Post B content.
+output:
+  files:
+    index.html: |
+      [default:base.html] <p>root</p>
+    blog:
+      index.html: |
+        [default:base.html] <p>blog index</p>
+      post_a:
+        index.html: |
+          [blog-post] <p>Post A content.</p>
+      special:
+        index.html: |
+          [default:base.html] <p>special index</p>
+        post_b:
+          index.html: |
+            [special] <p>Post B content.</p>

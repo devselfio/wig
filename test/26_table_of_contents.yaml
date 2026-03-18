@@ -1,0 +1,81 @@
+test:
+  name: Table of contents via document.toc.
+  comment: Tests document.toc as a list of {id, text, level} maps rendered in template.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          page.html: |
+            <nav>
+            <t-for heading in document.toc>
+            <a t-var:href="heading.id" t-var:data-level="heading.level"><t-var name="heading.text" /></a>
+            </t-for>
+            </nav>
+            <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Article
+        ---
+        # Introduction
+
+        Intro text.
+
+        ## Background
+
+        Background text.
+
+        ## Methods
+
+        Methods text.
+
+        ### Sub-method
+
+        Sub-method text.
+
+        ## Conclusion
+
+        Conclusion text.
+output:
+  files:
+    index.html: |
+      <nav>
+      <a href="#Introduction" data-level="1">Introduction</a>
+      <a href="#Background" data-level="2">Background</a>
+      <a href="#Methods" data-level="2">Methods</a>
+      <a href="#Sub-method" data-level="3">Sub-method</a>
+      <a href="#Conclusion" data-level="2">Conclusion</a>
+      </nav>
+      <section id="Introduction">
+      <h1>Introduction</h1>
+      <p>Intro text.</p>
+      <section id="Background">
+      <h2>Background</h2>
+      <p>Background text.</p>
+      </section>
+      <section id="Methods">
+      <h2>Methods</h2>
+      <p>Methods text.</p>
+      <section id="Sub-method">
+      <h3>Sub-method</h3>
+      <p>Sub-method text.</p>
+      </section>
+      </section>
+      <section id="Conclusion">
+      <h2>Conclusion</h2>
+      <p>Conclusion text.</p>
+      </section>
+      </section>
