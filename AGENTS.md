@@ -12,11 +12,15 @@ A library-first static site generator in Zig. Wig promotes CUBE CSS methodology 
 
 ## Build Commands
 
+The wig repo's `build.zig` has `run`, `test`, and install steps only:
+
 ```
 zig build          # compile wig CLI + library
-zig build test     # run all tests
+zig build test     # run all tests (unit + spec tests)
 zig build run      # run the wig CLI
 ```
+
+The `zig build render`, `zig build serve`, `zig build validate` steps are for **scaffolded projects** (after `wig init`); the user's build.zig defines those. The wig repo builds the CLI and runs tests.
 
 ## Project Structure
 
@@ -46,12 +50,11 @@ wig/
     session.zig     # cookie-based sessions, MemoryStore
     scaffold.zig    # wig init, add style, add block, install
     html.zig        # shared HTML utilities (stripTags)
-    test_runner.zig # integration test runner (Toupee-style .test files)
+    test_runner.zig # spec test runner (NN_*.yaml full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
     output_verifier.zig # output verification: HTML normalization, glob matching
   test/
-    *.test          # integration test suites (HTML comment delimited)
-    NN_*.yaml       # spec tests (full-site build + output verification)
+    NN_*.yaml       # spec tests (primary integration tests; full-site build + output verification)
 ```
 
 ## Architecture
@@ -92,8 +95,8 @@ Content rendering is a three-phase pipeline:
 **Content authors** use `{{ }}` for value interpolation in Djot (e.g. links, inline values). **Template authors** use Toupee's `<t-*>` elements and attribute bindings in layout HTML.
 
 For Toupee tags in Djot content, use Djot's raw HTML passthrough:
-- Inline: `` `<t-include template="nav.html" />`{=html} ``
-- Block: bare `<t-include template="nav.html" />` on its own line (Djot auto-detects block HTML)
+- Inline: `` `<t-include template="blocks/nav.html" />`{=html} ``
+- Block: bare `<t-include template="blocks/nav.html" />` on its own line (Djot auto-detects block HTML)
 
 ### Content parsers
 
@@ -126,14 +129,7 @@ ctx.putAt("page.title", .{ .string = "About" });  // dot-path, creates intermedi
 ctx.putAt("page.url", .{ .string = "/about/" });
 ```
 
-Engine for cached templates:
-
-```zig
-var engine = try toupee.Engine.init(allocator);
-defer engine.deinit();
-try engine.loadFromDirectory("styles/default", ".html");  // load all templates
-const html = try engine.renderTemplate(a, "page.html", &ctx, loader, .{});
-```
+Engine for cached templates: Wig's StyleLoader loads from `templates/layouts/` and `templates/blocks/`. Template names use explicit paths: `layouts/page.html`, `blocks/card.html`.
 
 Value type supports: `.string`, `.boolean`, `.integer`, `.float`, `.list`, `.map`, `.nil`.
 
@@ -255,21 +251,61 @@ This is the same data as `pages.{key}.document` but accessible without knowing t
 
 Dates in frontmatter use ISO 8601 format with optional time: `2026-03-16` (date only) or `2026-03-16T14:30:00Z` (with time). String comparison on `YYYY-MM-DD` gives correct chronological order. Used for sorting (`<t-for ... sort="document.date">`), feeds, sitemaps, and the `date` transform.
 
-### Style directory structure
+### Style directory structure (CUBE-aligned)
 
 Each style lives under `styles/{name}/` with this structure:
 
 ```
 styles/default/
   style.yaml         # style manifest (name, bundles, tokens, scheme, custom fields)
-  layouts/           # page-level templates (base.html, post.html, post-list.html)
-  includes/          # reusable HTML components (breadcrumbs.html, card.html)
-  css/               # CSS files (with optional frontmatter for Toupee rendering)
+  templates/
+    layouts/*.html   # page shells (base.html, page.html, post.html)
+    blocks/*.html    # components (breadcrumbs.html, card.html)
+  css/
+    compositions/*.css
+    blocks/*.css
+    fonts/*.css
+    globals/*.css
+    utilities/*.css
+  patterns/
+    blocks/*.html    # pattern library examples (one per block)
+    compositions/*.html
+    utilities/*.html
 ```
 
-- `layouts/` -- page shells that extend a base and define the document structure. Referenced via `document.layout`.
-- `includes/` -- reusable components included via `<t-include template="includes/name.html" />`. CUBE CSS "blocks" -- UI components with associated HTML structure.
+- `templates/layouts/` -- page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
+- `templates/blocks/` -- CUBE blocks (components). Use `<t-include template="blocks/card.html" />`. Each block has CSS in `css/blocks/` and HTML in `templates/blocks/`.
 - `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colours). Files without frontmatter are plain text.
+- `patterns/` -- pattern library examples. One HTML file per block in `patterns/blocks/`; discovered from `css/blocks/*.css` doc comments.
+
+### Template resolution
+
+**Explicit paths in HTML:** Authors must use explicit paths so the loader knows which subdirectory to use. Toupee uses the `template` attribute for both `<t-extend>` and `<t-include>`.
+
+| Element | Path form | Example |
+|---------|-----------|---------|
+| `<t-extend template="...">` | `layouts/X.html` | `layouts/page.html` |
+| `<t-include template="...">` | `blocks/X.html` | `blocks/footer.html` |
+
+The path prefix selects the subdirectory. No resolution order or fallback is needed.
+
+**Short form for document.layout:** Because Wig knows the style and that `document.layout` is always a layout, frontmatter can use the short form:
+
+```yaml
+document:
+  layout: page.html
+```
+
+Resolves to `{style}/templates/layouts/page.html`. No `layouts/` prefix needed in frontmatter.
+
+**Cross-style override:** Use `style:path` to pull templates from another style:
+
+| Form | Meaning |
+|------|---------|
+| `blocks/paragraph.html` | Current style's blocks |
+| `_core:blocks/paragraph.html` | `_core` style's blocks |
+
+Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved.
 
 ### Bundles
 
@@ -287,7 +323,7 @@ Bundles are concatenated in declared order. Files with frontmatter are rendered 
 
 ### Colour schemes
 
-Wig uses the three-layer colour indirection system from the prototype:
+Wig uses a three-layer colour indirection system:
 
 1. **Palette** -- maps colour names to hex values. Each scheme uses its own native naming.
 2. **Styles** -- maps semantic roles (`text.primary`, `background.primary`, `text.link`) to palette names.
@@ -317,7 +353,7 @@ Templates should use `document.children` rather than hardcoded collection paths 
 
 ### Pattern library
 
-Each style may have a `patterns/` directory for block documentation and examples. This is separate from `blocks/` (which contains the components themselves). Detailed spec deferred.
+Each style has a `patterns/` directory mirroring the CSS structure: `patterns/blocks/`, `patterns/compositions/`, `patterns/utilities/`. Block examples live in `patterns/blocks/*.html` (one per block). Wig discovers blocks from `css/blocks/*.css` doc comments and pairs them with examples from `patterns/blocks/`.
 
 ### Feeds
 
@@ -414,6 +450,7 @@ Always `zig-out/site/`. Production builds error if unclean. Draft builds overlay
 
 ## Conventions
 
+- **Template paths:** Use explicit paths in HTML: `layouts/X.html` for extends, `blocks/X.html` for includes. Short form `page.html` only for `document.layout` in frontmatter.
 - Template indentation: two spaces. `<t-*>` tags do not introduce indentation.
 - Error messages: include file path. Where possible, line number and suggestion.
 - Module soft limit: ~800 lines.
@@ -430,42 +467,11 @@ Always `zig-out/site/`. Production builds error if unclean. Draft builds overlay
 
 Every module has inline `test` blocks covering its public API. Run with `zig build test`.
 
-### Integration tests
+### Spec tests (primary integration tests)
 
-File-based integration tests live in `wig/test/*.test`. The format uses HTML comment delimiters (same format as Toupee and Comb):
+Full-site build tests in `wig/test/NN_*.yaml` are the primary integration tests. They run via `runSpecTests` in `test_runner.zig`. Each defines a complete site (data, styles, pages), runs `Site.init()` + `buildAll()`, and verifies output via `output_verifier.zig`. `zig build test` runs them.
 
-```
-<!-- test: name of test -->
-<!-- section-name -->
-content
-<!-- out -->
-expected output
-```
-
-Each test case is dispatched to a domain-specific runner in `test_runner.zig` based on which sections are present. Supported domains:
-
-| Section(s)             | Domain                                    |
-|------------------------|-------------------------------------------|
-| `html`                 | HTML tag stripping (`html.zig`)           |
-| `path`                 | Collection key dotPath (`scanner.zig`)    |
-| `source-path`          | Clean URL derivation (`scanner.zig`)      |
-| `route` + `request`    | HTTP routing (`router.zig` + `app.zig`)   |
-| `middleware`            | Middleware chain (`handler.zig`)          |
-| `pages-json` + variants| Feeds, sitemap, search index              |
-| `scaffold-cmd`         | Project scaffolding (`scaffold.zig`)      |
-| `tokens`               | Fluid token computation (`tokens.zig`)    |
-| `highlights` + `scheme:`| Colour scheme resolution (`colours.zig`) |
-| `config`               | Site config loading (`config.zig`)        |
-| `comb-input`           | YAML-to-Toupee conversion (`context.zig`)|
-| `css-files`            | CSS bundle concatenation (`bundles.zig`)  |
-| `scan-pages`           | Directory scanning (`scanner.zig`)        |
-| `page-content`         | Page rendering + ToC + excerpts           |
-
-Test files: `smoke.test`, `html.test`, `scanner.test`, `web-framework.test`, `post-build.test`, `scaffold.test`, `data-pipeline.test`, `css-pipeline.test`, `page-rendering.test`.
-
-### Spec tests (YAML)
-
-Full-site build tests in `wig/test/NN_name.yaml`. Each defines a complete site (data, styles, pages), an action (`wig: build`), and expected output files.
+Spec format:
 
 ```yaml
 test:
@@ -484,6 +490,8 @@ output:
     index.html: |
       expected content
 ```
+
+Specs use `templates: layouts:` and `templates: blocks:` (or equivalent). Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`. The test runner KEY_MAP maps `layouts` → `templates/layouts`, `blocks` → `templates/blocks`.
 
 Tests 00-34 cover: minimal builds, error cases (missing config, missing layout), pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets (assets/), CSS tokens, colour schemes, core templates (_core), CSS bundle concatenation, sitemap, Atom feeds, search index, table of contents, collection sorting, pagination, tags, and blog E2E.
 

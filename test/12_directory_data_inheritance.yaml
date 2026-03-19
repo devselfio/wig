@@ -18,7 +18,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           page.html: |
             [<t-var name="site.author" />@<t-var name="site.title" />] <t-slot />
     pages:

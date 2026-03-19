@@ -419,11 +419,12 @@ fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, 
 }
 
 const KEY_MAP = [_][2][]const u8{
-    .{ "templates", "layouts" },
-    .{ "blocks", "includes" },
+    .{ "templates", "templates" },
+    .{ "layouts", "templates/layouts" },
+    .{ "blocks", "templates/blocks" },
 };
 
-/// Maps spec keys to directory names: "templates" -> "layouts", "blocks" -> "includes".
+/// Maps spec keys to directory names: "layouts" -> "templates/layouts", "blocks" -> "templates/blocks".
 fn resolveDirName(name: []const u8) []const u8 {
     for (KEY_MAP) |pair| {
         if (std.mem.eql(u8, pair[0], name)) return pair[1];
@@ -431,7 +432,7 @@ fn resolveDirName(name: []const u8) []const u8 {
     return name;
 }
 
-/// Maps "templates" -> "layouts" and "blocks" -> "includes" so loader finds them.
+/// Writes file tree; resolveDirName maps spec keys to CUBE paths (layouts→templates/layouts, blocks→templates/blocks).
 fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value) !void {
     const dir_name = resolveDirName(name);
 

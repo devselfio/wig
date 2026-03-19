@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           base.html: |
             <!DOCTYPE html>
             <html lang="en">
@@ -29,14 +29,14 @@ input:
               </body>
             </html>
           post-list.html: |
-            <t-extend template="base.html">
+            <t-extend template="layouts/base.html">
               <t-define>
                 <t-slot />
                 <t-include template="blocks/list-posts.html" context="document.children as posts" />
               </t-define>
             </t-extend>
           post.html: |
-            <t-extend template="base.html">
+            <t-extend template="layouts/base.html">
               <t-define>
                 <article>
                   <h1><t-var name="document.title">Untitled Document</t-var></h1>

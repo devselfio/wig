@@ -26,7 +26,7 @@ input:
             <!DOCTYPE html>
             <html><head><t-slot name="head" /></head><body><t-slot /></body></html>
           page.html: |
-            <t-extend template="base.html">
+            <t-extend template="layouts/base.html">
               <t-define name="head">
                 <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
               </t-define>
@@ -35,7 +35,7 @@ input:
               </t-define>
             </t-extend>
           post.html: |
-            <t-extend template="page.html">
+            <t-extend template="layouts/page.html">
               <t-define>
                 <article>
                   <h1><t-var name="document.title" /></h1>
@@ -44,7 +44,7 @@ input:
               </t-define>
             </t-extend>
           list.html: |
-            <t-extend template="page.html">
+            <t-extend template="layouts/page.html">
               <t-define>
                 <ul>
                   <t-for post in document.children>

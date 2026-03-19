@@ -28,7 +28,7 @@ input:
               scale: 1.5
           bundles:
             - css/tokens.css
-        templates:
+        layouts:
           page.html: |
             <t-slot />
         css:

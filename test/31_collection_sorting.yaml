@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           page.html: |
             <t-slot />
           list.html: |

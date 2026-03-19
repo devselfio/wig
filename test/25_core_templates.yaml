@@ -20,7 +20,7 @@ input:
           name: default
         layouts:
           page.html: |
-            <t-extend template="_core/base.html">
+            <t-extend template="_core:layouts/base.html">
             <t-define name="body"><main><t-slot /></main></t-define>
             </t-extend>
     pages:

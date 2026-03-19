@@ -17,7 +17,7 @@ input:
         style.yaml: |
           name: default
           version: "1.0"
-        templates:
+        layouts:
           base.html: |
             <!DOCTYPE html>
             <html>
@@ -31,7 +31,7 @@ input:
         style.yaml: |
           name: minimal
           version: "0.1"
-        templates:
+        layouts:
           base.html: |
             <html>
               <head><title><t-var name="document.title" /></title></head>

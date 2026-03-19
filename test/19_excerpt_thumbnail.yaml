@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           page.html: |
             <meta name="description" t-var:content="document.excerpt" />
             <t-if var="document.thumbnail">

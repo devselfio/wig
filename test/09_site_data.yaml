@@ -18,7 +18,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           page.html: |
             <!DOCTYPE html>
             <html lang="en">

@@ -51,7 +51,7 @@ input:
           scheme: mono
           bundles:
             - css/colours.css
-        templates:
+        layouts:
           page.html: |
             <t-slot />
         css:

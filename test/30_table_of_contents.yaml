@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           page.html: |
             <nav>
             <t-for heading in document.toc>

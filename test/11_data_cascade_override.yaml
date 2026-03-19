@@ -16,7 +16,7 @@ input:
       default:
         style.yaml: |
           name: default
-        templates:
+        layouts:
           base.html: |
             [<t-var name="document.style.name" />:<t-var name="document.layout" />] <t-slot />
           blog-post.html: |
