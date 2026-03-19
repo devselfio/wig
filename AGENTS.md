@@ -47,8 +47,11 @@ wig/
     scaffold.zig    # wig init, add style, add block, install
     html.zig        # shared HTML utilities (stripTags)
     test_runner.zig # integration test runner (Toupee-style .test files)
+    test_report.zig # report types, Reporter, Failure, unified diff formatting
+    output_verifier.zig # output verification: HTML normalization, glob matching
   test/
     *.test          # integration test suites (HTML comment delimited)
+    NN_*.yaml       # spec tests (full-site build + output verification)
 ```
 
 ## Architecture
@@ -483,6 +486,12 @@ output:
 ```
 
 Tests 00-34 cover: minimal builds, error cases (missing config, missing layout), pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets (assets/), CSS tokens, colour schemes, core templates (_core), CSS bundle concatenation, sitemap, Atom feeds, search index, table of contents, collection sorting, pagination, tags, and blog E2E.
+
+### Test runner modules
+
+- **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (default `zig-out/site`, `zig-out/test`). Pass to `runSpecTests(..., config)`.
+- **OutputVerifier** (`output_verifier.zig`): Verifies output directory against spec; HTML normalization, glob matching (`*` only), stack/arena for comparisons.
+- **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; future loaders (e.g. zip fixtures) can swap in.
 
 ## Dependency API Reference
 

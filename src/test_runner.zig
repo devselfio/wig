@@ -4,22 +4,176 @@ const comb = @import("comb");
 const root = @import("root.zig");
 const fs = std.fs;
 const epoch = std.time.epoch;
+const test_report = @import("test_report.zig");
+const output_verifier = @import("output_verifier.zig");
 
-const TestResults = struct {
-    passed: usize = 0,
-    failed: usize = 0,
+const TestResults = test_report.TestResults;
+const Report = test_report.Report;
+const Reporter = test_report.Reporter;
 
-    fn total(self: TestResults) usize {
-        return self.passed + self.failed;
-    }
+/// Configurable paths for the test runner. Defaults preserve current behavior.
+pub const TestRunnerConfig = struct {
+    output_dir: []const u8 = "zig-out/site",
+    workspace_dir: []const u8 = "zig-out/test",
+};
 
-    fn add(self: *TestResults, other: TestResults) void {
-        self.passed += other.passed;
-        self.failed += other.failed;
+/// Result of loading a spec. Call deinit when done.
+pub const LoadedSpec = struct {
+    content: []const u8,
+    value: comb.Value,
+    _parsed: comb.Parsed(comb.Value),
+
+    pub fn deinit(self: *LoadedSpec) void {
+        self._parsed.deinit();
     }
 };
 
+/// Loads a spec from a file. Default implementation reads YAML and parses with Comb.
+/// Allows future formats (e.g. fixtures from zip) by swapping the loader.
+pub const SpecLoader = struct {
+    loadSpec: *const fn (a: Allocator, test_dir: fs.Dir, filename: []const u8) anyerror!LoadedSpec,
+};
+
+fn loadSpecFromFile(a: Allocator, test_dir: fs.Dir, filename: []const u8) !LoadedSpec {
+    const content = try test_dir.readFileAlloc(a, filename, 1024 * 1024);
+    const parsed = try comb.parse(a, content);
+    return .{
+        .content = content,
+        .value = parsed.value,
+        ._parsed = parsed,
+    };
+}
+
+/// Default spec loader: reads YAML from test_dir and parses with Comb.
+pub const defaultSpecLoader = SpecLoader{
+    .loadSpec = loadSpecFromFile,
+};
+
 // ── Entry ────────────────────────────────────────────────────────────────
+
+/// Parses WIG_TEST env format (e.g. "00" or "00,01,02") into a list of test numbers.
+/// Caller owns the returned Filter; call filter.deinit(a) when done.
+fn parseFilter(a: Allocator, filter_str: ?[]const u8) !?Filter {
+    const f = filter_str orelse return null;
+    if (f.len == 0) return null;
+    var list = std.ArrayListUnmanaged([]const u8){};
+    var iter = std.mem.splitScalar(u8, f, ',');
+    while (iter.next()) |n| {
+        const trimmed = std.mem.trim(u8, n, " \t");
+        if (trimmed.len > 0) {
+            try list.append(a, try a.dupe(u8, trimmed));
+        }
+    }
+    if (list.items.len == 0) return null;
+    return Filter{ .numbers = list };
+}
+
+/// Filter for WIG_TEST env: list of test numbers to run (e.g. "00", "01").
+const Filter = struct {
+    numbers: std.ArrayListUnmanaged([]const u8),
+
+    fn deinit(self: *Filter, a: Allocator) void {
+        for (self.numbers.items) |n| a.free(n);
+        self.numbers.deinit(a);
+    }
+
+    fn matches(self: Filter, num: []const u8) bool {
+        for (self.numbers.items) |n| {
+            if (std.mem.eql(u8, n, num)) return true;
+        }
+        return false;
+    }
+};
+
+/// Isolated workspace for a spec test run. Creates {workspace_dir}/{run_id}/ and manages cleanup.
+const TestWorkspace = struct {
+    allocator: Allocator,
+    base_path: []const u8,
+    base_dir: fs.Dir,
+    run_id: []const u8,
+    workspace_dir: []const u8,
+    closed: bool = false,
+
+    fn init(a: Allocator, run_id: []const u8, config: TestRunnerConfig) !TestWorkspace {
+        const base_path = try fs.path.join(a, &.{ config.workspace_dir, run_id });
+        fs.cwd().makePath(base_path) catch {};
+        const base_dir = try fs.cwd().openDir(base_path, .{});
+        return .{
+            .allocator = a,
+            .base_path = base_path,
+            .base_dir = base_dir,
+            .run_id = run_id,
+            .workspace_dir = config.workspace_dir,
+        };
+    }
+
+    fn deinit(self: *TestWorkspace) void {
+        if (!self.closed) self.base_dir.close();
+        self.allocator.free(self.base_path);
+    }
+
+    /// Creates a subdirectory for one test and returns its absolute path. Caller owns the path; call a.free() when done.
+    /// Returns the path string, not fs.Dir; caller opens the dir with fs.cwd().openDir(path, .{}).
+    fn createTestDir(self: *TestWorkspace, test_name: []const u8) ![]const u8 {
+        self.base_dir.makePath(test_name) catch {};
+        return fs.path.join(self.allocator, &.{ self.base_path, test_name });
+    }
+
+    fn deleteTestDir(self: *TestWorkspace, test_name: []const u8) void {
+        self.base_dir.deleteTree(test_name) catch |err| {
+            std.debug.print("  warning: could not delete test dir {s}: {}\n", .{ test_name, err });
+        };
+    }
+
+    fn deleteAll(self: *TestWorkspace) void {
+        self.base_dir.close();
+        self.closed = true;
+        var parent = fs.cwd().openDir(self.workspace_dir, .{}) catch |err| {
+            std.debug.print("  warning: could not open workspace dir for cleanup: {}\n", .{err});
+            return;
+        };
+        defer parent.close();
+        parent.deleteTree(self.run_id) catch |err| {
+            std.debug.print("  warning: could not delete run dir {s}: {}\n", .{ self.run_id, err });
+        };
+    }
+
+    fn writeReport(self: *TestWorkspace, report: *Report) void {
+        const report_path = fs.path.join(self.allocator, &.{ self.base_path, "report.txt" }) catch |err| {
+            std.debug.print("  warning: could not build report path: {}\n", .{err});
+            return;
+        };
+        defer self.allocator.free(report_path);
+        var file = fs.cwd().createFile(report_path, .{}) catch |err| {
+            std.debug.print("  warning: could not create report file: {}\n", .{err});
+            return;
+        };
+        file.writeAll(report.buffer.items) catch |err| {
+            std.debug.print("  warning: could not write report: {}\n", .{err});
+        };
+        file.close();
+    }
+};
+
+/// Discovers spec test filenames (NN_*.yaml) in test_dir, sorted by number.
+/// Caller owns returned items; call a.free() on each and list.deinit(a).
+fn discoverSpecTests(a: Allocator, test_dir: fs.Dir) !std.ArrayListUnmanaged([]const u8) {
+    var names = std.ArrayListUnmanaged([]const u8){};
+    var it = test_dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".yaml")) continue;
+        if (entry.name.len >= 2 and std.ascii.isDigit(entry.name[0]) and std.ascii.isDigit(entry.name[1])) {
+            try names.append(a, try a.dupe(u8, entry.name));
+        }
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn cmp(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.cmp);
+    return names;
+}
 
 /// Returns YYYYMMDD-HHMMSS for the current time (UTC).
 fn timestampRunId(buf: []u8) ![]const u8 {
@@ -45,60 +199,57 @@ fn timestampRunId(buf: []u8) ![]const u8 {
 
 /// Scans test/ for NN_*.yaml, sorts by number, runs each (or filtered subset).
 /// If run_id_out is provided, fills it with the timestamp run id (YYYYMMDD-HHMMSS).
-pub fn runSpecTests(a: Allocator, test_dir: fs.Dir, filter: ?[]const u8, run_id_out: ?*[16]u8) !TestResults {
+/// If config is null, uses default paths (zig-out/site, zig-out/test).
+/// If loader is null, uses defaultSpecLoader.
+/// If workspace_dir_out is non-null, sets it to the workspace dir used (for failure messages).
+pub fn runSpecTests(
+    a: Allocator,
+    test_dir: fs.Dir,
+    filter: ?[]const u8,
+    run_id_out: ?*[16]u8,
+    config: ?TestRunnerConfig,
+    loader: ?*const SpecLoader,
+    workspace_dir_out: ?*[]const u8,
+) !TestResults {
+    const cfg = config orelse TestRunnerConfig{};
+    const ld = loader orelse &defaultSpecLoader;
+    if (workspace_dir_out) |out| out.* = cfg.workspace_dir;
     var total = TestResults{};
-    var names = std.ArrayListUnmanaged([]const u8){};
+    var names = try discoverSpecTests(a, test_dir);
     defer {
         for (names.items) |name| a.free(name);
         names.deinit(a);
     }
 
-    var it = test_dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".yaml")) continue;
-        if (entry.name.len >= 2 and std.ascii.isDigit(entry.name[0]) and std.ascii.isDigit(entry.name[1])) {
-            try names.append(a, try a.dupe(u8, entry.name));
-        }
-    }
-
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn cmp(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.cmp);
-
     var run_id_buf: [16]u8 = undefined;
     const run_id = try timestampRunId(&run_id_buf);
     if (run_id_out) |out| @memcpy(out[0..run_id.len], run_id);
-    const test_base = try fs.path.join(a, &.{ "zig-out", "test", run_id });
-    defer a.free(test_base);
-    fs.cwd().makePath(test_base) catch {};
 
     var report = Report.init(a);
     defer report.deinit();
 
-    var base_dir = fs.cwd().openDir(test_base, .{}) catch return total;
+    var filter_parsed = try parseFilter(a, filter);
+    defer if (filter_parsed) |*f| f.deinit(a);
 
+    var to_run = std.ArrayListUnmanaged([]const u8){};
+    defer to_run.deinit(a);
     for (names.items) |filename| {
         const num = filename[0..2];
-        if (filter) |f| {
-            var iter = std.mem.splitScalar(u8, f, ',');
-            var found = false;
-            while (iter.next()) |n| {
-                const trimmed = std.mem.trim(u8, n, " \t");
-                if (std.mem.eql(u8, trimmed, num)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) continue;
+        if (filter_parsed) |*f| {
+            if (!f.matches(num)) continue;
         }
+        try to_run.append(a, filename);
+    }
+    report.writeHeader(run_id, to_run.items);
 
+    var workspace = try TestWorkspace.init(a, run_id, cfg);
+    defer workspace.deinit();
+
+    for (to_run.items) |filename| {
         const dot_pos = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
         const test_name = filename[0..dot_pos];
 
-        const results = runOneSpecTest(a, test_dir, filename, test_base, &report) catch |err| {
+        const results = runOneSpecTest(a, test_dir, filename, &workspace, &report, cfg.output_dir, ld) catch |err| {
             std.debug.print("  {s}: ERROR ({})\n", .{ filename, err });
             total.failed += 1;
             continue;
@@ -109,101 +260,91 @@ pub fn runSpecTests(a: Allocator, test_dir: fs.Dir, filter: ?[]const u8, run_id_
         total.add(results);
 
         if (results.failed == 0) {
-            base_dir.deleteTree(test_name) catch {};
+            workspace.deleteTestDir(test_name);
         }
     }
 
-    base_dir.close();
-
     if (total.failed > 0) {
-        const report_path = try fs.path.join(a, &.{ test_base, "report.txt" });
-        defer a.free(report_path);
-        var report_file = fs.cwd().createFile(report_path, .{}) catch return total;
-        defer report_file.close();
-        report_file.writeAll(report.buffer.items) catch {};
+        workspace.writeReport(&report);
     } else {
-        var test_parent = fs.cwd().openDir("zig-out/test", .{}) catch return total;
-        defer test_parent.close();
-        test_parent.deleteTree(run_id) catch {};
+        workspace.deleteAll();
     }
 
     return total;
 }
 
-fn runOneSpecTest(a: Allocator, test_dir: fs.Dir, filename: []const u8, test_base: []const u8, report: *Report) !TestResults {
+fn runOneSpecTest(a: Allocator, test_dir: fs.Dir, filename: []const u8, workspace: *TestWorkspace, report: *Report, output_dir_path: []const u8, loader: *const SpecLoader) !TestResults {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const ba = arena.allocator();
 
-    const content = try test_dir.readFileAlloc(ba, filename, 1024 * 1024);
-    var parsed = comb.parse(ba, content) catch {
-        std.debug.print("    FAIL [{s}]: YAML parse error\n", .{filename});
-        report.append("FAIL [{s}]: YAML parse error\n", .{filename});
+    var reporter = Reporter.init(null, report, filename);
+    var loaded = loader.loadSpec(ba, test_dir, filename) catch {
+        reporter.failWithFailure(ba, .{ .kind = .yaml_parse_error });
         return error.ParseFailed;
     };
-    defer parsed.deinit();
+    defer loaded.deinit();
 
-    const spec = try parseSpecTest(ba, parsed.value);
+    const spec = try parseSpecTest(ba, loaded.value);
     const dot_pos = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
     const test_name = filename[0..dot_pos];
 
-    const work_dir = try fs.path.join(ba, &.{ test_base, test_name });
-    fs.cwd().makePath(work_dir) catch {};
-    var work = try fs.cwd().openDir(work_dir, .{});
+    const work_path = try workspace.createTestDir(test_name);
+    defer a.free(work_path);
+    var work = try fs.cwd().openDir(work_path, .{});
     defer work.close();
 
-    for (spec.input_files.object) |entry| {
-        const key = switch (entry.key) {
-            .string => |s| s,
-            else => continue,
-        };
-        try writeFileTree(ba, work, key, entry.value);
+    try setupWorkDir(ba, work, spec);
+
+    const result = try runBuild(ba, work, spec.output_exit == 1, &reporter, output_dir_path);
+    switch (result) {
+        .expected_failure => return TestResults{ .passed = 1 },
+        .failure => return error.BuildFailed,
+        .output => |output_dir| {
+            var mut_dir = output_dir;
+            defer mut_dir.close();
+            var results = TestResults{};
+            var verify_reporter = Reporter.init(&results, report, filename);
+            if (spec.output_files) |files| {
+                try output_verifier.verify(ba, mut_dir, "", files, &verify_reporter);
+            }
+            return results;
+        },
     }
-
-    const abs_root = try work.realpathAlloc(ba, ".");
-    const expect_fail = spec.output_exit == 1;
-
-    var site = root.Site.init(ba, .{ .root = abs_root }) catch |err| {
-        if (expect_fail) {
-            return TestResults{ .passed = 1 };
-        }
-        std.debug.print("    FAIL [{s}]: Site.init failed: {}\n", .{ filename, err });
-        report.append("FAIL [{s}]: Site.init failed: {}\n", .{ filename, err });
-        return error.BuildFailed;
-    };
-    defer site.deinit();
-
-    site.buildAll(.{ .clean = true }) catch |err| {
-        if (expect_fail) {
-            return TestResults{ .passed = 1 };
-        }
-        std.debug.print("    FAIL [{s}]: buildAll failed: {}\n", .{ filename, err });
-        report.append("FAIL [{s}]: buildAll failed: {}\n", .{ filename, err });
-        return error.BuildFailed;
-    };
-
-    if (expect_fail) {
-        std.debug.print("    FAIL [{s}]: expected build to fail but it succeeded\n", .{filename});
-        report.append("FAIL [{s}]: expected build to fail but it succeeded\n", .{filename});
-        return error.UnexpectedSuccess;
-    }
-
-    var output_dir = work.openDir("zig-out/site", .{ .iterate = true }) catch {
-        std.debug.print("    FAIL [{s}]: could not open zig-out/site\n", .{filename});
-        report.append("FAIL [{s}]: could not open zig-out/site\n", .{filename});
-        return error.OutputMissing;
-    };
-    defer output_dir.close();
-
-    var results = TestResults{};
-    if (spec.output_files) |files| {
-        try verifyOutput(ba, output_dir, "", files, &results, filename, report);
-    }
-    return results;
 }
 
 // ── Parse ────────────────────────────────────────────────────────────────
 
+/// Returns the key when entry.key is a string, else null.
+fn getStringKey(entry: comb.Entry) ?[]const u8 {
+    return switch (entry.key) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+/// Returns the value for the matching string key in obj, or null.
+fn getKey(obj: comb.Value, key: []const u8) ?comb.Value {
+    if (obj != .object) return null;
+    for (obj.object) |entry| {
+        const k = getStringKey(entry) orelse continue;
+        if (std.mem.eql(u8, k, key)) return entry.value;
+    }
+    return null;
+}
+
+/// Walks path (e.g. "input.files") and returns the value, or null.
+fn getNested(top: comb.Value, path: []const u8) ?comb.Value {
+    var current = top;
+    var iter = std.mem.splitScalar(u8, path, '.');
+    while (iter.next()) |segment| {
+        if (current != .object) return null;
+        current = getKey(current, segment) orelse return null;
+    }
+    return current;
+}
+
+/// Parsed spec test: input file tree, expected exit code, and optional output file expectations.
 const SpecTest = struct {
     input_files: comb.Value,
     output_exit: u8,
@@ -213,48 +354,19 @@ const SpecTest = struct {
 fn parseSpecTest(_: Allocator, top: comb.Value) !SpecTest {
     if (top != .object) return error.InvalidFormat;
 
-    var input_files: ?comb.Value = null;
+    const input_files = getNested(top, "input.files") orelse return error.MissingInputFiles;
+
     var output_exit: u8 = 0;
     var output_files: ?comb.Value = null;
-
-    for (top.object) |entry| {
-        const key = switch (entry.key) {
-            .string => |s| s,
-            else => continue,
-        };
-        if (std.mem.eql(u8, key, "input")) {
-            if (entry.value == .object) {
-                for (entry.value.object) |e| {
-                    const k = switch (e.key) {
-                        .string => |x| x,
-                        else => continue,
-                    };
-                    if (std.mem.eql(u8, k, "files")) {
-                        input_files = e.value;
-                        break;
-                    }
-                }
-            }
-        } else if (std.mem.eql(u8, key, "output")) {
-            if (entry.value == .object) {
-                for (entry.value.object) |e| {
-                    const k = switch (e.key) {
-                        .string => |x| x,
-                        else => continue,
-                    };
-                    if (std.mem.eql(u8, k, "exit")) {
-                        if (e.value == .integer) output_exit = @intCast(@min(255, e.value.integer));
-                    } else if (std.mem.eql(u8, k, "files")) {
-                        output_files = e.value;
-                    }
-                }
-            }
+    if (getKey(top, "output")) |output_obj| {
+        if (getKey(output_obj, "exit")) |exit_val| {
+            if (exit_val == .integer) output_exit = @intCast(@min(255, exit_val.integer));
         }
+        output_files = getKey(output_obj, "files");
     }
 
-    const files = input_files orelse return error.MissingInputFiles;
     return .{
-        .input_files = files,
+        .input_files = input_files,
         .output_exit = output_exit,
         .output_files = output_files,
     };
@@ -262,14 +374,66 @@ fn parseSpecTest(_: Allocator, top: comb.Value) !SpecTest {
 
 // ── Setup ────────────────────────────────────────────────────────────────
 
+/// Writes input files from spec to the work directory.
+fn setupWorkDir(a: Allocator, work: fs.Dir, spec: SpecTest) !void {
+    for (spec.input_files.object) |entry| {
+        const key = getStringKey(entry) orelse continue;
+        try writeFileTree(a, work, key, entry.value);
+    }
+}
+
+/// Result of runBuild: output dir on success, or expected_failure/failure.
+const RunResult = union(enum) {
+    output: fs.Dir,
+    expected_failure,
+    failure,
+};
+
+/// Runs Site.init + buildAll. Returns output dir on success.
+fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, output_dir_path: []const u8) !RunResult {
+    const abs_root = try work.realpathAlloc(a, ".");
+
+    var site = root.Site.init(a, .{ .root = abs_root }) catch |err| {
+        if (expect_fail) return .expected_failure;
+        reporter.failWithFailure(a, .{ .kind = .site_init_failed, .err = err });
+        return .failure;
+    };
+    defer site.deinit();
+
+    site.buildAll(.{ .clean = true }) catch |err| {
+        if (expect_fail) return .expected_failure;
+        reporter.failWithFailure(a, .{ .kind = .build_failed, .err = err });
+        return .failure;
+    };
+
+    if (expect_fail) {
+        reporter.failWithFailure(a, .{ .kind = .expected_fail_but_succeeded });
+        return .failure;
+    }
+
+    const dir = work.openDir(output_dir_path, .{ .iterate = true }) catch {
+        reporter.failWithFailure(a, .{ .kind = .output_dir_missing });
+        return .failure;
+    };
+    return .{ .output = dir };
+}
+
+const KEY_MAP = [_][2][]const u8{
+    .{ "templates", "layouts" },
+    .{ "blocks", "includes" },
+};
+
+/// Maps spec keys to directory names: "templates" -> "layouts", "blocks" -> "includes".
+fn resolveDirName(name: []const u8) []const u8 {
+    for (KEY_MAP) |pair| {
+        if (std.mem.eql(u8, pair[0], name)) return pair[1];
+    }
+    return name;
+}
+
 /// Maps "templates" -> "layouts" and "blocks" -> "includes" so loader finds them.
 fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value) !void {
-    const dir_name = if (std.mem.eql(u8, name, "templates"))
-        "layouts"
-    else if (std.mem.eql(u8, name, "blocks"))
-        "includes"
-    else
-        name;
+    const dir_name = resolveDirName(name);
 
     switch (value) {
         .string => |content| {
@@ -285,10 +449,7 @@ fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value)
             var sub_dir = try dir.openDir(dir_name, .{});
             defer sub_dir.close();
             for (entries) |entry| {
-                const key = switch (entry.key) {
-                    .string => |s| s,
-                    else => continue,
-                };
+                const key = getStringKey(entry) orelse continue;
                 try writeFileTree(a, sub_dir, key, entry.value);
             }
         },
@@ -305,245 +466,6 @@ fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value)
     }
 }
 
-// ── Report ───────────────────────────────────────────────────────────────
-
-const Report = struct {
-    allocator: Allocator,
-    buffer: std.ArrayListUnmanaged(u8) = .{},
-
-    fn init(a: Allocator) Report {
-        return .{ .allocator = a };
-    }
-    fn deinit(self: *Report) void {
-        self.buffer.deinit(self.allocator);
-    }
-    fn append(self: *Report, comptime fmt: []const u8, args: anytype) void {
-        const str = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
-        defer self.allocator.free(str);
-        self.buffer.appendSlice(self.allocator, str) catch {};
-    }
-};
-
-// ── Verify ───────────────────────────────────────────────────────────────
-
-fn verifyOutput(
-    a: Allocator,
-    output_dir: fs.Dir,
-    prefix: []const u8,
-    spec: comb.Value,
-    results: *TestResults,
-    test_name: []const u8,
-    report: *Report,
-) !void {
-    const entries = switch (spec) {
-        .object => |o| o,
-        else => return,
-    };
-
-    for (entries) |entry| {
-        const key = switch (entry.key) {
-            .string => |s| s,
-            else => continue,
-        };
-
-        const full_path = if (prefix.len > 0)
-            try std.fmt.allocPrint(a, "{s}/{s}", .{ prefix, key })
-        else
-            try a.dupe(u8, key);
-
-        if (std.mem.indexOf(u8, full_path, "*") != null) {
-            try verifyGlobPath(a, output_dir, full_path, entry.value, results, test_name, report);
-            continue;
-        }
-
-        switch (entry.value) {
-            .string => |expected| {
-                const actual = output_dir.readFileAlloc(a, full_path, 4 * 1024 * 1024) catch {
-                    std.debug.print("    FAIL [{s}]: output file missing: {s}\n", .{ test_name, full_path });
-                    report.append("FAIL [{s}]: output file missing: {s}\n", .{ test_name, full_path });
-                    results.failed += 1;
-                    continue;
-                };
-
-                if (!normalizedEql(actual, expected)) {
-                    std.debug.print("    FAIL [{s}]: {s} content mismatch\n", .{ test_name, full_path });
-                    report.append("FAIL [{s}]: content mismatch for {s}\n  expected: '{s}'\n  actual:   '{s}'\n", .{
-                        test_name,
-                        full_path,
-                        std.mem.trim(u8, expected, " \t\r\n"),
-                        std.mem.trim(u8, actual, " \t\r\n"),
-                    });
-                    results.failed += 1;
-                } else {
-                    results.passed += 1;
-                }
-            },
-            .boolean => |b| {
-                const exists = output_dir.access(full_path, .{}) != error.FileNotFound;
-                if (b and !exists) {
-                    std.debug.print("    FAIL [{s}]: expected file to exist: {s}\n", .{ test_name, full_path });
-                    report.append("FAIL [{s}]: expected file to exist: {s}\n", .{ test_name, full_path });
-                    results.failed += 1;
-                } else if (!b and exists) {
-                    std.debug.print("    FAIL [{s}]: expected file to NOT exist: {s}\n", .{ test_name, full_path });
-                    report.append("FAIL [{s}]: expected file to NOT exist: {s}\n", .{ test_name, full_path });
-                    results.failed += 1;
-                } else {
-                    results.passed += 1;
-                }
-            },
-            .object => {
-                try verifyOutput(a, output_dir, full_path, entry.value, results, test_name, report);
-            },
-            else => {},
-        }
-    }
-}
-
-fn verifyGlobPath(
-    a: Allocator,
-    output_dir: fs.Dir,
-    pattern: []const u8,
-    value: comb.Value,
-    results: *TestResults,
-    test_name: []const u8,
-    report: *Report,
-) !void {
-    const dir_part = if (std.mem.lastIndexOfScalar(u8, pattern, '/')) |idx|
-        pattern[0..idx]
-    else
-        ".";
-    const file_pattern = if (std.mem.lastIndexOfScalar(u8, pattern, '/')) |idx|
-        pattern[idx + 1 ..]
-    else
-        pattern;
-
-    var sub_dir = output_dir.openDir(dir_part, .{ .iterate = true }) catch {
-        std.debug.print("    FAIL [{s}]: glob directory not found: {s}\n", .{ test_name, dir_part });
-        report.append("FAIL [{s}]: glob directory not found: {s}\n", .{ test_name, dir_part });
-        results.failed += 1;
-        return;
-    };
-    defer sub_dir.close();
-
-    var it = sub_dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (globMatch(file_pattern, entry.name)) {
-            switch (value) {
-                .string => |expected| {
-                    const actual = try sub_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024);
-                    if (!normalizedEql(actual, expected)) {
-                        const full = try std.fmt.allocPrint(a, "{s}/{s}", .{ dir_part, entry.name });
-                        std.debug.print("    FAIL [{s}]: {s} content mismatch\n", .{ test_name, full });
-                        report.append("FAIL [{s}]: content mismatch for {s} (matched {s})\n  expected: '{s}'\n  actual:   '{s}'\n", .{
-                            test_name,
-                            full,
-                            pattern,
-                            std.mem.trim(u8, expected, " \t\r\n"),
-                            std.mem.trim(u8, actual, " \t\r\n"),
-                        });
-                        results.failed += 1;
-                    } else {
-                        results.passed += 1;
-                    }
-                },
-                .boolean => |b| {
-                    if (!b) {
-                        std.debug.print("    FAIL [{s}]: expected no match for glob {s}\n", .{ test_name, pattern });
-                        report.append("FAIL [{s}]: expected no match for glob {s}\n", .{ test_name, pattern });
-                        results.failed += 1;
-                    } else {
-                        results.passed += 1;
-                    }
-                },
-                else => results.passed += 1,
-            }
-            return;
-        }
-    }
-
-    switch (value) {
-        .boolean => |b| {
-            if (b) {
-                std.debug.print("    FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
-                report.append("FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
-                results.failed += 1;
-            } else {
-                results.passed += 1;
-            }
-        },
-        else => {
-            std.debug.print("    FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
-            report.append("FAIL [{s}]: no file matching glob: {s}\n", .{ test_name, pattern });
-            results.failed += 1;
-        },
-    }
-}
-
-fn globMatch(pattern: []const u8, name: []const u8) bool {
-    var pi: usize = 0;
-    var ni: usize = 0;
-    var star_pi: ?usize = null;
-    var star_ni: usize = 0;
-
-    while (ni < name.len) {
-        if (pi < pattern.len and pattern[pi] == '*') {
-            star_pi = pi;
-            star_ni = ni;
-            pi += 1;
-        } else if (pi < pattern.len and pattern[pi] == name[ni]) {
-            pi += 1;
-            ni += 1;
-        } else if (star_pi) |sp| {
-            pi = sp + 1;
-            star_ni += 1;
-            ni = star_ni;
-        } else {
-            return false;
-        }
-    }
-    while (pi < pattern.len and pattern[pi] == '*') pi += 1;
-    return pi == pattern.len;
-}
-
-fn normalizedEql(actual: []const u8, expected: []const u8) bool {
-    var a_buf: [64 * 1024]u8 = undefined;
-    var e_buf: [64 * 1024]u8 = undefined;
-    const a_norm = normalizeHtml(actual, &a_buf);
-    const e_norm = normalizeHtml(expected, &e_buf);
-    return std.mem.eql(u8, a_norm, e_norm);
-}
-
-fn normalizeHtml(input: []const u8, buf: []u8) []const u8 {
-    var len: usize = 0;
-    var last_non_ws: u8 = 0;
-    var in_ws = true;
-
-    for (input) |c| {
-        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
-            if (!in_ws) in_ws = true;
-        } else {
-            if (in_ws and len > 0) {
-                if (last_non_ws != '>' and c != '<') {
-                    if (len < buf.len) {
-                        buf[len] = ' ';
-                        len += 1;
-                    }
-                }
-            }
-            in_ws = false;
-            if (len < buf.len) {
-                buf[len] = c;
-                len += 1;
-            }
-            last_non_ws = c;
-        }
-    }
-
-    return buf[0..len];
-}
-
 // ── Test ──────────────────────────────────────────────────────────────────
 
 test "wig integration test suite" {
@@ -555,8 +477,9 @@ test "wig integration test suite" {
 
     const filter = std.posix.getenv("WIG_TEST");
     var run_id_buf: [16]u8 = undefined;
+    var ws_dir: []const u8 = undefined;
 
-    const total = runSpecTests(std.testing.allocator, test_dir, filter, &run_id_buf) catch |err| {
+    const total = runSpecTests(std.testing.allocator, test_dir, filter, &run_id_buf, null, null, &ws_dir) catch |err| {
         std.debug.print("\nSpec test runner failed: {}\n", .{err});
         return err;
     };
@@ -564,7 +487,7 @@ test "wig integration test suite" {
     std.debug.print("\n  Spec Total: {d}/{d} passed\n", .{ total.passed, total.total() });
 
     if (total.failed > 0) {
-        std.debug.print("  Test files written to: zig-out/test/{s}\n", .{run_id_buf[0..15]});
+        std.debug.print("  Test files written to: {s}/{s}\n", .{ ws_dir, run_id_buf[0..15] });
         std.debug.print("  Total failures: {d}\n\n", .{total.failed});
         return error.SpecTestFailures;
     }
