@@ -1,0 +1,42 @@
+test:
+  name: CSS bundle concatenation with fingerprinted filename
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          bundles:
+            css:
+              main:
+                - default/reset.css
+                - default/styles.css
+        layouts:
+          page.html: |
+            <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+            <t-slot />
+        reset.css: |
+          * { margin: 0; }
+        styles.css: |
+          body { color: #333; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        <p>Styled</p>
+output:
+  files:
+    index.html: true
+    css:
+      default:
+        main.*.css: |
+          * { margin: 0; }
+          body { color: #333; }

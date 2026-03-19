@@ -1,0 +1,88 @@
+test:
+  name: Tags
+  comment: Auto-generated tag index pages, frontmatter tags, /tags/ tree, popularity ordering, multi-tag filtering.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        layouts:
+          page.html: |
+            <t-slot />
+          tag-index.html: |
+            <h1>Tags</h1>
+            <ul>
+              <t-for t in tag.tags>
+                <li><a t-var:href="t.path"><t-var name="t.name" /></a> (<t-var name="t.count" />)</li>
+              </t-for>
+            </ul>
+          tag-list.html: |
+            <h1><t-var name="tag.document.title" /></h1>
+            <p>Path tags: <t-var name="tag.path_tags" /></p>
+            <ul>
+              <t-for doc in tag.documents>
+                <li><a t-var:href="doc.document.path"><t-var name="doc.document.title" /></a></li>
+              </t-for>
+            </ul>
+            <p>Add tag:</p>
+            <ul>
+              <t-for t in tag.tags>
+                <li><a t-var:href="t.path"><t-var name="t.name" /></a></li>
+              </t-for>
+            </ul>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      blog:
+        a.dj: |
+          ---
+          document:
+            title: Doc A
+            tags: [music, tech]
+          ---
+          A.
+        b.dj: |
+          ---
+          document:
+            title: Doc B
+            tags: [music]
+          ---
+          B.
+        c.dj: |
+          ---
+          document:
+            title: Doc C
+            tags: [tech]
+          ---
+          C.
+        d.dj: |
+          ---
+          document:
+            title: Doc D
+            tags: [tech, zig]
+          ---
+          D.
+output:
+  files:
+    index.html: true
+    tags:
+      index.html: true
+      tech:
+        index.html: true
+        music:
+          index.html: true
+      music:
+        index.html: true
+      zig:
+        index.html: true

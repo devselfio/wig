@@ -1,5 +1,0 @@
-files:
-  data:
-    site.yaml: |
-      url: https://example.com
-      title: Test Site

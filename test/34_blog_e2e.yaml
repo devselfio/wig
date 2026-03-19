@@ -1,0 +1,105 @@
+test:
+  name: Full blog E2E
+  comment: Template chain, collections, CSS bundle, assets. Inline input, no fixtures.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+        title: Blog
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          bundles:
+            css:
+              main:
+                - default/reset.css
+                - default/site.css
+        layouts:
+          base.html: |
+            <!DOCTYPE html>
+            <html><head><t-slot name="head" /></head><body><t-slot /></body></html>
+          page.html: |
+            <t-extend template="base.html">
+              <t-define name="head">
+                <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+              </t-define>
+              <t-define>
+                <t-slot />
+              </t-define>
+            </t-extend>
+          post.html: |
+            <t-extend template="page.html">
+              <t-define>
+                <article>
+                  <h1><t-var name="document.title" /></h1>
+                  <t-slot />
+                </article>
+              </t-define>
+            </t-extend>
+          list.html: |
+            <t-extend template="page.html">
+              <t-define>
+                <ul>
+                  <t-for post in document.children>
+                    <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
+                  </t-for>
+                </ul>
+                <t-slot />
+              </t-define>
+            </t-extend>
+        reset.css: |
+          * { margin: 0; }
+        site.css: |
+          body { font-family: sans-serif; }
+    pages:
+      _index.dj: |
+        ---
+        document:
+          title: Home
+        ---
+        Welcome.
+      blog:
+        _index.dj: |
+          ---
+          document:
+            title: Blog
+            layout: list.html
+          ---
+          Posts.
+        first.dj: |
+          ---
+          document:
+            title: First Post
+            layout: post.html
+          ---
+          First content.
+        second.dj: |
+          ---
+          document:
+            title: Second Post
+            layout: post.html
+          ---
+          Second content.
+    assets:
+      favicon.ico: "ICO"
+output:
+  files:
+    index.html: true
+    blog:
+      index.html: true
+      first:
+        index.html: true
+      second:
+        index.html: true
+    css:
+      default:
+        main.*.css: true
+    assets:
+      favicon.ico: true

@@ -1,9 +1,15 @@
 test:
   name: Shared _core templates available across styles
-  command: build
-  fixtures:
-    - base
+  action:
+    wig: build
+input:
   files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
     styles:
       _core:
         layouts:
@@ -12,18 +18,16 @@ test:
       default:
         style.yaml: |
           name: default
-          templates:
-            - _core/base.html
         layouts:
           page.html: |
             <t-extend template="_core/base.html">
             <t-define name="body"><main><t-slot /></main></t-define>
             </t-extend>
     pages:
-      _index.html: |
+      _index.dj: |
         ---
-        style: default
-        layout: page.html
+        document:
+          title: Home
         ---
         <p>Hello</p>
 output:

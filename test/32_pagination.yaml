@@ -1,0 +1,75 @@
+test:
+  name: Pagination
+  comment: paginate frontmatter, context shape, URL scheme per spec.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        layouts:
+          page.html: |
+            <t-slot />
+          list.html: |
+            <t-for item in paginate.items>
+              <p><t-var name="item.document.title" /></p>
+            </t-for>
+            <t-if name="paginate.previous">
+              <a t-var:href="paginate.previous.url">Prev</a>
+            </t-if>
+            Page <t-var name="paginate.page" /> of <t-var name="paginate.total_pages" />
+            <t-if name="paginate.next">
+              <a t-var:href="paginate.next.url">Next</a>
+            </t-if>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      posts:
+        _index.dj: |
+          ---
+          document:
+            title: Posts
+            layout: list.html
+          paginate:
+            collection: pages.posts
+            size: 2
+            path: page
+            alias: posts
+          ---
+          Blog index.
+        a.dj: |
+          ---
+          document:
+            title: Post A
+          ---
+          A.
+        b.dj: |
+          ---
+          document:
+            title: Post B
+          ---
+          B.
+        c.dj: |
+          ---
+          document:
+            title: Post C
+          ---
+          C.
+output:
+  files:
+    index.html: true
+    posts:
+      index.html: true
+      page:
+        "2":
+          index.html: true
