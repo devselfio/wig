@@ -259,13 +259,13 @@ Each style lives under `styles/{name}/` with this structure:
 ```
 styles/default/
   style.yaml         # style manifest (name, bundles, tokens, scheme, custom fields)
-  templates/         # page-level templates (base.html, post.html, post-list.html)
-  blocks/            # reusable HTML components (breadcrumbs.html, card.html)
+  layouts/           # page-level templates (base.html, post.html, post-list.html)
+  includes/          # reusable HTML components (breadcrumbs.html, card.html)
   css/               # CSS files (with optional frontmatter for Toupee rendering)
 ```
 
-- `templates/` -- page shells that extend a base and define the document structure. Referenced via `document.layout`.
-- `blocks/` -- reusable components included via `<t-include template="blocks/name.html" />`. CUBE CSS "blocks" -- UI components with associated HTML structure.
+- `layouts/` -- page shells that extend a base and define the document structure. Referenced via `document.layout`.
+- `includes/` -- reusable components included via `<t-include template="includes/name.html" />`. CUBE CSS "blocks" -- UI components with associated HTML structure.
 - `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colours). Files without frontmatter are plain text.
 
 ### Bundles
@@ -363,11 +363,37 @@ Fields: `url`, `title`, `content` (text-only), `excerpt`, `tags` (list or empty)
 
 ### Static assets
 
-Files in `static/` are copied verbatim to the output directory without rendering or frontmatter processing. Directory structure is preserved:
+Files in `assets/` are copied verbatim to the output directory without rendering or frontmatter processing. Directory structure is preserved:
 
-- `static/robots.txt` -> `zig-out/site/robots.txt`
-- `static/css/reset.css` -> `zig-out/site/css/reset.css`
-- `static/images/logo.png` -> `zig-out/site/images/logo.png`
+- `assets/robots.txt` -> `zig-out/site/assets/robots.txt`
+- `assets/css/reset.css` -> `zig-out/site/assets/css/reset.css`
+- `assets/images/logo.png` -> `zig-out/site/assets/images/logo.png`
+
+### Tags
+
+Document frontmatter may include `document.tags: [music, tech, zig]`. Wig auto-generates tag index pages:
+
+- `/tags/` — index of all tags with counts, ordered by popularity
+- `/tags/{tag}/` — documents with that tag; links to add another tag
+- `/tags/{tag1}/{tag2}/` — documents matching both tags; and so on
+
+Tag order in URLs follows popularity (descending count). Only tag combinations with at least one matching document are generated.
+
+Context on tag pages: `tag.tags` (all tags with counts), `tag.documents` (matching docs), `tag.path_tags` (tags in current path), `tag.document` (page metadata).
+
+### Pagination
+
+Frontmatter `paginate:` enables paginated list pages:
+
+```yaml
+paginate:
+  collection: pages.posts
+  size: 10
+  path: page
+  alias: posts
+```
+
+Context: `paginate.items` (current page chunk), `paginate.page` (1-indexed), `paginate.total_pages`, `paginate.previous` / `paginate.next` (maps with `url`, `page` when applicable). URL scheme: page 1 at base path, page 2+ at `base_path/page/N/`.
 
 ### Collection sorting
 
@@ -456,7 +482,7 @@ output:
       expected content
 ```
 
-Tests 00-27 cover: minimal builds, pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets, CSS tokens, colour schemes, sitemap, Atom feeds, search index, table of contents, and collection sorting.
+Tests 00-34 cover: minimal builds, error cases (missing config, missing layout), pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets (assets/), CSS tokens, colour schemes, core templates (_core), CSS bundle concatenation, sitemap, Atom feeds, search index, table of contents, collection sorting, pagination, tags, and blog E2E.
 
 ## Dependency API Reference
 
