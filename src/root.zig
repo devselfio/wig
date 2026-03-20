@@ -26,6 +26,7 @@ pub const session = @import("session.zig");
 pub const scaffold = @import("scaffold.zig");
 pub const html_utils = @import("html.zig");
 pub const test_runner = @import("test_runner.zig");
+pub const output_paths = @import("output_paths.zig");
 
 pub const Diagnostic = struct {
     kind: Kind = .err,
@@ -359,6 +360,323 @@ fn renderTaxonomyTagPages(
     }
 }
 
+fn buildPhase_styleTokensSiteData(
+    ba: Allocator,
+    site_cfg: *const config.SiteConfig,
+    style_cfgs: []config.StyleConfig,
+    data_result: *config.DataResult,
+) !toupee.Context {
+    var style_ctx = toupee.Context.init(ba);
+    for (style_cfgs) |style_cfg| {
+        const style_val = try context.combToToupee(ba, style_cfg.raw);
+        try style_ctx.putAt(
+            try std.fmt.allocPrint(ba, "styles.{s}", .{style_cfg.name}),
+            style_val,
+        );
+
+        if (style_cfg.raw.get("tokens")) |tok_val| {
+            const params = try tokens.extractParams(tok_val, ba);
+            var token_result = try tokens.compute(ba, params);
+            defer token_result.deinit();
+            try style_ctx.putAt(
+                try std.fmt.allocPrint(ba, "styles.{s}.computed_tokens", .{style_cfg.name}),
+                token_result.value,
+            );
+        }
+    }
+
+    const site_val = try context.combToToupee(ba, site_cfg.raw);
+    try style_ctx.put("site", site_val);
+
+    if (data_result.value == .map) {
+        var data_it = data_result.value.map.iterator();
+        while (data_it.next()) |entry| {
+            var val = entry.value_ptr.*;
+            if (std.mem.eql(u8, entry.key_ptr.*, "colours") and val == .map) {
+                val = try colours.resolveColoursData(ba, val);
+            }
+            try style_ctx.put(entry.key_ptr.*, val);
+        }
+    }
+
+    return style_ctx;
+}
+
+fn buildPhase_assetBundles(
+    ba: Allocator,
+    a: Allocator,
+    abs_root: []const u8,
+    style_cfgs: []config.StyleConfig,
+    style_ctx: *toupee.Context,
+    output_dir: fs.Dir,
+) !void {
+    var asset_entries: std.ArrayListUnmanaged(bundles.AssetEntry) = .{};
+
+    const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
+    defer a.free(styles_path);
+
+    if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
+        var styles_dir = sd;
+        defer styles_dir.close();
+
+        for (style_cfgs) |style_cfg| {
+            const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
+            if (assets_val_opt) |assets_val| {
+                if (assets_val == .array) {
+                    for (assets_val.array) |item| {
+                        if (item != .string) continue;
+                        const bundle_path = item.string;
+                        if (std.mem.indexOf(u8, bundle_path, "/")) |slash| {
+                            const bundle_type = bundle_path[0..slash];
+                            const template_rel = bundle_path;
+                            const result = bundles.processBundleToPath(
+                                ba,
+                                style_cfg.name,
+                                bundle_path,
+                                template_rel,
+                                styles_dir,
+                                style_ctx,
+                                output_dir,
+                            ) catch continue;
+                            const bundle_name = std.fs.path.stem(bundle_path[slash + 1 ..]);
+                            try asset_entries.append(ba, .{
+                                .style_name = style_cfg.name,
+                                .bundle_type = bundle_type,
+                                .bundle_name = bundle_name,
+                                .result = result,
+                            });
+                        }
+                    }
+                } else if (assets_val == .object) {
+                    for (assets_val.object) |type_entry| {
+                        const bundle_type = switch (type_entry.key) {
+                            .string => |s| s,
+                            else => continue,
+                        };
+                        if (type_entry.value == .object) {
+                            for (type_entry.value.object) |bundle_entry| {
+                                const bundle_name = switch (bundle_entry.key) {
+                                    .string => |s| s,
+                                    else => continue,
+                                };
+                                const file_list = switch (bundle_entry.value) {
+                                    .array => |arr| arr,
+                                    else => continue,
+                                };
+
+                                var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
+                                defer file_patterns.deinit(ba);
+                                for (file_list) |item| {
+                                    if (item == .string) try file_patterns.append(ba, item.string);
+                                }
+
+                                const result = try bundles.processBundle(
+                                    ba,
+                                    style_cfg.name,
+                                    bundle_type,
+                                    bundle_name,
+                                    file_patterns.items,
+                                    styles_dir,
+                                    style_ctx,
+                                    output_dir,
+                                );
+
+                                try asset_entries.append(ba, .{
+                                    .style_name = style_cfg.name,
+                                    .bundle_type = bundle_type,
+                                    .bundle_name = bundle_name,
+                                    .result = result,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else |_| {}
+
+    const asset_ctx = try bundles.buildAssetContext(ba, asset_entries.items);
+    try style_ctx.put("assets", asset_ctx);
+}
+
+fn buildPhase_scanAndTaxonomies(
+    ba: Allocator,
+    a: Allocator,
+    abs_root: []const u8,
+    site_cfg: *const config.SiteConfig,
+    site: *Site,
+    style_ctx: *toupee.Context,
+) !scanner.ScanResult {
+    const pages_path = try fs.path.join(a, &.{ abs_root, "pages" });
+    defer a.free(pages_path);
+
+    var registered_exts: std.ArrayListUnmanaged([]const u8) = .{};
+    defer registered_exts.deinit(a);
+    for (site.options.content_parsers) |p| try registered_exts.append(a, p.extension);
+
+    var pages_dir = fs.openDirAbsolute(pages_path, .{ .iterate = true }) catch
+        return error.BuildFailed;
+    defer pages_dir.close();
+
+    var scan_result = try scanner.scan(
+        ba,
+        pages_dir,
+        site_cfg.url,
+        site.options.draft,
+        site.options.debug,
+        registered_exts.items,
+    );
+
+    const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
+    try style_ctx.put("taxonomies", tax_ctx);
+
+    if (scan_result.collections.getPtr("pages")) |pv| {
+        try style_ctx.putAt("pages", pv.*);
+    }
+
+    return scan_result;
+}
+
+fn buildPhase_loadTemplates(
+    ba: Allocator,
+    a: Allocator,
+    abs_root: []const u8,
+    style_cfgs: []config.StyleConfig,
+    engine: *toupee.Engine,
+    template_map: *std.StringArrayHashMapUnmanaged([]const u8),
+) !void {
+    const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
+    defer a.free(styles_path);
+
+    if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |d| {
+        var styles_dir2 = d;
+        defer styles_dir2.close();
+
+        for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
+            const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
+            if (styles_dir2.openDir(core_subdir, .{ .iterate = true })) |cd| {
+                var core_dir = cd;
+                defer core_dir.close();
+                var cit = core_dir.iterate();
+                while (try cit.next()) |entry| {
+                    if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                    const tmpl_name = try std.fmt.allocPrint(ba, "_core/{s}/{s}", .{ subdir, entry.name });
+                    const content = try core_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                    try engine.addTemplate(tmpl_name, content);
+                    try template_map.put(ba, tmpl_name, content);
+                }
+            } else |_| {}
+        }
+
+        for (style_cfgs) |style_cfg| {
+            for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
+                const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
+                if (styles_dir2.openDir(style_subdir, .{ .iterate = true })) |sd3| {
+                    var tmpl_dir = sd3;
+                    defer tmpl_dir.close();
+                    var tit = tmpl_dir.iterate();
+                    while (try tit.next()) |entry| {
+                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
+                        const tmpl_name = try std.fmt.allocPrint(ba, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name });
+                        const content = try tmpl_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                        try engine.addTemplate(tmpl_name, content);
+                        try template_map.put(ba, tmpl_name, content);
+                    }
+                } else |_| {}
+            }
+        }
+    } else |_| {}
+}
+
+fn buildPhase_generatedArtifacts(
+    ba: Allocator,
+    site_cfg: config.SiteConfig,
+    style_cfgs: []config.StyleConfig,
+    scan_result: *const scanner.ScanResult,
+    engine: *toupee.Engine,
+    style_ctx: *toupee.Context,
+    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
+    output_dir: fs.Dir,
+    render_results: []const pages.RenderResult,
+) !void {
+    var search_entries = std.ArrayListUnmanaged(search.SpecSearchEntry){};
+    for (scan_result.pages, render_results) |*page, result| {
+        if (page.is_draft) continue;
+        const raw_plain = try search.stripHtml(ba, result.search_content);
+        const trimmed = std.mem.trim(u8, raw_plain, " \t\n\r");
+        const title = pages.getDocTitle(page.frontmatter) orelse "";
+        const content_plain: []const u8 = if (title.len > 0 and trimmed.len > title.len and std.mem.startsWith(u8, trimmed, title)) cp: {
+            const after = trimmed[title.len..];
+            if (after.len > 0 and after[0] != ' ' and after[0] != '\t' and after[0] != '\n' and after[0] != '\r') {
+                const rest = std.mem.trimLeft(u8, after, " \t\n\r");
+                break :cp try std.fmt.allocPrint(ba, "{s}\n{s}", .{ title, rest });
+            }
+            break :cp try ba.dupe(u8, trimmed);
+        } else try ba.dupe(u8, trimmed);
+        const excerpt = pages.extractExcerptPublic(ba, page.frontmatter, result.search_content) orelse content_plain;
+        var tags_list: []const []const u8 = &.{};
+        if (page.frontmatter == .map) {
+            if (page.frontmatter.map.get("document")) |doc| {
+                if (doc == .map) {
+                    if (doc.map.get("tags")) |tags_val| {
+                        if (tags_val == .list) {
+                            const tag_strs = try ba.alloc([]const u8, tags_val.list.len);
+                            for (tags_val.list, tag_strs) |t, *out| {
+                                out.* = if (t == .string) t.string else "";
+                            }
+                            tags_list = tag_strs;
+                        }
+                    }
+                }
+            }
+        }
+        const date_str = if (page.frontmatter == .map) blk: {
+            if (page.frontmatter.map.get("document")) |doc| {
+                if (doc == .map) {
+                    if (doc.map.get("date")) |d| {
+                        if (d == .string) break :blk d.string;
+                    }
+                }
+            }
+            break :blk null;
+        } else null;
+        const section = sectionFromUrl(ba, page.url_path) catch null;
+        try search_entries.append(ba, .{
+            .url = page.absolute_url,
+            .title = title,
+            .content = content_plain,
+            .excerpt = excerpt,
+            .tags = tags_list,
+            .date = date_str,
+            .section = section,
+        });
+    }
+    const entries_slice = search_entries.items;
+    std.mem.sort(search.SpecSearchEntry, entries_slice, {}, struct {
+        fn lessThan(_: void, lhs: search.SpecSearchEntry, rhs: search.SpecSearchEntry) bool {
+            return std.mem.order(u8, lhs.url, rhs.url) == .lt;
+        }
+    }.lessThan);
+    try search.generateSearchJson(ba, entries_slice, output_dir);
+
+    for (site_cfg.feeds) |feed_cfg| {
+        try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir);
+    }
+
+    try feeds.generateSitemap(ba, scan_result.pages, output_dir);
+
+    try renderTaxonomyTagPages(
+        ba,
+        site_cfg,
+        if (style_cfgs.len > 0) style_cfgs[0].name else "default",
+        scan_result,
+        engine,
+        style_ctx,
+        template_map,
+        output_dir,
+    );
+}
+
 pub const ContentParser = pages.ContentParser;
 pub const ContentParserEntry = pages.ContentParserEntry;
 
@@ -383,10 +701,14 @@ pub const ValidateOptions = struct {
     external_links: bool = false,
 };
 
-/// Two-phase site struct. `init()` loads config (phase 1).
-/// `buildAll()` computes tokens, builds CSS, renders pages (phase 2).
-/// After `buildAll()`, the engine and build state are available for
-/// custom route handlers in the dev server.
+/// Two-phase site struct. `init()` opens the site root (phase 1).
+/// `buildAll()` runs the build pipeline (phase 2): output dirs, style/data
+/// context, bundles, scan, templates, render, and generated artifacts.
+///
+/// **Allocators:** `allocator` is the `Site` lifetime allocator (config strings,
+/// `Engine`, freed in `deinit`). `build_arena` (after `buildAll`) owns scan/pages
+/// context, template source map, and most per-build strings; reset by the next
+/// `buildAll()`.
 pub const Site = struct {
     allocator: Allocator,
     options: SiteOptions,
@@ -420,6 +742,17 @@ pub const Site = struct {
         self.root_dir.close();
     }
 
+    /// Opens the built site output directory (`zig-out/site` under the project root).
+    /// Call after a successful `buildAll()`. Caller must `close()` the returned handle.
+    pub fn openBuiltOutputDir(self: *Site) !fs.Dir {
+        const a = self.allocator;
+        const abs_root = try self.root_dir.realpathAlloc(a, ".");
+        defer a.free(abs_root);
+        const site_path = try output_paths.joinSiteOutputDirAbs(a, abs_root);
+        defer a.free(site_path);
+        return try fs.openDirAbsolute(site_path, .{});
+    }
+
     pub fn buildAll(self: *Site, options: BuildOptions) !void {
         const a = self.allocator;
         const abs_root = try self.root_dir.realpathAlloc(a, ".");
@@ -430,7 +763,7 @@ pub const Site = struct {
         errdefer build_arena.deinit();
         const ba = build_arena.allocator();
 
-        // Load config
+        // --- Phase: load config ---
         var site_cfg = try config.loadSiteConfig(a, abs_root);
         errdefer site_cfg.deinit();
 
@@ -438,236 +771,29 @@ pub const Site = struct {
         var data_result = try config.loadDataFiles(a, abs_root);
         errdefer data_result.deinit();
 
-        // Output directory
-        const output_path = try fs.path.join(a, &.{ abs_root, "zig-out", "site" });
-        defer a.free(output_path);
-
-        if (options.clean) {
-            fs.deleteTreeAbsolute(output_path) catch {};
-        }
-
-        fs.makeDirAbsolute(output_path) catch {};
-        const parent_path = try fs.path.join(a, &.{ abs_root, "zig-out" });
-        defer a.free(parent_path);
-        fs.makeDirAbsolute(parent_path) catch {};
-        fs.makeDirAbsolute(output_path) catch {};
-
-        var output_dir = fs.openDirAbsolute(output_path, .{}) catch
-            return error.BuildFailed;
+        // --- Phase: ensure output tree ---
+        var output_dir = try output_paths.prepareSiteOutput(a, abs_root, options.clean);
         defer output_dir.close();
 
-        // Compute tokens + colours per style
-        var style_ctx = toupee.Context.init(ba);
-        for (style_cfgs) |style_cfg| {
-            const style_val = try context.combToToupee(ba, style_cfg.raw);
-            try style_ctx.putAt(
-                try std.fmt.allocPrint(ba, "styles.{s}", .{style_cfg.name}),
-                style_val,
-            );
+        // --- Phase: style context, tokens, site + data YAML ---
+        var style_ctx = try buildPhase_styleTokensSiteData(ba, &site_cfg, style_cfgs, &data_result);
 
-            if (style_cfg.raw.get("tokens")) |tok_val| {
-                const params = try tokens.extractParams(tok_val, ba);
-                var token_result = try tokens.compute(ba, params);
-                defer token_result.deinit();
-                try style_ctx.putAt(
-                    try std.fmt.allocPrint(ba, "styles.{s}.computed_tokens", .{style_cfg.name}),
-                    token_result.value,
-                );
-            }
-        }
+        // --- Phase: CSS/JS bundles and `assets` context ---
+        try buildPhase_assetBundles(ba, a, abs_root, style_cfgs, &style_ctx, output_dir);
 
-        // Put site data into context
-        const site_val = try context.combToToupee(ba, site_cfg.raw);
-        try style_ctx.put("site", site_val);
+        // --- Phase: scan pages, taxonomies, `pages` context ---
+        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx);
 
-        // Put data files into context (resolve colours palette indirection)
-        if (data_result.value == .map) {
-            var data_it = data_result.value.map.iterator();
-            while (data_it.next()) |entry| {
-                var val = entry.value_ptr.*;
-                if (std.mem.eql(u8, entry.key_ptr.*, "colours") and val == .map) {
-                    val = try colours.resolveColoursData(ba, val);
-                }
-                try style_ctx.put(entry.key_ptr.*, val);
-            }
-        }
-
-        // CSS/JS bundles per style
-        var asset_entries: std.ArrayListUnmanaged(bundles.AssetEntry) = .{};
-
-        const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
-        defer a.free(styles_path);
-
-        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
-            var styles_dir = sd;
-            defer styles_dir.close();
-
-            for (style_cfgs) |style_cfg| {
-                const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
-                if (assets_val_opt) |assets_val| {
-                    if (assets_val == .array) {
-                        for (assets_val.array) |item| {
-                            if (item != .string) continue;
-                            const bundle_path = item.string;
-                            if (std.mem.indexOf(u8, bundle_path, "/")) |slash| {
-                                const bundle_type = bundle_path[0..slash];
-                                const template_rel = bundle_path;
-                                const result = bundles.processBundleToPath(
-                                    ba,
-                                    style_cfg.name,
-                                    bundle_path,
-                                    template_rel,
-                                    styles_dir,
-                                    &style_ctx,
-                                    output_dir,
-                                ) catch continue;
-                                const bundle_name = std.fs.path.stem(bundle_path[slash + 1 ..]);
-                                try asset_entries.append(ba, .{
-                                    .style_name = style_cfg.name,
-                                    .bundle_type = bundle_type,
-                                    .bundle_name = bundle_name,
-                                    .result = result,
-                                });
-                            }
-                        }
-                    } else if (assets_val == .object) {
-                        for (assets_val.object) |type_entry| {
-                            const bundle_type = switch (type_entry.key) {
-                                .string => |s| s,
-                                else => continue,
-                            };
-                            if (type_entry.value == .object) {
-                                for (type_entry.value.object) |bundle_entry| {
-                                    const bundle_name = switch (bundle_entry.key) {
-                                        .string => |s| s,
-                                        else => continue,
-                                    };
-                                    const file_list = switch (bundle_entry.value) {
-                                        .array => |arr| arr,
-                                        else => continue,
-                                    };
-
-                                    var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
-                                    defer file_patterns.deinit(ba);
-                                    for (file_list) |item| {
-                                        if (item == .string) try file_patterns.append(ba, item.string);
-                                    }
-
-                                    const result = try bundles.processBundle(
-                                        ba,
-                                        style_cfg.name,
-                                        bundle_type,
-                                        bundle_name,
-                                        file_patterns.items,
-                                        styles_dir,
-                                        &style_ctx,
-                                        output_dir,
-                                    );
-
-                                    try asset_entries.append(ba, .{
-                                        .style_name = style_cfg.name,
-                                        .bundle_type = bundle_type,
-                                        .bundle_name = bundle_name,
-                                        .result = result,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else |_| {}
-
-        // Build asset context
-        const asset_ctx = try bundles.buildAssetContext(ba, asset_entries.items);
-        try style_ctx.put("assets", asset_ctx);
-
-        // Scan pages
-        const pages_path = try fs.path.join(a, &.{ abs_root, "pages" });
-        defer a.free(pages_path);
-
-        var registered_exts: std.ArrayListUnmanaged([]const u8) = .{};
-        defer registered_exts.deinit(a);
-        for (self.options.content_parsers) |p| try registered_exts.append(a, p.extension);
-
-        var pages_dir = fs.openDirAbsolute(pages_path, .{ .iterate = true }) catch
-            return error.BuildFailed;
-        defer pages_dir.close();
-
-        var scan_result = try scanner.scan(
-            ba,
-            pages_dir,
-            site_cfg.url,
-            self.options.draft,
-            self.options.debug,
-            registered_exts.items,
-        );
-        _ = &scan_result;
-
-        // Build taxonomies
-        const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
-        try style_ctx.put("taxonomies", tax_ctx);
-
-        // Single nested `pages` map: root slugs (document, two, …) plus per-folder maps
-        // { document, items, slug-per-page } for `pages.posts`, `pages.blog`, etc.
-        if (scan_result.collections.getPtr("pages")) |pv| {
-            try style_ctx.putAt("pages", pv.*);
-        }
-
-        // Load templates per-style into engine and a shared template map.
-        // Engine manages its own memory (dupes names/sources, creates per-template
-        // arenas), so it uses the main allocator to avoid lifetime coupling with
-        // the build arena.
+        // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
         var template_map = std.StringArrayHashMapUnmanaged([]const u8){};
+        try buildPhase_loadTemplates(ba, a, abs_root, style_cfgs, &engine, &template_map);
 
-        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd2| {
-            var styles_dir2 = sd2;
-            defer styles_dir2.close();
-
-            // Load _core templates (shared across all styles)
-            for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
-                const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
-                if (styles_dir2.openDir(core_subdir, .{ .iterate = true })) |cd| {
-                    var core_dir = cd;
-                    defer core_dir.close();
-                    var cit = core_dir.iterate();
-                    while (try cit.next()) |entry| {
-                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                        const tmpl_name = try std.fmt.allocPrint(ba, "_core/{s}/{s}", .{ subdir, entry.name });
-                        const content = try core_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                        try engine.addTemplate(tmpl_name, content);
-                        try template_map.put(ba, tmpl_name, content);
-                    }
-                } else |_| {}
-            }
-
-            // Load per-style templates
-            for (style_cfgs) |style_cfg| {
-                for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
-                    const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
-                    if (styles_dir2.openDir(style_subdir, .{ .iterate = true })) |sd3| {
-                        var tmpl_dir = sd3;
-                        defer tmpl_dir.close();
-                        var tit = tmpl_dir.iterate();
-                        while (try tit.next()) |entry| {
-                            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                            const tmpl_name = try std.fmt.allocPrint(ba, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name });
-                            const content = try tmpl_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                            try engine.addTemplate(tmpl_name, content);
-                            try template_map.put(ba, tmpl_name, content);
-                        }
-                    } else |_| {}
-                }
-            }
-        } else |_| {}
-
-        // Transform registry for {{ }} interpolation
+        // --- Phase: render HTML pages ---
         var transform_reg = toupee.transform.Registry{};
         try transform_reg.registerBuiltins(ba);
         defer transform_reg.deinit(ba);
 
-        // Render pages with per-style template resolution
         const render_results = try pages.renderAll(
             ba,
             &scan_result,
@@ -679,90 +805,20 @@ pub const Site = struct {
             output_dir,
         );
 
-        // Generate search.json
-        var search_entries = std.ArrayListUnmanaged(search.SpecSearchEntry){};
-        for (scan_result.pages, render_results) |*page, result| {
-            if (page.is_draft) continue;
-            const raw_plain = try search.stripHtml(ba, result.search_content);
-            const trimmed = std.mem.trim(u8, raw_plain, " \t\n\r");
-            const title = pages.getDocTitle(page.frontmatter) orelse "";
-            // Spec: content is title + "\n" + body plain text (strip merges h1 + body; re-split on title)
-            // Djot: `*x*` is strong; `**x**` nests two strongs — only merge title+body when the
-            // stripped text glues heading to body (no whitespace after title), e.g. "My PostThis is…".
-            const content_plain: []const u8 = if (title.len > 0 and trimmed.len > title.len and std.mem.startsWith(u8, trimmed, title)) cp: {
-                const after = trimmed[title.len..];
-                if (after.len > 0 and after[0] != ' ' and after[0] != '\t' and after[0] != '\n' and after[0] != '\r') {
-                    const rest = std.mem.trimLeft(u8, after, " \t\n\r");
-                    break :cp try std.fmt.allocPrint(ba, "{s}\n{s}", .{ title, rest });
-                }
-                break :cp try ba.dupe(u8, trimmed);
-            } else try ba.dupe(u8, trimmed);
-            const excerpt = pages.extractExcerptPublic(ba, page.frontmatter, result.search_content) orelse content_plain;
-            var tags_list: []const []const u8 = &.{};
-            if (page.frontmatter == .map) {
-                if (page.frontmatter.map.get("document")) |doc| {
-                    if (doc == .map) {
-                        if (doc.map.get("tags")) |tags_val| {
-                            if (tags_val == .list) {
-                                const tag_strs = try ba.alloc([]const u8, tags_val.list.len);
-                                for (tags_val.list, tag_strs) |t, *out| {
-                                    out.* = if (t == .string) t.string else "";
-                                }
-                                tags_list = tag_strs;
-                            }
-                        }
-                    }
-                }
-            }
-            const date_str = if (page.frontmatter == .map) blk: {
-                if (page.frontmatter.map.get("document")) |doc| {
-                    if (doc == .map) {
-                        if (doc.map.get("date")) |d| {
-                            if (d == .string) break :blk d.string;
-                        }
-                    }
-                }
-                break :blk null;
-            } else null;
-            const section = sectionFromUrl(ba, page.url_path) catch null;
-            try search_entries.append(ba, .{
-                .url = page.absolute_url,
-                .title = title,
-                .content = content_plain,
-                .excerpt = excerpt,
-                .tags = tags_list,
-                .date = date_str,
-                .section = section,
-            });
-        }
-        const entries_slice = search_entries.items;
-        std.mem.sort(search.SpecSearchEntry, entries_slice, {}, struct {
-            fn lessThan(_: void, lhs: search.SpecSearchEntry, rhs: search.SpecSearchEntry) bool {
-                return std.mem.order(u8, lhs.url, rhs.url) == .lt;
-            }
-        }.lessThan);
-        try search.generateSearchJson(ba, entries_slice, output_dir);
-
-        // Generate feeds
-        for (site_cfg.feeds) |feed_cfg| {
-            try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir);
-        }
-
-        // Generate sitemap
-        try feeds.generateSitemap(ba, scan_result.pages, output_dir);
-
-        try renderTaxonomyTagPages(
+        // --- Phase: search, feeds, sitemap, tag pages ---
+        try buildPhase_generatedArtifacts(
             ba,
             site_cfg,
-            if (style_cfgs.len > 0) style_cfgs[0].name else "default",
+            style_cfgs,
             &scan_result,
             &engine,
             &style_ctx,
             &template_map,
             output_dir,
+            render_results,
         );
 
-        // Copy assets
+        // --- Phase: copy static assets ---
         try copyAssets(a, self.root_dir, output_dir);
 
         // Store build state
@@ -929,17 +985,20 @@ fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
     }
 }
 
-/// Creates a pre-wired dev server App backed by the given Site.
-/// The caller must run `site.buildAll()` before calling this.
+/// Creates a pre-wired dev server `App` for local preview.
 ///
-/// The returned App serves:
-///   - Static files from `zig-out/site/` (the build output)
-///   - User-added custom routes
+/// **Build vs HTTP:** This does not take `*Site`. Pass the **open site output directory**
+/// (`zig-out/site` under the project root), e.g. from `Site.openBuiltOutputDir()` after
+/// `buildAll()`. The caller keeps ownership of `site_output_dir` and must `close()` it
+/// when finished (typically after the server shuts down).
+///
+/// The returned App will serve static files from that directory once the HTTP stack is
+/// wired (v0.3+). Custom routes can be added on the returned `App`.
 ///
 /// File watching and SSE live reload are future additions.
 /// Call `app.listen(port)` to start serving (currently stubbed).
-pub fn devServer(a: Allocator, site: *Site) !app.App {
-    _ = site;
+pub fn devServer(a: Allocator, site_output_dir: fs.Dir) !app.App {
+    _ = site_output_dir;
     var application = app.App.init(a);
 
     try application.get("/", struct {
@@ -952,6 +1011,7 @@ pub fn devServer(a: Allocator, site: *Site) !app.App {
 }
 
 test {
+    _ = output_paths;
     _ = config;
     _ = context;
     _ = tokens;

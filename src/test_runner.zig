@@ -6,6 +6,7 @@ const fs = std.fs;
 const epoch = std.time.epoch;
 const test_report = @import("test_report.zig");
 const output_verifier = @import("output_verifier.zig");
+const output_paths = @import("output_paths.zig");
 
 const TestResults = test_report.TestResults;
 const Report = test_report.Report;
@@ -13,8 +14,8 @@ const Reporter = test_report.Reporter;
 
 /// Configurable paths for the test runner. Defaults preserve current behavior.
 pub const TestRunnerConfig = struct {
-    output_dir: []const u8 = "zig-out/site",
-    workspace_dir: []const u8 = "zig-out/test",
+    output_dir: []const u8 = output_paths.default_site_output_rel,
+    workspace_dir: []const u8 = output_paths.default_test_workspace_rel,
 };
 
 /// Result of loading a spec. Call deinit when done.

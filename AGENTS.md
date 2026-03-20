@@ -2,6 +2,8 @@
 
 A library-first static site generator in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, colour scheme management, and multi-style site architecture.
 
+**Roadmap (workspace root):** [`WIG_ROADMAP.md`](../WIG_ROADMAP.md) — releases, dimension score targets vs peer deep-dives, intentional trade-offs, replay cadence.
+
 ## Who this is for
 
 - **Site authors** — Content, frontmatter, data cascade, and Toupee templates: [Rendering pipeline](#rendering-pipeline), [Frontmatter](#frontmatter), [Data cascade](#data-cascade), [Template syntax](#template-syntax), [Page collection](#page-collection).
@@ -13,7 +15,7 @@ A library-first static site generator in Zig. Wig promotes CUBE CSS methodology 
 - [Dependencies](#dependencies)
 - [Build commands](#build-commands)
 - [Project structure](#project-structure)
-- [Architecture](#architecture) (site model, templates, styles, feeds, tags, pagination, output, …)
+- [Architecture](#architecture) (site model, allocators, output paths, templates, styles, feeds, tags, pagination, output, …)
 - [Conventions](#conventions)
 - [Testing](#testing)
 
@@ -70,6 +72,7 @@ wig/
     test_runner.zig # spec test runner (NN_*.yaml full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
     output_verifier.zig # output verification: HTML normalization, glob matching
+    output_paths.zig  # canonical zig-out/site paths (build + future static server)
   test/
     NN_*.yaml       # spec tests (primary integration tests; full-site build + output verification)
 ```
@@ -88,8 +91,23 @@ Wig is a library that users import into their own Zig project. `wig init` scaffo
 
 ### Two-phase Site struct
 
-- `Site.init()` loads config files (config-only).
-- `Site.buildAll()` does all computation and rendering, populating build state (Engine, collections, taxonomies, asset map) on the Site struct.
+- `Site.init(allocator, options)` opens the site root directory (`options.root` relative to the process CWD). It does **not** read YAML until `buildAll()`.
+- `Site.buildAll()` loads site + style manifests and data files, runs the pipeline (see named phases in `root.zig`: `buildPhase_*`), and stores `site_config`, `style_configs`, `data_result`, `toupee.Engine`, and `build_arena` on the struct.
+
+### Allocators and lifetimes (embedders + contributors)
+
+- **`Site.allocator`** — The allocator passed to `init`. Owns long-lived state: config loaded after `buildAll()`, the **Toupee `Engine`** (template storage and internal arenas), and anything freed in `Site.deinit()`. Use it for work that must survive across builds or for HTTP handlers that outlive a single `buildAll()`.
+- **`build_arena`** — After each successful `buildAll()`, an arena allocator holds most **per-build** data: scan results, the shared template name→source map, the main Toupee `Context` for rendering, and transient strings. The next `buildAll()` destroys and recreates this arena; **do not** retain pointers into it past the build or across a second `buildAll()` on the same `Site`.
+- **Why the engine uses `Site.allocator`** — `Engine.init` / `addTemplate` use the main allocator so template memory is **not** tied to `build_arena`, avoiding use-after-free when the arena is reset on rebuild.
+- **Optional HTTP layer** — `devServer` does not take `*Site`; use handler `Context.allocator` for per-response buffers. If a handler needs template rendering against post-build state, keep a `*Site` (or engine pointer) in user code—do not couple that into `devServer`’s signature.
+
+### Output paths (`output_paths.zig`)
+
+The library re-exports `wig.output_paths`. Use it for any code that must agree with the SSG on disk layout:
+
+- `default_site_output_rel` — `"zig-out/site"` (relative to site root); same default as `TestRunnerConfig.output_dir`.
+- `joinSiteOutputDirAbs(allocator, abs_site_root)` / `joinZigOutDirAbs` — owned absolute paths.
+- `prepareSiteOutput(allocator, abs_site_root, clean)` — ensures directories exist (and optionally wipes the site output tree); used by `buildAll()`.
 
 ### Key types
 
@@ -100,10 +118,12 @@ const wig = @import("wig");
 var site = try wig.Site.init(allocator, .{ .root = ".", .draft = draft });
 try site.buildAll(.{ .clean = clean });
 
-// Dev server
+// Dev server (HTTP layer is separate from `Site`; pass the built output directory)
 var site = try wig.Site.init(allocator, .{ .root = ".", .draft = true });
 try site.buildAll(.{ .clean = false });
-var app = try wig.devServer(&site);
+var site_out = try site.openBuiltOutputDir();
+defer site_out.close();
+var app = try wig.devServer(allocator, site_out);
 try app.listen(8080);
 ```
 
@@ -475,7 +495,7 @@ Context: `paginate.items` (current page chunk), `paginate.page` (1-indexed), `pa
 
 ### Output
 
-Always `zig-out/site/`. Production builds error if unclean. Draft builds overlay.
+Always under `<site_root>/zig-out/site/` (see `wig.output_paths`). Production builds error if unclean. Draft builds overlay. Import `output_paths` if you need the same path strings or helpers outside `buildAll()` (e.g. tests, static file server).
 
 ## Conventions
 
@@ -526,6 +546,6 @@ Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and
 
 ### Test runner modules
 
-- **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (default `zig-out/site`, `zig-out/test`). Pass to `runSpecTests(..., config)`.
+- **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (defaults match `output_paths.default_site_output_rel` and `default_test_workspace_rel`). Pass to `runSpecTests(..., config)`.
 - **OutputVerifier** (`output_verifier.zig`): Verifies output directory against spec; HTML normalization, glob matching (`*` only), stack/arena for comparisons.
 - **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; future loaders (e.g. zip fixtures) can swap in.
