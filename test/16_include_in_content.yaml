@@ -39,7 +39,9 @@ input:
         ---
         # Djot Content
 
-        `<t-include template="blocks/callout.html">Important note.</t-include>`{=html}
+        ``` =html
+        <t-include template="blocks/callout.html">Important note.</t-include>
+        ```
       html_page.html: |
         ---
         document:

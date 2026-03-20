@@ -39,10 +39,6 @@ pub fn generateAtom(
     try appendXmlEscaped(&buf, a, feed_path);
     try buf.appendSlice(a, "\" rel=\"self\" />\n");
 
-    try buf.appendSlice(a, "  <id>");
-    try appendXmlEscaped(&buf, a, site_url);
-    try buf.appendSlice(a, "/</id>\n");
-
     try buf.appendSlice(a, "  <author><name>");
     try appendXmlEscaped(&buf, a, if (site_author.len > 0) site_author else site_title);
     try buf.appendSlice(a, "</name></author>\n");
@@ -73,14 +69,10 @@ pub fn generateAtom(
         try appendXmlEscaped(&buf, a, page.absolute_url);
         try buf.appendSlice(a, "\" />\n");
 
-        try buf.appendSlice(a, "    <id>");
-        try appendXmlEscaped(&buf, a, page.absolute_url);
-        try buf.appendSlice(a, "</id>\n");
-
         if (getDocStr(page.frontmatter, "date")) |date| {
             try buf.appendSlice(a, "    <updated>");
             try appendXmlEscaped(&buf, a, date);
-            try buf.appendSlice(a, "T00:00:00Z</updated>\n");
+            try buf.appendSlice(a, "</updated>\n");
         }
 
         if (getDocStr(page.frontmatter, "description")) |summary| {
@@ -228,7 +220,7 @@ test "generateAtom: produces valid Atom XML" {
     const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "<feed xmlns=") != null);
     try testing.expect(std.mem.indexOf(u8, content, "First Post") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "2026-03-01T00:00:00Z") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "<updated>2026-03-01</updated>") != null);
 }
 
 test "generateAtom: filters by collection" {

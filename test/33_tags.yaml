@@ -8,6 +8,8 @@ input:
     data:
       site.yaml: |
         url: localhost
+        taxonomies:
+          - tags
       document.yaml: |
         style: default
         layout: page.html

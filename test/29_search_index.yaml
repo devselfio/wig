@@ -43,7 +43,7 @@ input:
           ---
           # My Post
 
-          This is the **full content** of the post.
+          This is the *full content* of the post.
 output:
   files:
     index.html: |

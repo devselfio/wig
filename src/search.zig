@@ -24,39 +24,45 @@ pub const SpecSearchEntry = struct {
     section: ?[]const u8,
 };
 
-/// Generates `search.json` in spec format.
+/// Generates `search.json` in spec format (multi-line, 4-space field indent).
 pub fn generateSearchJson(a: Allocator, entries: []const SpecSearchEntry, output_dir: fs.Dir) !void {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
 
     try buf.appendSlice(a, "[\n");
     for (entries, 0..) |entry, i| {
         if (i > 0) try buf.appendSlice(a, ",\n");
-        try buf.appendSlice(a, "  {");
-        var first = true;
-        try writeJsonField(&buf, a, "url", entry.url, &first);
-        try writeJsonField(&buf, a, "title", entry.title, &first);
-        try writeJsonField(&buf, a, "content", entry.content, &first);
-        try writeJsonField(&buf, a, "excerpt", entry.excerpt, &first);
-        if (!first) try buf.appendSlice(a, ", ");
-        try buf.appendSlice(a, "\"tags\": [");
+        try buf.appendSlice(a, "  {\n");
+        try writeJsonObjectFieldLine(&buf, a, "    ", "url", entry.url);
+        try writeJsonObjectFieldLine(&buf, a, "    ", "title", entry.title);
+        try writeJsonObjectFieldLine(&buf, a, "    ", "content", entry.content);
+        try writeJsonObjectFieldLine(&buf, a, "    ", "excerpt", entry.excerpt);
+        try buf.appendSlice(a, "    \"tags\": [");
         for (entry.tags, 0..) |tag, j| {
             if (j > 0) try buf.appendSlice(a, ", ");
             try writeJsonString(&buf, a, tag);
         }
-        try buf.appendSlice(a, "]");
-        first = false;
-        try buf.appendSlice(a, ", \"date\": ");
+        try buf.appendSlice(a, "],\n");
+        try buf.appendSlice(a, "    \"date\": ");
         if (entry.date) |d| try writeJsonString(&buf, a, d) else try buf.appendSlice(a, "null");
-        try buf.appendSlice(a, ", \"section\": ");
+        try buf.appendSlice(a, ",\n    \"section\": ");
         if (entry.section) |s| try writeJsonString(&buf, a, s) else try buf.appendSlice(a, "null");
-        try buf.appendSlice(a, " }\n");
+        try buf.appendSlice(a, "\n  }");
     }
-    try buf.appendSlice(a, "]\n");
+    try buf.appendSlice(a, "\n]\n");
 
     var f = try output_dir.createFile("search.json", .{});
     defer f.close();
     try f.writeAll(buf.items);
+}
+
+fn writeJsonObjectFieldLine(buf: *std.ArrayListUnmanaged(u8), a: Allocator, indent: []const u8, key: []const u8, val: []const u8) !void {
+    try buf.appendSlice(a, indent);
+    try buf.append(a, '"');
+    try buf.appendSlice(a, key);
+    try buf.appendSlice(a, "\": ");
+    try writeJsonString(buf, a, val);
+    try buf.appendSlice(a, ",\n");
 }
 
 /// Generates `search-index.json` from rendered page content.

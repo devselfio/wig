@@ -83,10 +83,14 @@ const TermBucket = struct {
 
 /// Extracts taxonomy terms from a page's frontmatter. Handles both list
 /// values (`tags: [zig, web]`) and single string values (`tags: zig`).
-fn getTerms(fm: toupee.Value, field: []const u8) ?[]const toupee.Value {
-    const val = switch (fm) {
-        .map => |m| m.get(field) orelse return null,
-        else => return null,
+/// Reads `document.{field}` (wig frontmatter) as well as top-level `{field}`.
+pub fn getTerms(fm: toupee.Value, field: []const u8) ?[]const toupee.Value {
+    if (fm != .map) return null;
+    const val = blk: {
+        if (fm.map.get(field)) |v| break :blk v;
+        const doc = fm.map.get("document") orelse return null;
+        if (doc != .map) return null;
+        break :blk doc.map.get(field) orelse return null;
     };
     return switch (val) {
         .list => |l| l,

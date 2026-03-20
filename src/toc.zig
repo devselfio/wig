@@ -62,7 +62,14 @@ fn matchSectionWithHeading(a: Allocator, src: []const u8, start: usize) !?MatchR
     const id_end = std.mem.indexOfScalarPos(u8, src, id_start, '"') orelse return null;
     const id = src[id_start..id_end];
 
-    const after_section = id_end + 2;
+    // zjot renders `<section ...>\n<h1>` — allow whitespace between `>` and heading.
+    var after_section = id_end + 2;
+    while (after_section < src.len) : (after_section += 1) {
+        switch (src[after_section]) {
+            ' ', '\t', '\n', '\r' => continue,
+            else => break,
+        }
+    }
     return try matchHeadingTag(a, src, after_section, id);
 }
 
@@ -120,7 +127,12 @@ pub fn toValue(a: Allocator, entries: []const TocEntry) !toupee.Value {
         var map = ValueMap{};
         try map.put(a, "level", .{ .integer = @intCast(entry.level) });
         try map.put(a, "text", .{ .string = entry.text });
-        try map.put(a, "id", .{ .string = entry.id });
+        // Fragment for <a href="…"> (HTML id attribute is bare; links use #id)
+        const href_id = if (std.mem.startsWith(u8, entry.id, "#"))
+            try a.dupe(u8, entry.id)
+        else
+            try std.fmt.allocPrint(a, "#{s}", .{entry.id});
+        try map.put(a, "id", .{ .string = href_id });
         items[i] = .{ .map = map };
     }
     return .{ .list = items };
@@ -203,5 +215,8 @@ test "toValue: converts entries to toupee list" {
     const first = val.list[0].map;
     try testing.expectEqual(@as(i64, 2), first.get("level").?.integer);
     try testing.expectEqualStrings("First", first.get("text").?.string);
-    try testing.expectEqualStrings("first", first.get("id").?.string);
+    try testing.expectEqualStrings("#first", first.get("id").?.string);
+
+    const second = val.list[1].map;
+    try testing.expectEqualStrings("#second", second.get("id").?.string);
 }
