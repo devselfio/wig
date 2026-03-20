@@ -817,17 +817,22 @@ fn mergeDocumentDataCascade(
     }
 }
 
-/// Extracts document.data from frontmatter (document.data.document.layout, document.data.site.*).
+/// Extracts per-directory cascade payload from frontmatter: `document.data` (preferred) or top-level `data`
+/// (`data.document.*`, `data.site.*`). Top-level `data` is common in fixtures; `document.data` matches AGENTS.md.
 fn getDocumentData(fm: toupee.Value) ?toupee.Value {
     if (fm != .map) return null;
-    const doc_val = fm.map.get("document") orelse return null;
-    if (doc_val != .map) return null;
-    return doc_val.map.get("data");
+    if (fm.map.get("document")) |doc_val| {
+        if (doc_val == .map) {
+            if (doc_val.map.get("data")) |d| return d;
+        }
+    }
+    return fm.map.get("data");
 }
 
-/// Resolves layout from data cascade: ancestor _index document.data.document (closest first), then base_ctx, then page frontmatter.
-/// Section (_index) pages: explicit `document.layout` in frontmatter wins; they do not inherit `document.data.document.layout`
-/// from parent _index (that applies to leaf descendants only). Then `data/document.yaml` layout, then caller's `page.html` fallback.
+/// Resolves layout from data cascade: ancestor `document.data` / top-level `data` (closest first), then this page's
+/// frontmatter `document.layout`, then `data/document.yaml` (same priority as `getStyleFromCascade`).
+/// Section (_index) pages: explicit `document.layout` in frontmatter wins; they do not inherit section `data.document.layout`
+/// from parent _index (that applies to leaf descendants only).
 fn getLayoutFromCascade(
     a: Allocator,
     entry: *const scanner_mod.PageEntry,
@@ -840,7 +845,7 @@ fn getLayoutFromCascade(
         if (base_ctx.resolveString("document.layout")) |s| return s;
         return null;
     }
-    // Leaf pages: 1. Walk parent chain, document.data.document.layout from each ancestor (closest first wins)
+    // Leaf pages: 1. Parent chain, section data document.layout (closest ancestor first)
     var current_url = entry.url_path;
     while (scan_result.parent_map.get(current_url)) |parent_opt| {
         const parent = parent_opt orelse break;
@@ -857,10 +862,11 @@ fn getLayoutFromCascade(
         }
         current_url = parent.url_path;
     }
-    // 2. Base context document.layout (from data/document.yaml etc.)
+    // 2. This page's frontmatter overrides data/document.yaml (matches AGENTS merge order)
+    if (getLayoutName(entry.frontmatter)) |s| return s;
+    // 3. Base context (data/document.yaml)
     if (base_ctx.resolveString("document.layout")) |s| return s;
-    // 3. Page's own frontmatter
-    return getLayoutName(entry.frontmatter);
+    return null;
 }
 
 /// Resolves style from data cascade (same order as layout).

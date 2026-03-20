@@ -198,7 +198,7 @@ Sources merged in priority order (highest priority last -- later sources overrid
 2. Render flags (`site.draft`, `site.debug`)
 3. Style manifest data (`styles.{name}.*`)
 4. Page collection (`pages.*`) and taxonomies (`taxonomies.tags`)
-5. Directory-level cascading data (from `document.data:` in `_index.dj` frontmatter, applied to child pages)
+5. Directory-level cascading data (from `document.data:` in `_index.dj` frontmatter, or top-level `data:` with the same shape, applied to child pages)
 6. Page frontmatter `document:` (highest priority -- overrides all inherited `document.*` values)
 
 **Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
