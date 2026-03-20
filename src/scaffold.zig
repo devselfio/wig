@@ -5,10 +5,25 @@ const fs = std.fs;
 
 const project_dirs = [_][]const u8{ "data", "pages", "styles", "assets" };
 
+/// CUBE-aligned subdirs under styles/{name}: templates, css, patterns.
+const style_subdirs = [_][]const u8{
+    "templates/layouts",
+    "templates/blocks",
+    "css/compositions",
+    "css/blocks",
+    "css/fonts",
+    "css/globals",
+    "css/utilities",
+    "patterns/blocks",
+    "patterns/compositions",
+    "patterns/utilities",
+};
+
 /// Scaffolds a new Wig project at the given path.
 ///
 /// Creates the standard directory structure: data/, pages/, styles/, assets/.
-/// Also writes a minimal site config and a starter index page.
+/// Also creates styles/default/ with CUBE-aligned subdirs and writes a minimal
+/// site config and starter index page.
 pub fn init(a: Allocator, target_path: []const u8) !void {
     const abs = try fs.realpathAlloc(a, target_path);
     defer a.free(abs);
@@ -17,6 +32,15 @@ pub fn init(a: Allocator, target_path: []const u8) !void {
         const dir_path = try fs.path.join(a, &.{ abs, dir_name });
         defer a.free(dir_path);
         try fs.makeDirAbsolute(dir_path);
+    }
+
+    // CUBE directory structure for default style
+    var project_dir = try fs.openDirAbsolute(abs, .{});
+    defer project_dir.close();
+    for (style_subdirs) |subdir| {
+        const full = try std.fmt.allocPrint(a, "styles/default/{s}", .{subdir});
+        try project_dir.makePath(full);
+        a.free(full);
     }
 
     const config_path = try fs.path.join(a, &.{ abs, "data", "site.yaml" });
@@ -102,15 +126,21 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
 
 /// Creates a new block pattern (CSS + HTML template) in a style.
 ///
-/// Writes `styles/{style}/{block}.css` and `styles/{style}/{block}.html`
-/// with starter content.
+/// Writes `css/blocks/{block}.css`, `templates/blocks/{block}.html`, and
+/// `patterns/blocks/{block}.html` under the style directory (CUBE convention).
 pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, block_name: []const u8) !void {
     const style_path = try fs.path.join(a, &.{ styles_dir, style_name });
     defer a.free(style_path);
 
+    // css/blocks/NAME.css
+    var style_dir = try fs.openDirAbsolute(style_path, .{});
+    defer style_dir.close();
+    try style_dir.makePath("css/blocks");
+    const css_dir = try fs.path.join(a, &.{ style_path, "css", "blocks" });
+    defer a.free(css_dir);
     const css_filename = try std.fmt.allocPrint(a, "{s}.css", .{block_name});
     defer a.free(css_filename);
-    const css_path = try fs.path.join(a, &.{ style_path, css_filename });
+    const css_path = try fs.path.join(a, &.{ css_dir, css_filename });
     defer a.free(css_path);
     {
         var f = try fs.createFileAbsolute(css_path, .{});
@@ -131,9 +161,13 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
         try f.writeAll(header);
     }
 
+    // templates/blocks/NAME.html
+    try style_dir.makePath("templates/blocks");
+    const tmpl_dir = try fs.path.join(a, &.{ style_path, "templates", "blocks" });
+    defer a.free(tmpl_dir);
     const html_filename = try std.fmt.allocPrint(a, "{s}.html", .{block_name});
     defer a.free(html_filename);
-    const html_path = try fs.path.join(a, &.{ style_path, html_filename });
+    const html_path = try fs.path.join(a, &.{ tmpl_dir, html_filename });
     defer a.free(html_path);
     {
         var f = try fs.createFileAbsolute(html_path, .{});
@@ -147,13 +181,34 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
         defer a.free(content);
         try f.writeAll(content);
     }
+
+    // patterns/blocks/NAME.html
+    try style_dir.makePath("patterns/blocks");
+    const pat_dir = try fs.path.join(a, &.{ style_path, "patterns", "blocks" });
+    defer a.free(pat_dir);
+    const pat_filename = try std.fmt.allocPrint(a, "{s}.html", .{block_name});
+    defer a.free(pat_filename);
+    const pat_path = try fs.path.join(a, &.{ pat_dir, pat_filename });
+    defer a.free(pat_path);
+    {
+        var f = try fs.createFileAbsolute(pat_path, .{});
+        defer f.close();
+        const content = try std.fmt.allocPrint(a,
+            \\<div class="{s}">
+            \\  Example content
+            \\</div>
+            \\
+        , .{block_name});
+        defer a.free(content);
+        try f.writeAll(content);
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
 const testing = std.testing;
 
-test "init: creates project directories" {
+test "init: creates project directories and CUBE style structure" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -176,6 +231,11 @@ test "init: creates project directories" {
     defer testing.allocator.free(cfg_path);
     const cfg = try fs.openFileAbsolute(cfg_path, .{});
     cfg.close();
+
+    const layouts_path = try fs.path.join(testing.allocator, &.{ abs, "styles", "default", "templates", "layouts" });
+    defer testing.allocator.free(layouts_path);
+    var layouts_dir = try fs.openDirAbsolute(layouts_path, .{});
+    layouts_dir.close();
 }
 
 test "addStyle: creates manifest with correct name" {
@@ -199,7 +259,7 @@ test "addStyle: creates manifest with correct name" {
     try testing.expect(std.mem.indexOf(u8, text, "# Style: modern") != null);
 }
 
-test "addBlock: creates CSS and HTML files" {
+test "addBlock: creates CSS, template, and pattern files (CUBE)" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -210,15 +270,20 @@ test "addBlock: creates CSS and HTML files" {
 
     try addBlock(testing.allocator, abs, "default", "card");
 
-    const css_path = try fs.path.join(testing.allocator, &.{ abs, "default", "card.css" });
+    const css_path = try fs.path.join(testing.allocator, &.{ abs, "default", "css", "blocks", "card.css" });
     defer testing.allocator.free(css_path);
     const css_f = try fs.openFileAbsolute(css_path, .{});
     css_f.close();
 
-    const html_path = try fs.path.join(testing.allocator, &.{ abs, "default", "card.html" });
+    const html_path = try fs.path.join(testing.allocator, &.{ abs, "default", "templates", "blocks", "card.html" });
     defer testing.allocator.free(html_path);
     const html_f = try fs.openFileAbsolute(html_path, .{});
     html_f.close();
+
+    const pat_path = try fs.path.join(testing.allocator, &.{ abs, "default", "patterns", "blocks", "card.html" });
+    defer testing.allocator.free(pat_path);
+    const pat_f = try fs.openFileAbsolute(pat_path, .{});
+    pat_f.close();
 }
 
 test "install: returns NotImplemented" {
