@@ -23,6 +23,36 @@ pub const BundleResult = struct {
 /// in manifest order, content-hashes with SHA-256 (truncated to 8 hex chars),
 /// and writes the fingerprinted file to `output_dir`.
 ///
+/// Processes a single bundle file and writes to an exact output path (no hash).
+/// Used for `bundles: [ "css/tokens.css" ]` array format.
+/// `output_path` is the path relative to output_dir (e.g. "css/tokens.css").
+/// `template_rel` is the path within the style dir (e.g. "css/tokens.css").
+pub fn processBundleToPath(
+    a: Allocator,
+    style_name: []const u8,
+    output_path: []const u8,
+    template_rel: []const u8,
+    styles_dir: fs.Dir,
+    style_ctx: *const toupee.Context,
+    output_dir: fs.Dir,
+) !BundleResult {
+    const full_template_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ style_name, template_rel });
+    defer a.free(full_template_path);
+
+    const content = try processFile(a, styles_dir, full_template_path, style_ctx);
+
+    output_dir.makePath(std.fs.path.dirname(output_path) orelse ".") catch {};
+    var out_file = try output_dir.createFile(output_path, .{});
+    defer out_file.close();
+    try out_file.writeAll(content);
+
+    return .{
+        .path = try a.dupe(u8, output_path),
+        .hash = "",
+        .content = content,
+    };
+}
+
 /// Returns the fingerprinted path, hash, and full content string.
 pub fn processBundle(
     a: Allocator,

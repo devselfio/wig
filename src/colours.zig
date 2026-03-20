@@ -139,6 +139,81 @@ pub fn resolve(
     return .{ .value = .{ .map = result_map }, .arena = arena };
 }
 
+/// Resolves palette indirection in data/colours structure.
+/// Replaces style role values (e.g. "black") with hex from palette (e.g. "#000000").
+pub fn resolveColoursData(a: Allocator, colours_val: toupee.Value) !toupee.Value {
+    if (colours_val != .map) return colours_val;
+    var result = ValueMap{};
+    var it = colours_val.map.iterator();
+    while (it.next()) |entry| {
+        const scheme_name = entry.key_ptr.*;
+        const scheme_val = entry.value_ptr.*;
+        if (scheme_val != .map) {
+            try result.put(a, scheme_name, scheme_val);
+            continue;
+        }
+        var resolved_scheme = ValueMap{};
+        var var_it = scheme_val.map.iterator();
+        while (var_it.next()) |var_entry| {
+            const variant_name = var_entry.key_ptr.*;
+            const variant_val = var_entry.value_ptr.*;
+            if (variant_val != .map) {
+                try resolved_scheme.put(a, variant_name, variant_val);
+                continue;
+            }
+            const palette_val = variant_val.map.get("palette") orelse {
+                try resolved_scheme.put(a, variant_name, variant_val);
+                continue;
+            };
+            if (palette_val != .map) {
+                try resolved_scheme.put(a, variant_name, variant_val);
+                continue;
+            }
+            var resolved_variant = ValueMap{};
+            var vv_it = variant_val.map.iterator();
+            while (vv_it.next()) |vv_entry| {
+                if (std.mem.eql(u8, vv_entry.key_ptr.*, "styles")) {
+                    const styles_val = vv_entry.value_ptr.*;
+                    if (styles_val != .map) {
+                        try resolved_variant.put(a, "styles", styles_val);
+                        continue;
+                    }
+                    var resolved_styles = ValueMap{};
+                    var cat_it = styles_val.map.iterator();
+                    while (cat_it.next()) |cat_entry| {
+                        const cat_val = cat_entry.value_ptr.*;
+                        if (cat_val != .map) {
+                            try resolved_styles.put(a, cat_entry.key_ptr.*, cat_val);
+                            continue;
+                        }
+                        var resolved_cat = ValueMap{};
+                        var role_it = cat_val.map.iterator();
+                        while (role_it.next()) |role_entry| {
+                            const role_val = role_entry.value_ptr.*;
+                            const hex = if (role_val == .string)
+                                palette_val.map.get(role_val.string)
+                            else
+                                null;
+                            if (hex) |h| {
+                                try resolved_cat.put(a, role_entry.key_ptr.*, h);
+                            } else {
+                                try resolved_cat.put(a, role_entry.key_ptr.*, role_val);
+                            }
+                        }
+                        try resolved_styles.put(a, cat_entry.key_ptr.*, .{ .map = resolved_cat });
+                    }
+                    try resolved_variant.put(a, "styles", .{ .map = resolved_styles });
+                } else {
+                    try resolved_variant.put(a, vv_entry.key_ptr.*, vv_entry.value_ptr.*);
+                }
+            }
+            try resolved_scheme.put(a, variant_name, .{ .map = resolved_variant });
+        }
+        try result.put(a, scheme_name, .{ .map = resolved_scheme });
+    }
+    return .{ .map = result };
+}
+
 fn findScheme(name: []const u8, scheme_files: []const SchemeFile) ?comb.Value {
     for (scheme_files) |file| {
         if (std.mem.eql(u8, file.name, name)) return file.data;
