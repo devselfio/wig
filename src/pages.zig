@@ -110,10 +110,8 @@ pub fn renderOne(
     defer a.free(ancestors);
     try ctx.putAt("document.ancestors", .{ .list = ancestors });
 
-    // Keys in children_map match deriveUrlPath(output_file) for each page; url_path can diverge
-    // from that slice in edge cases, so prefer deriving from output_file when looking up.
-    const children_key = try scanner_mod.deriveUrlPath(a, entry.output_file);
-    if (scan_result.children_map.get(children_key) orelse scan_result.children_map.get(entry.url_path)) |children| {
+    // Children are siblings in the same `pages/` directory as this section's `_index` (filesystem key).
+    if (scan_result.children_map.get(scanner_mod.pagesParentDir(entry.source_path))) |children| {
         const child_vals = try a.alloc(toupee.Value, children.len);
         for (children, child_vals) |child_page, *cv| {
             cv.* = try scanner_mod.buildPageValue(a, child_page);
@@ -302,10 +300,8 @@ fn renderOneWithPaginate(
     defer a.free(ancestors);
     try ctx.putAt("document.ancestors", .{ .list = ancestors });
 
-    // Keys in children_map match deriveUrlPath(output_file) for each page; url_path can diverge
-    // from that slice in edge cases, so prefer deriving from output_file when looking up.
-    const children_key = try scanner_mod.deriveUrlPath(a, entry.output_file);
-    if (scan_result.children_map.get(children_key) orelse scan_result.children_map.get(entry.url_path)) |children| {
+    // Children are siblings in the same `pages/` directory as this section's `_index` (filesystem key).
+    if (scan_result.children_map.get(scanner_mod.pagesParentDir(entry.source_path))) |children| {
         const child_vals = try a.alloc(toupee.Value, children.len);
         for (children, child_vals) |child_page, *cv| {
             cv.* = try scanner_mod.buildPageValue(a, child_page);

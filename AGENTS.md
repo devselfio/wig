@@ -236,7 +236,7 @@ Wig also injects computed values:
 - `document.url` -- absolute URL (e.g. `https://example.com/about/`), built from `site.url` + `document.path`
 - `document.style` -- full style manifest map (parsed from `style.yaml`). Access fields via `document.style.name`, `document.style.version`, etc.
 - `document.parent` -- map with the parent page's document data (`path`, `title`, etc.). Nil for the root page.
-- `document.children` -- list of child page document maps. Empty list for leaf pages.
+- `document.children` -- list of **sibling** content pages in the same `pages/` directory as this section's `_index` (non-`_index` files only). Each item uses the **same page map shape** as the current page in context (`path`, `url`, `source`, nested `document`, etc.). Empty for leaf pages and for sections with no siblings.
 - `document.ancestors` -- list of ancestor page document maps, from parent to root (nearest first). Empty list for the root page.
 - `document.excerpt` -- from `description:` in frontmatter, or falls back to the first paragraph of content (text-only).
 - `document.thumbnail` -- from `thumbnail:` in frontmatter. Asset path (e.g. `/images/hero.jpg`).

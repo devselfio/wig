@@ -27,7 +27,8 @@ pub const ScanResult = struct {
     pages: []PageEntry,
     collections: ValueMap,
     parent_map: std.StringArrayHashMapUnmanaged(?*const PageEntry),
-    /// Leaf pages grouped by parent section `url_path` (e.g. `/posts/`).
+    /// Non-`_index` pages grouped by parent directory path under `pages/` (`""` = root).
+    /// Section `_index` pages resolve children with `pagesParentDir(entry.source_path)` as the key.
     children_map: std.StringArrayHashMapUnmanaged([]const *const PageEntry),
     arena: std.heap.ArenaAllocator,
 
@@ -87,7 +88,7 @@ fn walkDir(
     output_paths: *std.StringArrayHashMapUnmanaged([]const u8),
     gated_dirs: *std.StringArrayHashMapUnmanaged(void),
 ) !void {
-    if (rel_prefix.len > 0 and gated_dirs.contains(parentDir(rel_prefix))) return;
+    if (rel_prefix.len > 0 and gated_dirs.contains(pagesParentDir(rel_prefix))) return;
 
     // Pass 1: find _index section file, check gating before processing others.
     var section_entry: ?PageEntry = null;
@@ -299,7 +300,9 @@ pub fn dotPath(a: Allocator, path: []const u8) ![]u8 {
     return result;
 }
 
-fn parentDir(path: []const u8) []const u8 {
+/// Parent path segment for a `pages/` relative path: `posts/a.dj` → `posts`, `a.dj` → `""`.
+/// Used for section children (siblings in the same directory) and gated-dir checks on `rel_prefix`.
+pub fn pagesParentDir(path: []const u8) []const u8 {
     if (std.mem.lastIndexOfScalar(u8, path, '/')) |idx| return path[0..idx];
     return "";
 }
@@ -558,16 +561,18 @@ fn buildParentMap(a: Allocator, pages: []const PageEntry) !std.StringArrayHashMa
     return parent_map;
 }
 
-/// Builds url_path -> children pages map for section hierarchy.
+/// Groups leaf pages (non-`_index`) by parent directory under `pages/`. Keys are arena-owned
+/// copies; lookup uses `pagesParentDir(section.source_path)` (slice into `source_path` matches by value).
 fn buildChildrenMap(a: Allocator, pages: []const PageEntry) !std.StringArrayHashMapUnmanaged([]const *const PageEntry) {
     var children_lists = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(*const PageEntry)){};
     for (pages) |*p| {
-        const parent_url = urlPathParent(p.url_path);
-        if (parent_url.len == 0) continue;
-        var list = children_lists.getPtr(parent_url) orelse blk: {
+        if (p.is_section) continue;
+        const dir = pagesParentDir(p.source_path);
+        var list = children_lists.getPtr(dir) orelse blk: {
+            const key = try a.dupe(u8, dir);
             const new_list = std.ArrayListUnmanaged(*const PageEntry){};
-            try children_lists.put(a, parent_url, new_list);
-            break :blk children_lists.getPtr(parent_url).?;
+            try children_lists.put(a, key, new_list);
+            break :blk children_lists.getPtr(key).?;
         };
         try list.append(a, p);
     }
@@ -584,6 +589,12 @@ fn buildChildrenMap(a: Allocator, pages: []const PageEntry) !std.StringArrayHash
 // ── Tests ───────────────────────────────────────────────────────────────
 
 const testing = std.testing;
+
+test "pagesParentDir" {
+    try testing.expectEqualStrings("", pagesParentDir("about.dj"));
+    try testing.expectEqualStrings("posts", pagesParentDir("posts/a.dj"));
+    try testing.expectEqualStrings("docs/guide", pagesParentDir("docs/guide/_index.dj"));
+}
 
 test "deriveOutputPath: regular page" {
     const a = testing.allocator;
@@ -814,7 +825,7 @@ test "scan: section _index detection" {
     try testing.expectEqual(@as(usize, 1), items_val.list.len);
 }
 
-test "scan: children_map groups leaves by parent section url_path" {
+test "scan: children_map groups leaves by pages parent directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -841,8 +852,7 @@ test "scan: children_map groups leaves by parent section url_path" {
     var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
-    const section_url: []const u8 = "/posts/";
-    const children = result.children_map.get(section_url) orelse {
+    const children = result.children_map.get("posts") orelse {
         return error.TestUnexpectedResult;
     };
     try testing.expectEqual(@as(usize, 2), children.len);
@@ -879,8 +889,7 @@ test "scan: children_map matches spec 13 style slugs" {
     var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
-    const section_url: []const u8 = "/posts/";
-    const children = result.children_map.get(section_url) orelse {
+    const children = result.children_map.get("posts") orelse {
         return error.TestUnexpectedResult;
     };
     try testing.expectEqual(@as(usize, 2), children.len);
