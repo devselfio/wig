@@ -358,54 +358,10 @@ pub const Site = struct {
         const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
         try style_ctx.put("taxonomies", tax_ctx);
 
-        // Put collections into context using putAt for dot-path resolution.
-        // Skip the root "pages" collection when nested collections exist,
-        // because putAt("pages", list) followed by putAt("pages.posts", list)
-        // would conflict (pages can't be both a list and a map).
-        // When a key is a prefix of another (e.g. pages.blog and pages.blog.special),
-        // put the list at key.items to avoid PathConflict (can't have both list and map at key).
-        const has_nested = blk: {
-            var coll_check = scan_result.collections.iterator();
-            while (coll_check.next()) |entry| {
-                if (std.mem.indexOf(u8, entry.key_ptr.*, ".") != null) break :blk true;
-            }
-            break :blk false;
-        };
-
-        const CollPair = struct { key: []const u8, value: toupee.Value };
-        var keys_to_put = std.ArrayListUnmanaged(CollPair){};
-        var coll_it = scan_result.collections.iterator();
-        while (coll_it.next()) |entry| {
-            if (has_nested and std.mem.eql(u8, entry.key_ptr.*, "pages")) continue;
-            var put_key = entry.key_ptr.*;
-            const put_val = entry.value_ptr.*;
-            var coll_it2 = scan_result.collections.iterator();
-            while (coll_it2.next()) |other| {
-                if (std.mem.eql(u8, other.key_ptr.*, entry.key_ptr.*)) continue;
-                const prefix = try std.fmt.allocPrint(ba, "{s}.", .{entry.key_ptr.*});
-                defer ba.free(prefix);
-                if (std.mem.startsWith(u8, other.key_ptr.*, prefix)) {
-                    put_key = try std.fmt.allocPrint(ba, "{s}.items", .{entry.key_ptr.*});
-                    break;
-                }
-            }
-            try keys_to_put.append(ba, .{ .key = put_key, .value = put_val });
-        }
-        std.mem.sort(CollPair, keys_to_put.items, {}, struct {
-            fn lessThan(_: void, lhs: CollPair, rhs: CollPair) bool {
-                var lhs_dots: usize = 0;
-                var rhs_dots: usize = 0;
-                for (lhs.key) |c| {
-                    if (c == '.') lhs_dots += 1;
-                }
-                for (rhs.key) |c| {
-                    if (c == '.') rhs_dots += 1;
-                }
-                return lhs_dots > rhs_dots;
-            }
-        }.lessThan);
-        for (keys_to_put.items) |pair| {
-            try style_ctx.putAt(pair.key, pair.value);
+        // Single nested `pages` map: root slugs (document, two, …) plus per-folder maps
+        // { document, items, slug-per-page } for `pages.posts`, `pages.blog`, etc.
+        if (scan_result.collections.getPtr("pages")) |pv| {
+            try style_ctx.putAt("pages", pv.*);
         }
 
         // Load templates per-style into engine and a shared template map.

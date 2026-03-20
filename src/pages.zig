@@ -110,14 +110,20 @@ pub fn renderOne(
     defer a.free(ancestors);
     try ctx.putAt("document.ancestors", .{ .list = ancestors });
 
-    if (scan_result.children_map.get(entry.url_path)) |children| {
+    // Keys in children_map match deriveUrlPath(output_file) for each page; url_path can diverge
+    // from that slice in edge cases, so prefer deriving from output_file when looking up.
+    const children_key = try scanner_mod.deriveUrlPath(a, entry.output_file);
+    if (scan_result.children_map.get(children_key) orelse scan_result.children_map.get(entry.url_path)) |children| {
         const child_vals = try a.alloc(toupee.Value, children.len);
         for (children, child_vals) |child_page, *cv| {
-            const title = getDocTitle(child_page.frontmatter) orelse "";
-            var child_map = ValueMap{};
-            try child_map.put(a, "path", .{ .string = child_page.url_path });
-            try child_map.put(a, "title", .{ .string = title });
-            cv.* = .{ .map = child_map };
+            cv.* = try scanner_mod.buildPageValue(a, child_page);
+            switch (cv.*) {
+                .map => |*m| {
+                    const t = getDocTitle(child_page.frontmatter) orelse "";
+                    try m.put(a, "title", .{ .string = try a.dupe(u8, t) });
+                },
+                else => {},
+            }
         }
         std.mem.sort(toupee.Value, child_vals, {}, struct {
             fn lessThan(_: void, lhs: toupee.Value, rhs: toupee.Value) bool {
@@ -200,6 +206,7 @@ pub fn renderOne(
         .style_name = style_name,
     };
     const loader = style_loader.loader();
+
 
     const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
         if (err != error.TemplateNotFound) return err;
@@ -295,14 +302,20 @@ fn renderOneWithPaginate(
     defer a.free(ancestors);
     try ctx.putAt("document.ancestors", .{ .list = ancestors });
 
-    if (scan_result.children_map.get(entry.url_path)) |children| {
+    // Keys in children_map match deriveUrlPath(output_file) for each page; url_path can diverge
+    // from that slice in edge cases, so prefer deriving from output_file when looking up.
+    const children_key = try scanner_mod.deriveUrlPath(a, entry.output_file);
+    if (scan_result.children_map.get(children_key) orelse scan_result.children_map.get(entry.url_path)) |children| {
         const child_vals = try a.alloc(toupee.Value, children.len);
         for (children, child_vals) |child_page, *cv| {
-            const title = getDocTitle(child_page.frontmatter) orelse "";
-            var child_map = ValueMap{};
-            try child_map.put(a, "path", .{ .string = child_page.url_path });
-            try child_map.put(a, "title", .{ .string = title });
-            cv.* = .{ .map = child_map };
+            cv.* = try scanner_mod.buildPageValue(a, child_page);
+            switch (cv.*) {
+                .map => |*m| {
+                    const t = getDocTitle(child_page.frontmatter) orelse "";
+                    try m.put(a, "title", .{ .string = try a.dupe(u8, t) });
+                },
+                else => {},
+            }
         }
         std.mem.sort(toupee.Value, child_vals, {}, struct {
             fn lessThan(_: void, lhs: toupee.Value, rhs: toupee.Value) bool {
@@ -424,8 +437,13 @@ pub fn getPaginateConfig(fm: toupee.Value) ?PaginateConfig {
 /// Resolves a collection from context by dot-path (e.g. "pages.posts").
 fn resolveCollection(ctx: *const toupee.Context, path: []const u8) ?[]const toupee.Value {
     const resolved = ctx.resolve(path) orelse return null;
-    if (resolved != .list) return null;
-    return resolved.list;
+    if (resolved == .list) return resolved.list;
+    if (resolved == .map) {
+        if (resolved.map.get("items")) |iv| {
+            if (iv == .list) return iv.list;
+        }
+    }
+    return null;
 }
 
 /// Converts a pagination URL path (e.g. "/posts/", "/posts/page/2/") to output file path.

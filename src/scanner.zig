@@ -27,6 +27,7 @@ pub const ScanResult = struct {
     pages: []PageEntry,
     collections: ValueMap,
     parent_map: std.StringArrayHashMapUnmanaged(?*const PageEntry),
+    /// Leaf pages grouped by parent section `url_path` (e.g. `/posts/`).
     children_map: std.StringArrayHashMapUnmanaged([]const *const PageEntry),
     arena: std.heap.ArenaAllocator,
 
@@ -304,7 +305,7 @@ fn parentDir(path: []const u8) []const u8 {
 }
 
 /// Builds a single page value with path, url, source, and merged document (path + frontmatter).
-fn buildPageValue(a: Allocator, page: *const PageEntry) !toupee.Value {
+pub fn buildPageValue(a: Allocator, page: *const PageEntry) !toupee.Value {
     var page_map = ValueMap{};
     try page_map.put(a, "path", .{ .string = page.url_path });
     try page_map.put(a, "url", .{ .string = page.absolute_url });
@@ -334,12 +335,12 @@ fn buildPageValue(a: Allocator, page: *const PageEntry) !toupee.Value {
     return .{ .map = page_map };
 }
 
-/// Builds collection maps from page entries. Each directory produces a
-/// collection at its full dot-path (e.g. `pages.posts`). Section pages
-/// (`_index`) are excluded from collection lists. Collections are sorted
-/// by filename descending (newest first for date-prefixed blogs).
-/// For the root "pages" collection, also builds a slug-keyed map for direct
-/// access (pages.document, pages.two, etc.).
+/// Builds a single nested `pages` map for template context.
+///
+/// - Root entries (`collection_key == "pages"`): slugs `document` (_index), `two`, etc.
+/// - Subfolders (`pages.posts`, `pages.blog`, …): map with `document` (section _index),
+///   `items` (sorted leaf list for `<t-for>` / paginate), plus one key per leaf slug.
+/// Section pages are excluded from `items` lists only; they appear as `document` on the folder map.
 fn buildCollections(
     a: Allocator,
     pages: []const PageEntry,
@@ -369,26 +370,166 @@ fn buildCollections(
                 return std.mem.order(u8, l_str, r_str) == .gt;
             }
         }.cmp);
-
-        const items = try a.dupe(toupee.Value, entry.value_ptr.items);
-        try collections.put(a, entry.key_ptr.*, .{ .list = items });
     }
 
-    // For root "pages" collection, build slug-keyed map for direct access (pages.document, pages.two)
-    var pages_by_slug = ValueMap{};
+    var pages_root = ValueMap{};
+
     for (pages) |page| {
         if (!std.mem.eql(u8, page.collection_key, "pages")) continue;
-
         const page_val = try buildPageValue(a, &page);
         const slug = if (page.is_section) "document" else blk: {
             const stem = std.fs.path.stem(page.source_path);
             break :blk stem;
         };
-        try pages_by_slug.put(a, slug, page_val);
+        try pages_root.put(a, try a.dupe(u8, slug), page_val);
     }
-    if (pages_by_slug.count() > 0) {
-        try collections.put(a, "pages", .{ .map = pages_by_slug });
+
+    var nested_keys = std.ArrayListUnmanaged([]const u8){};
+    defer nested_keys.deinit(a);
+    {
+        var bit = buckets.iterator();
+        while (bit.next()) |e| {
+            const pkey = e.key_ptr.*;
+            if (!std.mem.startsWith(u8, pkey, "pages.")) continue;
+            const rest = pkey["pages.".len..];
+            if (rest.len == 0) continue;
+            try nested_keys.append(a, pkey);
+        }
     }
+
+    std.mem.sort([]const u8, nested_keys.items, {}, struct {
+        fn dotCount(s: []const u8) usize {
+            var n: usize = 0;
+            for (s) |c| {
+                if (c == '.') n += 1;
+            }
+            return n;
+        }
+        fn lessThan(_: void, ak: []const u8, bk: []const u8) bool {
+            const ar = ak["pages.".len..];
+            const br = bk["pages.".len..];
+            const ca = dotCount(ar);
+            const cb = dotCount(br);
+            if (ca != cb) return ca > cb;
+            return std.mem.order(u8, ar, br) == .lt;
+        }
+    }.lessThan);
+
+    for (nested_keys.items) |pkey| {
+        const bucket_list = buckets.getPtr(pkey) orelse continue;
+        const items = try a.dupe(toupee.Value, bucket_list.items);
+        const rest = pkey["pages.".len..];
+        const segments = try splitDotSegments(a, rest);
+        defer a.free(segments);
+
+        const rel_prefix = try std.mem.join(a, "/", segments);
+        defer a.free(rel_prefix);
+
+        const section_page = findSectionByRelPrefix(pages, rel_prefix);
+
+        var sub_map = ValueMap{};
+        if (section_page) |sp| {
+            try sub_map.put(a, "document", try buildPageValue(a, sp));
+        }
+        try sub_map.put(a, "items", .{ .list = items });
+
+        for (items) |pv| {
+            if (pv != .map) continue;
+            const src_val = pv.map.get("source") orelse continue;
+            if (src_val != .string) continue;
+            const slug = slugFromSourceUnderPrefix(src_val.string, rel_prefix) orelse continue;
+            try sub_map.put(a, try a.dupe(u8, slug), pv);
+        }
+
+        try mergeNestedLeaf(a, &pages_root, segments, sub_map);
+    }
+
+    if (pages_root.count() > 0) {
+        try collections.put(a, "pages", .{ .map = pages_root });
+    }
+}
+
+fn splitDotSegments(alloc: Allocator, rest: []const u8) Allocator.Error![][]const u8 {
+    var n: usize = 1;
+    for (rest) |c| {
+        if (c == '.') n += 1;
+    }
+    const out = try alloc.alloc([]const u8, n);
+    var idx: usize = 0;
+    var start: usize = 0;
+    for (rest, 0..) |c, i| {
+        if (c == '.') {
+            out[idx] = rest[start..i];
+            idx += 1;
+            start = i + 1;
+        }
+    }
+    out[idx] = rest[start..];
+    return out;
+}
+
+fn sectionRelPrefixForSource(source_path: []const u8) ?[]const u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, source_path, '/');
+    const file = if (slash) |s| source_path[s + 1 ..] else source_path;
+    const ext = fs.path.extension(file);
+    if (file.len < ext.len) return null;
+    const stem = file[0 .. file.len - ext.len];
+    if (!std.mem.eql(u8, stem, "_index")) return null;
+    if (slash) |s| return source_path[0..s] else return "";
+}
+
+fn findSectionByRelPrefix(page_list: []const PageEntry, rel_prefix: []const u8) ?*const PageEntry {
+    for (page_list) |*p| {
+        if (!p.is_section) continue;
+        const sp = sectionRelPrefixForSource(p.source_path) orelse continue;
+        if (std.mem.eql(u8, sp, rel_prefix)) return p;
+    }
+    return null;
+}
+
+fn slugFromSourceUnderPrefix(source: []const u8, rel_prefix: []const u8) ?[]const u8 {
+    if (rel_prefix.len == 0) {
+        if (std.mem.indexOfScalar(u8, source, '/') != null) return null;
+        return std.fs.path.stem(source);
+    }
+    if (source.len < rel_prefix.len + 2) return null;
+    if (!std.mem.startsWith(u8, source, rel_prefix)) return null;
+    if (source[rel_prefix.len] != '/') return null;
+    const rest = source[rel_prefix.len + 1 ..];
+    if (std.mem.indexOfScalar(u8, rest, '/') != null) return null;
+    return std.fs.path.stem(rest);
+}
+
+fn ensureChildMap(a: Allocator, parent: *ValueMap, seg: []const u8) !*ValueMap {
+    const seg_key = try a.dupe(u8, seg);
+    if (parent.getPtr(seg_key)) |vp| {
+        if (vp.* != .map) return error.PathConflict;
+        return &vp.map;
+    }
+    try parent.put(a, seg_key, .{ .map = .{} });
+    return &parent.getPtr(seg_key).?.map;
+}
+
+fn mergeNestedLeaf(a: Allocator, root: *ValueMap, segments: []const []const u8, leaf: ValueMap) !void {
+    if (segments.len == 0) return error.InvalidArgument;
+    var cur: *ValueMap = root;
+    for (segments[0 .. segments.len - 1]) |seg| {
+        cur = try ensureChildMap(a, cur, seg);
+    }
+    const last_seg = segments[segments.len - 1];
+    const last_key = try a.dupe(u8, last_seg);
+    if (cur.getPtr(last_key)) |vp| {
+        if (vp.* != .map) return error.PathConflict;
+        var it = leaf.iterator();
+        while (it.next()) |e| {
+            const k = try a.dupe(u8, e.key_ptr.*);
+            const v = e.value_ptr.*;
+            const vcopy: toupee.Value = if (v == .string) .{ .string = try a.dupe(u8, v.string) } else v;
+            try vp.map.put(a, k, vcopy);
+        }
+        return;
+    }
+    try cur.put(a, last_key, .{ .map = leaf });
 }
 
 /// URL path of parent directory. "/docs/alpha/" -> "/docs/", "/docs/" -> "/", "/" -> empty.
@@ -566,11 +707,13 @@ test "scan: collection building" {
     var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
-    try testing.expect(result.collections.get("pages") != null);
-    try testing.expect(result.collections.get("pages.posts") != null);
-
-    const posts_list = result.collections.get("pages.posts").?.list;
-    try testing.expectEqual(@as(usize, 1), posts_list.len);
+    const pages_root = result.collections.get("pages") orelse return error.TestUnexpectedResult;
+    try testing.expect(pages_root == .map);
+    const posts_map = pages_root.map.get("posts") orelse return error.TestUnexpectedResult;
+    try testing.expect(posts_map == .map);
+    const items_val = posts_map.map.get("items") orelse return error.TestUnexpectedResult;
+    try testing.expect(items_val == .list);
+    try testing.expectEqual(@as(usize, 1), items_val.list.len);
 }
 
 test "scan: missing frontmatter is an error" {
@@ -664,8 +807,89 @@ test "scan: section _index detection" {
     try testing.expectEqual(@as(usize, 1), section_count);
     try testing.expectEqual(@as(usize, 1), non_section_count);
 
-    const posts_coll = result.collections.get("pages.posts").?.list;
-    try testing.expectEqual(@as(usize, 1), posts_coll.len);
+    const pages_root = result.collections.get("pages") orelse return error.TestUnexpectedResult;
+    const posts_map = pages_root.map.get("posts") orelse return error.TestUnexpectedResult;
+    try testing.expect(posts_map.map.get("document") != null);
+    const items_val = posts_map.map.get("items") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), items_val.list.len);
+}
+
+test "scan: children_map groups leaves by parent section url_path" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("pages/posts");
+    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
+    defer pages_dir.close();
+
+    var posts_dir = try pages_dir.openDir("posts", .{});
+    defer posts_dir.close();
+
+    var idx = try posts_dir.createFile("_index.dj", .{});
+    try idx.writeAll("---\ntitle: Hub\n---\nhub");
+    idx.close();
+
+    var a = try posts_dir.createFile("a.dj", .{});
+    try a.writeAll("---\ntitle: A\n---\na");
+    a.close();
+
+    var b = try posts_dir.createFile("b.dj", .{});
+    try b.writeAll("---\ntitle: B\n---\nb");
+    b.close();
+
+    const exts = [_][]const u8{".dj"};
+    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    defer result.deinit();
+
+    const section_url: []const u8 = "/posts/";
+    const children = result.children_map.get(section_url) orelse {
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(usize, 2), children.len);
+}
+
+test "scan: children_map matches spec 13 style slugs" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("pages/posts");
+    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
+    defer pages_dir.close();
+
+    var root_idx = try pages_dir.createFile("_index.dj", .{});
+    try root_idx.writeAll("---\ntitle: Root\n---\nroot");
+    root_idx.close();
+
+    var posts_dir = try pages_dir.openDir("posts", .{});
+    defer posts_dir.close();
+
+    var idx = try posts_dir.createFile("_index.dj", .{});
+    try idx.writeAll("---\ntitle: Post List\n---\nWelcome.");
+    idx.close();
+
+    var first = try posts_dir.createFile("001_first.dj", .{});
+    try first.writeAll("---\ntitle: First Post\n---\nBody.");
+    first.close();
+
+    var second = try posts_dir.createFile("002_second.dj", .{});
+    try second.writeAll("---\ntitle: Second Post\n---\nBody.");
+    second.close();
+
+    const exts = [_][]const u8{".dj"};
+    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    defer result.deinit();
+
+    const section_url: []const u8 = "/posts/";
+    const children = result.children_map.get(section_url) orelse {
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(usize, 2), children.len);
+
+    for (result.pages) |page| {
+        const derived = try deriveUrlPath(testing.allocator, page.output_file);
+        defer testing.allocator.free(derived);
+        try testing.expectEqualStrings(derived, page.url_path);
+    }
 }
 
 test "scan: gated section excludes entire directory" {
@@ -741,7 +965,10 @@ test "scan: collections sorted by filename descending" {
     var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
-    const posts = result.collections.get("pages.posts").?.list;
+    const pages_root = result.collections.get("pages") orelse return error.TestUnexpectedResult;
+    const posts_map = pages_root.map.get("posts") orelse return error.TestUnexpectedResult;
+    const items_val = posts_map.map.get("items") orelse return error.TestUnexpectedResult;
+    const posts = items_val.list;
     try testing.expectEqual(@as(usize, 3), posts.len);
 
     const first_src = posts[0].map.get("source").?.string;
