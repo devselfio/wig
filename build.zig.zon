@@ -26,31 +26,25 @@
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
     .minimum_zig_version = "0.15.2",
-    // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
-    // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
-    // Once all dependencies are fetched, `zig build` no longer requires
-    // internet connectivity.
+    // Git deps: `zig fetch --save git+https://github.com/...#tag` then paste url + hash.
     .dependencies = .{
         .toupee = .{
-            .url = "../toupee",
-            .hash = "toupee-0.1.0-5-xKvP22BgBZ8SKzDUbmA-OdVe0yLdTM6eb94x4eaclP",
+            .url = "git+https://github.com/QuiteClose/toupee.git#v0.2.0",
+            .hash = "12209d95aebe00f79cd92491fd42a9eb703172bcd3391f377cd7dd036e078a93c9ba",
         },
         .comb = .{
-            .url = "../comb",
-            .hash = "comb-1.0.0-S8yh3IT6AgB-OYTgkFmbpJf47WGRwMBN5UQ1ndQiRhND",
+            .url = "git+https://github.com/QuiteClose/comb.git#v1.0.0",
+            .hash = "12207e3984e090599ba497f8ed6191c0c04de544359dd4224613436622b575d2ff1b",
         },
         .zjot = .{
-            .url = "../zjot",
-            .hash = "zjot-0.0.0-_G7YZkdVAgAE-1JnT9XwfnXiHJ73tjVSuPQtGCCQ9z57",
+            .url = "git+https://github.com/QuiteClose/zjot.git#v1.0.0",
+            .hash = "12205fa0d1b904b33f0567d59a4cb2ad222a811af08bb0ee60f1bfe89e5a3ccd7eef",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        // For example...
-        //"LICENSE",
-        //"README.md",
     },
 }

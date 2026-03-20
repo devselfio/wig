@@ -2,15 +2,32 @@
 
 A library-first static site generator in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, colour scheme management, and multi-style site architecture.
 
+## Who this is for
+
+- **Site authors** — Content, frontmatter, data cascade, and Toupee templates: [Rendering pipeline](#rendering-pipeline), [Frontmatter](#frontmatter), [Data cascade](#data-cascade), [Template syntax](#template-syntax), [Page collection](#page-collection).
+- **Zig embedders** — Library API and validation: [Library-first](#library-first), [Two-phase Site struct](#two-phase-site-struct), [Key types](#key-types), [Validation](#validation).
+- **Wig contributors** — Source layout and tests: [Project structure](#project-structure), [Testing](#testing).
+
+## Contents
+
+- [Dependencies](#dependencies)
+- [Build commands](#build-commands)
+- [Project structure](#project-structure)
+- [Architecture](#architecture) (site model, templates, styles, feeds, tags, pagination, output, …)
+- [Conventions](#conventions)
+- [Testing](#testing)
+
 ## Dependencies
 
 | Name | Purpose | License |
 |------|---------|---------|
-| [Toupee](https://github.com/QuiteClose/toupee) | HTML-native template engine (`<t-*>` elements) | MIT |
+| [Toupee](https://github.com/QuiteClose/toupee) | HTML-native template engine (`<t-*>` elements); **v0.2+** includes `$()` dynamic dot-path segments | MIT |
 | [Comb](https://github.com/QuiteClose/comb) | YAML parser | MIT |
 | [zjot](https://github.com/QuiteClose/zjot) | Djot-to-HTML converter | MIT |
 
-## Build Commands
+**`build.zig.zon`** pins these with `git+https://github.com/QuiteClose/{repo}.git#tag` plus a `1220…` content hash so a clone builds without sibling folders. Refresh pins with `zig fetch --save git+https://github.com/QuiteClose/toupee.git#vX.Y.Z` (use **`.url` + `.hash`** in the zon — a bare `git+…` string must not be stored under `.path`).
+
+## Build commands
 
 The wig repo's `build.zig` has `run`, `test`, and install steps only:
 
@@ -22,7 +39,7 @@ zig build run      # run the wig CLI
 
 The `zig build render`, `zig build serve`, `zig build validate` steps are for **scaffolded projects** (after `wig init`); the user's build.zig defines those. The wig repo builds the CLI and runs tests.
 
-## Project Structure
+## Project structure
 
 ```
 wig/
@@ -63,6 +80,12 @@ wig/
 
 Wig is a library that users import into their own Zig project. `wig init` scaffolds a project with `build.zig`, `src/render.zig`, `src/serve.zig`, and `src/validate.zig`. Users own these files and can customise them.
 
+### SSG and optional web framework
+
+**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, YAML specs in `test/NN_*.yaml`, and the CLI cover this end-to-end.
+
+**Optional web framework** pieces (`app.zig`, `router.zig`, `handler.zig`, `session.zig`, and helpers such as `devServer`) exist for users who want HTTP routing, handlers, and sessions on top of a built site. This layer is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite (which only drives full static builds), and APIs may change. Proper specification, coverage, and likely **spec-runner extensions** (e.g. HTTP-level or app-lifecycle tests) are follow-on work.
+
 ### Two-phase Site struct
 
 - `Site.init()` loads config files (config-only).
@@ -102,6 +125,8 @@ For Toupee tags in Djot content, use Djot's raw HTML passthrough:
 
 Pluggable via `Site.init()`. Default: zjot (Djot). The architecture supports additional content formats (e.g. Markdown via `.md` extension) by registering additional parsers. Markdown support is planned but not at launch.
 
+**Djot emphasis:** In zjot/djot, a single asterisk run wraps **strong** (`*word*` → one `<strong>`). Doubling asterisks (`**word**`) opens/closes two delimiter runs and can yield **nested** `<strong>` tags; prefer `*…*` for ordinary bold in specs unless nested strong is intentional.
+
 The `ContentParser` type is a function pointer, defined in `pages.zig` and re-exported by `root.zig`:
 
 ```zig
@@ -111,10 +136,12 @@ pub const ContentParserEntry = struct { extension: []const u8, parse: ContentPar
 
 ### Validation
 
-`Site.validate()` performs a dry run (no rendering). Options:
+`Site.validate()` performs a dry run (no rendering). It returns **`![]const Diagnostic`** (errors/warnings as a slice allocated with the site’s allocator — **caller must `free` the slice** when non-empty). Options:
 
 ```zig
-try site.validate(.{ .external_links = true }); // also check external URLs via HTTP HEAD
+const diags = try site.validate(.{ .external_links = true });
+defer site.allocator.free(diags);
+// inspect diags for .kind (.err / .warning) and .message
 ```
 
 ### Toupee API (template engine)
@@ -205,9 +232,9 @@ Sources merged in priority order (highest priority last -- later sources overrid
 
 **Directory-level data overrides:** The `document.data:` key in `_index.dj` frontmatter can override any data key, not just `document:`. For example, `document: data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
 
-### Page collection (`pages.*`)
+### Page collection
 
-The `pages` context key is a nested map mirroring the `pages/` directory tree. Each page's metadata lives under a reserved `document` key:
+The `pages` context key is a nested map mirroring the `pages/` directory tree (`pages.*` in templates and data). Each page's metadata lives under a reserved `document` key:
 
 - `pages/_index.dj` -> `pages.document` (root page metadata)
 - `pages/about.dj` -> `pages.about.document` (leaf page metadata)
@@ -240,7 +267,7 @@ Wig also injects computed values:
 - `document.ancestors` -- list of ancestor page document maps, from parent to root (nearest first). Empty list for the root page.
 - `document.excerpt` -- from `description:` in frontmatter, or falls back to the first paragraph of content (text-only).
 - `document.thumbnail` -- from `thumbnail:` in frontmatter. Asset path (e.g. `/images/hero.jpg`).
-- `document.toc` -- list of heading maps extracted from rendered content: `{id, text, level}`. Headings come from zjot `<section>` elements.
+- `document.toc` -- list of heading maps extracted from rendered content: `{id, text, level}`. Headings come from zjot `<section>` elements. **`id` is a URL fragment** (e.g. `#Introduction`) suitable for `href` on `<a>`; the HTML `section` still uses the bare id attribute value.
 - `document.draft` -- boolean from frontmatter. When true, page is excluded from `wig build` but included with `wig build --draft`.
 
 These are primitives -- features like breadcrumbs are built by template authors, not provided by Wig. For example, breadcrumbs can be implemented by iterating `document.ancestors` with `order="reverse"` on `<t-for>` to get root-first order.
@@ -333,7 +360,7 @@ Schemes have `light` and `dark` variants. Scheme data lives in `data/colours/{na
 
 **Palette pre-resolution:** Wig resolves palette indirection at load time. When colour scheme data is loaded, Wig walks the `styles` and `syntax` maps and replaces palette names with their hex values. Template authors access resolved values directly (e.g. `colours.mono.light.styles.text.primary` contains `"#000000"`, not `"black"`).
 
-**Future: dynamic path resolution.** Toupee will support `$()` syntax for dynamic key lookup: `mode.palette.$(mode.styles.text.primary)`. This resolves the inner expression first, then uses its value as part of the outer path. Planned but not yet implemented.
+**Dynamic path resolution (Toupee 0.2+):** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colours.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
 
 ### CSS rendering context
 
@@ -345,7 +372,9 @@ CSS files with frontmatter are rendered through Toupee but do **not** have the `
 
 ### Template reusability
 
-Templates should use `document.children` rather than hardcoded collection paths like `pages.posts`. This makes templates section-agnostic -- the same list template works for any section:
+**Section-agnostic listing:** Prefer `document.children` (and includes with `context="document.children as …"`) so one block works for any section without hardcoding `pages.{section}`. See `test/13_post_iteration.yaml`, `test/14_parent_children_links.yaml`, and `test/34_blog_e2e.yaml`.
+
+**Pagination uses an explicit collection path:** `paginate.collection` names a dot-path into the page map (e.g. `pages.posts`). That is intentional — pagination is configured in frontmatter and must point at a concrete collection. See `test/32_pagination.yaml`. This does not conflict with preferring `document.children` in templates; use whichever matches the job (reusable section lists vs paginated slices of a named collection).
 
 ```html
 <t-include template="blocks/list-posts.html" context="document.children as posts" />
@@ -410,19 +439,19 @@ Files in `assets/` are copied verbatim to the output directory without rendering
 
 ### Tags
 
-Document frontmatter may include `document.tags: [music, tech, zig]`. Wig auto-generates tag index pages:
+Document frontmatter may include `document.tags: [music, tech, zig]`. With `taxonomies: [tags]` in site config, Wig auto-generates tag index pages (requires `layouts/tag-index.html` and `layouts/tag-list.html` in the style):
 
-- `/tags/` — index of all tags with counts, ordered by popularity
-- `/tags/{tag}/` — documents with that tag; links to add another tag
-- `/tags/{tag1}/{tag2}/` — documents matching both tags; and so on
+- `/tags/` — index of all tags with counts (**ordered by page count descending**, then slug)
+- `/tags/{slug}/` — documents with that tag
+- `/tags/{a}/{b}/` — documents that have **both** tags; path segments are the two slugs sorted **descending lexicographically** (not by popularity)
 
-Tag order in URLs follows popularity (descending count). Only tag combinations with at least one matching document are generated.
+Only co-occurring pairs that appear on at least one page get an intersection URL.
 
 Context on tag pages: `tag.tags` (all tags with counts), `tag.documents` (matching docs), `tag.path_tags` (tags in current path), `tag.document` (page metadata).
 
 ### Pagination
 
-Frontmatter `paginate:` enables paginated list pages:
+Frontmatter `paginate:` enables paginated list pages. The **`collection`** field is always an explicit dot-path (e.g. `pages.posts`), not `document.children` — see [Template reusability](#template-reusability) for how that relates to section-agnostic templates. Full behaviour (context shape, URL scheme) is defined by `test/32_pagination.yaml`.
 
 ```yaml
 paginate:
@@ -493,14 +522,10 @@ output:
 
 Specs use `templates: layouts:` and `templates: blocks:` (or equivalent). Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`. The test runner KEY_MAP maps `layouts` → `templates/layouts`, `blocks` → `templates/blocks`.
 
-Tests 00-34 cover: minimal builds, error cases (missing config, missing layout), pretty-printing, cross-page links, template inheritance, post iteration, breadcrumbs, transforms, HTML content, includes in content, index naming, error pages, nested paths, nested data, site data, data cascade overrides, directory data inheritance, parent/children links, multiple styles, excerpts/thumbnails, drafts, static assets (assets/), CSS tokens, colour schemes, core templates (_core), CSS bundle concatenation, sitemap, Atom feeds, search index, table of contents, collection sorting, pagination, tags, and blog E2E.
+Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output.files` are the ground truth for behaviour.
 
 ### Test runner modules
 
 - **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (default `zig-out/site`, `zig-out/test`). Pass to `runSpecTests(..., config)`.
 - **OutputVerifier** (`output_verifier.zig`): Verifies output directory against spec; HTML normalization, glob matching (`*` only), stack/arena for comparisons.
 - **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; future loaders (e.g. zip fixtures) can swap in.
-
-## Dependency API Reference
-
-See `DEPENDENCY_VERIFICATION.md` for verified API behaviors, type mappings, and critical findings from the dependency verification sprint.
