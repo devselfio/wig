@@ -18,6 +18,7 @@ pub const FeedConfig = struct {
 pub const SiteConfig = struct {
     url: []const u8,
     title: []const u8,
+    author: []const u8,
     taxonomies: []const []const u8,
     feeds: []const FeedConfig,
     raw: comb.Value,
@@ -51,6 +52,7 @@ pub const StyleConfig = struct {
 const ExtractedConfig = struct {
     url: []const u8,
     title: []const u8,
+    author: []const u8,
     taxonomies: []const []const u8,
     feeds: []const FeedConfig,
 };
@@ -104,6 +106,7 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
         return error.MissingUrl;
 
     const title = val.getStr("title") orelse "";
+    const author = val.getStr("author") orelse "";
 
     const taxonomies = if (val.getArray("taxonomies")) |arr| blk: {
         const items = try a.alloc([]const u8, arr.len);
@@ -121,31 +124,51 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
     } else &[_][]const u8{};
 
     const feeds = if (val.get("feeds")) |feeds_val| blk: {
-        const entries = switch (feeds_val) {
-            .object => |o| o,
+        switch (feeds_val) {
+            .object => |entries| {
+                const items = try a.alloc(FeedConfig, entries.len);
+                var count: usize = 0;
+                for (entries) |entry| {
+                    const name = switch (entry.key) {
+                        .string => |s| s,
+                        else => continue,
+                    };
+                    const feed_obj = entry.value;
+                    const coll = feed_obj.getStr("collection");
+                    if (coll == null) continue;
+                    items[count] = .{
+                        .name = name,
+                        .collection_path = coll.?,
+                        .title = feed_obj.getStr("title") orelse name,
+                    };
+                    count += 1;
+                }
+                break :blk items[0..count];
+            },
+            .array => |arr| {
+                var items = std.ArrayListUnmanaged(FeedConfig){};
+                for (arr) |item| {
+                    const name = switch (item) {
+                        .string => |s| s,
+                        else => continue,
+                    };
+                    try items.append(a, .{
+                        .name = name,
+                        .collection_path = "", // opt-in: match via document.feeds
+                        .title = try std.fmt.allocPrint(a, "{s} - {s}", .{ title, name }),
+                    });
+                }
+                if (items.items.len == 0) break :blk &[_]FeedConfig{};
+                break :blk try a.dupe(FeedConfig, items.items);
+            },
             else => break :blk &[_]FeedConfig{},
-        };
-        const items = try a.alloc(FeedConfig, entries.len);
-        var count: usize = 0;
-        for (entries) |entry| {
-            const name = switch (entry.key) {
-                .string => |s| s,
-                else => continue,
-            };
-            const feed_obj = entry.value;
-            items[count] = .{
-                .name = name,
-                .collection_path = feed_obj.getStr("collection") orelse continue,
-                .title = feed_obj.getStr("title") orelse name,
-            };
-            count += 1;
         }
-        break :blk items[0..count];
     } else &[_]FeedConfig{};
 
     return .{
         .url = url,
         .title = title,
+        .author = author,
         .taxonomies = taxonomies,
         .feeds = feeds,
     };
@@ -180,6 +203,7 @@ pub fn loadSiteConfig(a: Allocator, root: []const u8) !SiteConfig {
     return .{
         .url = extracted.url,
         .title = extracted.title,
+        .author = extracted.author,
         .taxonomies = extracted.taxonomies,
         .feeds = extracted.feeds,
         .raw = parsed.value,

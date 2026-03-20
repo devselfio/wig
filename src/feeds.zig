@@ -12,26 +12,29 @@ pub fn generateAtom(
     pages: []const scanner_mod.PageEntry,
     site_url: []const u8,
     site_title: []const u8,
+    site_author: []const u8,
     output_dir: fs.Dir,
 ) !void {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
 
-    try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     try buf.appendSlice(a, "<feed xmlns=\"http://www.w3.org/2005/Atom\">\n");
 
     try buf.appendSlice(a, "  <title>");
     try appendXmlEscaped(&buf, a, feed_config.title);
     try buf.appendSlice(a, "</title>\n");
 
+    const base = if (site_url.len > 0 and site_url[site_url.len - 1] == '/') site_url[0 .. site_url.len - 1] else site_url;
     try buf.appendSlice(a, "  <link href=\"");
     try appendXmlEscaped(&buf, a, site_url);
-    try buf.appendSlice(a, "\" rel=\"alternate\" />\n");
+    if (site_url.len == 0 or site_url[site_url.len - 1] != '/') try buf.append(a, '/');
+    try buf.appendSlice(a, "\" />\n");
 
-    const feed_path = try std.fmt.allocPrint(a, "{s}/feed.xml", .{feed_config.name});
+    const feed_path = try std.fmt.allocPrint(a, "feeds/{s}.xml", .{feed_config.name});
     defer a.free(feed_path);
     try buf.appendSlice(a, "  <link href=\"");
-    try appendXmlEscaped(&buf, a, site_url);
+    try appendXmlEscaped(&buf, a, base);
     try buf.appendSlice(a, "/");
     try appendXmlEscaped(&buf, a, feed_path);
     try buf.appendSlice(a, "\" rel=\"self\" />\n");
@@ -41,16 +44,27 @@ pub fn generateAtom(
     try buf.appendSlice(a, "/</id>\n");
 
     try buf.appendSlice(a, "  <author><name>");
-    try appendXmlEscaped(&buf, a, site_title);
+    try appendXmlEscaped(&buf, a, if (site_author.len > 0) site_author else site_title);
     try buf.appendSlice(a, "</name></author>\n");
 
-    for (pages) |page| {
-        if (!matchesCollection(page, feed_config.collection_path)) continue;
+    var feed_pages = std.ArrayListUnmanaged(*const scanner_mod.PageEntry){};
+    for (pages) |*page| {
+        if (!matchesFeed(page.*, feed_config)) continue;
         if (page.is_section) continue;
+        try feed_pages.append(a, page);
+    }
+    std.mem.sort(*const scanner_mod.PageEntry, feed_pages.items, {}, struct {
+        fn lessThan(_: void, lhs: *const scanner_mod.PageEntry, rhs: *const scanner_mod.PageEntry) bool {
+            const l_date = getDocStr(lhs.frontmatter, "date") orelse "";
+            const r_date = getDocStr(rhs.frontmatter, "date") orelse "";
+            return std.mem.order(u8, r_date, l_date) == .lt; // newest first
+        }
+    }.lessThan);
 
+    for (feed_pages.items) |page| {
         try buf.appendSlice(a, "  <entry>\n");
 
-        const title = getStr(page.frontmatter, "title") orelse page.source_path;
+        const title = getDocStr(page.frontmatter, "title") orelse page.source_path;
         try buf.appendSlice(a, "    <title>");
         try appendXmlEscaped(&buf, a, title);
         try buf.appendSlice(a, "</title>\n");
@@ -63,10 +77,16 @@ pub fn generateAtom(
         try appendXmlEscaped(&buf, a, page.absolute_url);
         try buf.appendSlice(a, "</id>\n");
 
-        if (getStr(page.frontmatter, "date")) |date| {
+        if (getDocStr(page.frontmatter, "date")) |date| {
             try buf.appendSlice(a, "    <updated>");
             try appendXmlEscaped(&buf, a, date);
             try buf.appendSlice(a, "T00:00:00Z</updated>\n");
+        }
+
+        if (getDocStr(page.frontmatter, "description")) |summary| {
+            try buf.appendSlice(a, "    <summary>");
+            try appendXmlEscaped(&buf, a, summary);
+            try buf.appendSlice(a, "</summary>\n");
         }
 
         try buf.appendSlice(a, "  </entry>\n");
@@ -74,8 +94,8 @@ pub fn generateAtom(
 
     try buf.appendSlice(a, "</feed>\n");
 
-    output_dir.makePath(feed_config.name) catch {};
-    const out_path = try std.fmt.allocPrint(a, "{s}/feed.xml", .{feed_config.name});
+    output_dir.makePath("feeds") catch {};
+    const out_path = try std.fmt.allocPrint(a, "feeds/{s}.xml", .{feed_config.name});
     defer a.free(out_path);
 
     var f = try output_dir.createFile(out_path, .{});
@@ -92,13 +112,29 @@ pub fn generateSitemap(
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
 
-    try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     try buf.appendSlice(a, "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
 
-    for (pages) |page| {
-        try buf.appendSlice(a, "  <url><loc>");
+    var indices = try a.alloc(usize, pages.len);
+    defer a.free(indices);
+    for (0..pages.len) |i| indices[i] = i;
+    std.mem.sort(usize, indices, pages, struct {
+        fn lessThan(ctx: []const scanner_mod.PageEntry, lhs: usize, rhs: usize) bool {
+            return std.mem.order(u8, ctx[lhs].url_path, ctx[rhs].url_path) == .lt;
+        }
+    }.lessThan);
+
+    for (indices) |i| {
+        const page = &pages[i];
+        try buf.appendSlice(a, "  <url>\n    <loc>");
         try appendXmlEscaped(&buf, a, page.absolute_url);
-        try buf.appendSlice(a, "</loc></url>\n");
+        try buf.appendSlice(a, "</loc>");
+        if (getDocStr(page.frontmatter, "date")) |date| {
+            try buf.appendSlice(a, "\n    <lastmod>");
+            try appendXmlEscaped(&buf, a, date);
+            try buf.appendSlice(a, "</lastmod>");
+        }
+        try buf.appendSlice(a, "\n  </url>\n");
     }
 
     try buf.appendSlice(a, "</urlset>\n");
@@ -108,12 +144,31 @@ pub fn generateSitemap(
     try f.writeAll(buf.items);
 }
 
-fn matchesCollection(page: scanner_mod.PageEntry, collection_path: []const u8) bool {
-    return std.mem.eql(u8, page.collection_key, collection_path);
+fn matchesFeed(page: scanner_mod.PageEntry, feed_config: config_mod.FeedConfig) bool {
+    if (feed_config.collection_path.len > 0) {
+        return std.mem.eql(u8, page.collection_key, feed_config.collection_path);
+    }
+    // Opt-in: document.feeds contains feed name
+    if (page.frontmatter != .map) return false;
+    const doc = page.frontmatter.map.get("document") orelse return false;
+    if (doc != .map) return false;
+    const feeds_val = doc.map.get("feeds") orelse return false;
+    if (feeds_val != .list) return false;
+    for (feeds_val.list) |item| {
+        if (item == .string and std.mem.eql(u8, item.string, feed_config.name)) return true;
+    }
+    return false;
 }
 
-fn getStr(fm: @import("toupee").Value, key: []const u8) ?[]const u8 {
+fn getDocStr(fm: @import("toupee").Value, key: []const u8) ?[]const u8 {
     if (fm != .map) return null;
+    if (fm.map.get("document")) |doc| {
+        if (doc == .map) {
+            const val = doc.map.get(key) orelse return null;
+            if (val != .string) return null;
+            return val.string;
+        }
+    }
     const val = fm.map.get(key) orelse return null;
     if (val != .string) return null;
     return val.string;
@@ -168,9 +223,9 @@ test "generateAtom: produces valid Atom XML" {
         .title = "Blog Feed",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", tmp.dir);
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", "My Site", tmp.dir);
 
-    const content = try tmp.dir.readFileAlloc(a, "blog/feed.xml", 64 * 1024);
+    const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "<feed xmlns=") != null);
     try testing.expect(std.mem.indexOf(u8, content, "First Post") != null);
     try testing.expect(std.mem.indexOf(u8, content, "2026-03-01T00:00:00Z") != null);
@@ -218,9 +273,9 @@ test "generateAtom: filters by collection" {
         .title = "Blog",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", tmp.dir);
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", "Site", tmp.dir);
 
-    const content = try tmp.dir.readFileAlloc(a, "blog/feed.xml", 64 * 1024);
+    const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "Post") != null);
     try testing.expect(std.mem.indexOf(u8, content, "Tutorial") == null);
 }

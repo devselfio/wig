@@ -39,8 +39,31 @@ pub fn renderOne(
     base_ctx: *const toupee.Context,
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
     content_parsers: []const ContentParserEntry,
+    transform_registry: *const toupee.transform.Registry,
+    scan_result: *const scanner_mod.ScanResult,
 ) !RenderResult {
-    const content_html = try parseContent(a, entry.content_body, entry.extension, content_parsers);
+    var interp_ctx = try toupee.Context.initFrom(a, base_ctx);
+    defer interp_ctx.deinit();
+    try detachPerPageDocumentMap(a, &interp_ctx, base_ctx);
+    try interp_ctx.putAt("document.path", .{ .string = entry.url_path });
+    try interp_ctx.putAt("document.url", .{ .string = entry.absolute_url });
+    if (entry.frontmatter == .map) {
+        if (entry.frontmatter.map.get("document")) |doc_val| {
+            if (doc_val == .map) {
+                var doc_it = doc_val.map.iterator();
+                while (doc_it.next()) |doc_entry| {
+                    const doc_key = try std.fmt.allocPrint(a, "document.{s}", .{doc_entry.key_ptr.*});
+                    const val = doc_entry.value_ptr.*;
+                    const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+                    try interp_ctx.putAt(doc_key, val_copy);
+                }
+            }
+        }
+    }
+    const content_preprocessed = try resolveInterpolations(a, entry.content_body, &interp_ctx, transform_registry);
+    errdefer a.free(content_preprocessed);
+    const content_html = try parseContent(a, content_preprocessed, entry.extension, content_parsers);
+    a.free(content_preprocessed);
     const search_content = try a.dupe(u8, content_html);
 
     var resolver: toupee.Resolver = .{};
@@ -51,46 +74,139 @@ pub fn renderOne(
     const excerpt = extractExcerpt(a, entry.frontmatter, shortcoded);
 
     var ctx = try toupee.Context.initFrom(a, base_ctx);
+    try detachPerPageDocumentMap(a, &ctx, base_ctx);
     try ctx.putAt("page.path", .{ .string = entry.url_path });
     try ctx.putAt("page.url", .{ .string = entry.absolute_url });
+    try ctx.putAt("document.path", .{ .string = entry.url_path });
+    try ctx.putAt("document.url", .{ .string = entry.absolute_url });
+
+    try mergeDocumentDataCascade(a, entry, scan_result, &ctx);
+
+    if (scan_result.parent_map.get(entry.url_path)) |parent_opt| {
+        if (parent_opt) |parent_page| {
+            const title = getDocTitle(parent_page.frontmatter) orelse "";
+            var parent_map = ValueMap{};
+            try parent_map.put(a, "path", .{ .string = parent_page.url_path });
+            try parent_map.put(a, "title", .{ .string = title });
+            try ctx.putAt("document.parent", .{ .map = parent_map });
+        }
+    }
+
+    // document.ancestors: [root, ..., parent] (root first, for breadcrumbs with t-for)
+    var ancestors_list = std.ArrayListUnmanaged(toupee.Value){};
+    var current_url = entry.url_path;
+    while (scan_result.parent_map.get(current_url)) |parent_opt| {
+        const parent_page = parent_opt orelse break;
+        const title = getDocTitle(parent_page.frontmatter) orelse "";
+        var ancestor_map = ValueMap{};
+        try ancestor_map.put(a, "path", .{ .string = parent_page.url_path });
+        try ancestor_map.put(a, "title", .{ .string = title });
+        try ancestors_list.append(a, .{ .map = ancestor_map });
+        current_url = parent_page.url_path;
+    }
+    // Reverse so root is first (template iterates without order="reverse")
+    std.mem.reverse(toupee.Value, ancestors_list.items);
+    const ancestors = try a.dupe(toupee.Value, ancestors_list.items);
+    defer a.free(ancestors);
+    try ctx.putAt("document.ancestors", .{ .list = ancestors });
+
+    if (scan_result.children_map.get(entry.url_path)) |children| {
+        const child_vals = try a.alloc(toupee.Value, children.len);
+        for (children, child_vals) |child_page, *cv| {
+            const title = getDocTitle(child_page.frontmatter) orelse "";
+            var child_map = ValueMap{};
+            try child_map.put(a, "path", .{ .string = child_page.url_path });
+            try child_map.put(a, "title", .{ .string = title });
+            cv.* = .{ .map = child_map };
+        }
+        std.mem.sort(toupee.Value, child_vals, {}, struct {
+            fn lessThan(_: void, lhs: toupee.Value, rhs: toupee.Value) bool {
+                const l_path = if (lhs == .map) (lhs.map.get("path") orelse return false) else return false;
+                const r_path = if (rhs == .map) (rhs.map.get("path") orelse return true) else return true;
+                const l_str = if (l_path == .string) l_path.string else return false;
+                const r_str = if (r_path == .string) r_path.string else return true;
+                return std.mem.order(u8, l_str, r_str) == .lt;
+            }
+        }.lessThan);
+        try ctx.putAt("document.children", .{ .list = child_vals });
+    } else {
+        try ctx.putAt("document.children", .{ .list = &[_]toupee.Value{} });
+    }
+
     try ctx.putAt("page.toc", toc_value);
-    if (excerpt) |e| try ctx.putAt("page.excerpt", .{ .string = e });
+    try ctx.putAt("document.toc", toc_value);
+    if (excerpt) |e| {
+        try ctx.putAt("page.excerpt", .{ .string = e });
+        try ctx.putAt("document.excerpt", .{ .string = e });
+    } else {
+        try ctx.putAt("document.excerpt", .{ .string = "" });
+    }
 
     if (entry.frontmatter == .map) {
         var fm_it = entry.frontmatter.map.iterator();
         while (fm_it.next()) |fm_entry| {
             const key = try std.fmt.allocPrint(a, "page.{s}", .{fm_entry.key_ptr.*});
             try ctx.putAt(key, fm_entry.value_ptr.*);
+            // Merge page frontmatter document.* into top-level document (data cascade)
+            if (std.mem.eql(u8, fm_entry.key_ptr.*, "document") and fm_entry.value_ptr.* == .map) {
+                var doc_it = fm_entry.value_ptr.*.map.iterator();
+                while (doc_it.next()) |doc_entry| {
+                    const doc_key = try std.fmt.allocPrint(a, "document.{s}", .{doc_entry.key_ptr.*});
+                    const val = doc_entry.value_ptr.*;
+                    const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+                    try ctx.putAt(doc_key, val_copy);
+                }
+            }
         }
     }
 
     try ctx.setSlot("", shortcoded);
 
-    const style_name = getStyleName(entry.frontmatter) orelse "default";
-    const layout_short = getLayoutName(entry.frontmatter) orelse "page.html";
+    const style_name = getStyleFromCascade(a, entry, scan_result, base_ctx) orelse "default";
+    const style_path = try std.fmt.allocPrint(a, "styles.{s}", .{style_name});
+    defer a.free(style_path);
+    if (ctx.resolve(style_path)) |style_val| {
+        try ctx.putAt("document.style", style_val);
+    }
+    const layout_short = getLayoutFromCascade(a, entry, scan_result, base_ctx) orelse
+        base_ctx.resolveString("document.layout") orelse "page.html";
+    try ctx.putAt("document.layout", .{ .string = try a.dupe(u8, layout_short) });
 
-    // Build the full layout name, trying layouts/ first, then html/ for backward compat
+    // Build the full layout name: {style}/templates/layouts/{name}
+    // Short form (page.html) → layouts/; explicit (layouts/page.html) or cross-style (_core:layouts/base.html) as-is
+    // Always use full path since engine caches templates with that key; fallback to layout_short only for loader resolution.
     const layout_name = blk: {
-        const layouts_name = try std.fmt.allocPrint(a, "{s}/layouts/{s}", .{ style_name, layout_short });
-        if (engine.cache.contains(layouts_name)) break :blk layouts_name;
-        a.free(layouts_name);
-
-        const html_name = try std.fmt.allocPrint(a, "{s}/html/{s}", .{ style_name, layout_short });
-        if (engine.cache.contains(html_name)) break :blk html_name;
-        a.free(html_name);
-
-        // Try the layout value as-is (full path in frontmatter)
-        break :blk try a.dupe(u8, layout_short);
+        const target_style = style_name;
+        const path = blk2: {
+            // Cross-style: _core:layouts/base.html → _core/templates/layouts/base.html
+            if (std.mem.indexOf(u8, layout_short, ":")) |colon_pos| {
+                const s = layout_short[0..colon_pos];
+                const p = layout_short[colon_pos + 1 ..];
+                break :blk2 try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ s, p });
+            }
+            // Explicit path: layouts/page.html
+            if (std.mem.indexOf(u8, layout_short, "/") != null) {
+                break :blk2 try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ target_style, layout_short });
+            }
+            // Short form: page.html → layouts/page.html
+            break :blk2 try std.fmt.allocPrint(a, "{s}/templates/layouts/{s}", .{ target_style, layout_short });
+        };
+        defer a.free(path);
+        break :blk try a.dupe(u8, path);
     };
 
     const style_loader = root_mod.StyleLoader{
         .templates = template_map,
         .style_name = style_name,
     };
+    const loader = style_loader.loader();
 
-    const output_html = engine.renderTemplate(a, layout_name, &ctx, style_loader.loader(), .{}) catch |err| switch (err) {
-        error.TemplateNotFound => return error.MissingTemplate,
-        else => return err,
+    const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
+        if (err != error.TemplateNotFound) return err;
+        // Fallback: template may be in loader but not engine cache
+        const src = (loader.getSource(a, layout_name) catch return error.MissingTemplate) orelse return error.MissingTemplate;
+        defer a.free(src);
+        break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| return e;
     };
 
     return .{
@@ -99,31 +215,356 @@ pub fn renderOne(
     };
 }
 
-/// Renders all pages sequentially. Parallel rendering (thread pool)
-/// is deferred to a later step.
-pub fn renderAll(
+/// Renders a single page with pagination context. Same as renderOne but adds
+/// paginate from the chunk to context. Used for list layouts with paginate frontmatter.
+fn renderOneWithPaginate(
     a: Allocator,
-    all_pages: []const scanner_mod.PageEntry,
+    entry: *const scanner_mod.PageEntry,
+    chunk: PaginationChunk,
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
     content_parsers: []const ContentParserEntry,
+    transform_registry: *const toupee.transform.Registry,
+    scan_result: *const scanner_mod.ScanResult,
+) !RenderResult {
+    var interp_ctx = try toupee.Context.initFrom(a, base_ctx);
+    defer interp_ctx.deinit();
+    try detachPerPageDocumentMap(a, &interp_ctx, base_ctx);
+    try interp_ctx.putAt("document.path", .{ .string = entry.url_path });
+    try interp_ctx.putAt("document.url", .{ .string = entry.absolute_url });
+    if (entry.frontmatter == .map) {
+        if (entry.frontmatter.map.get("document")) |doc_val| {
+            if (doc_val == .map) {
+                var doc_it = doc_val.map.iterator();
+                while (doc_it.next()) |doc_entry| {
+                    const doc_key = try std.fmt.allocPrint(a, "document.{s}", .{doc_entry.key_ptr.*});
+                    const val = doc_entry.value_ptr.*;
+                    const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+                    try interp_ctx.putAt(doc_key, val_copy);
+                }
+            }
+        }
+    }
+    const content_preprocessed = try resolveInterpolations(a, entry.content_body, &interp_ctx, transform_registry);
+    errdefer a.free(content_preprocessed);
+    const content_html = try parseContent(a, content_preprocessed, entry.extension, content_parsers);
+    a.free(content_preprocessed);
+    const search_content = try a.dupe(u8, content_html);
+
+    var resolver: toupee.Resolver = .{};
+    const shortcoded = toupee.render(a, content_html, base_ctx, resolver.loader(), .{}) catch content_html;
+
+    const toc_entries = try toc_mod.extract(a, shortcoded);
+    const toc_value = try toc_mod.toValue(a, toc_entries);
+    const excerpt = extractExcerpt(a, entry.frontmatter, shortcoded);
+
+    var ctx = try toupee.Context.initFrom(a, base_ctx);
+    try detachPerPageDocumentMap(a, &ctx, base_ctx);
+    try ctx.putAt("page.path", .{ .string = entry.url_path });
+    try ctx.putAt("page.url", .{ .string = entry.absolute_url });
+    try ctx.putAt("document.path", .{ .string = entry.url_path });
+    try ctx.putAt("document.url", .{ .string = entry.absolute_url });
+    try ctx.put("paginate", chunk.context);
+
+    try mergeDocumentDataCascade(a, entry, scan_result, &ctx);
+
+    if (scan_result.parent_map.get(entry.url_path)) |parent_opt| {
+        if (parent_opt) |parent_page| {
+            const title = getDocTitle(parent_page.frontmatter) orelse "";
+            var parent_map = ValueMap{};
+            try parent_map.put(a, "path", .{ .string = parent_page.url_path });
+            try parent_map.put(a, "title", .{ .string = title });
+            try ctx.putAt("document.parent", .{ .map = parent_map });
+        }
+    }
+
+    var ancestors_list = std.ArrayListUnmanaged(toupee.Value){};
+    var current_url = entry.url_path;
+    while (scan_result.parent_map.get(current_url)) |parent_opt| {
+        const parent_page = parent_opt orelse break;
+        const title = getDocTitle(parent_page.frontmatter) orelse "";
+        var ancestor_map = ValueMap{};
+        try ancestor_map.put(a, "path", .{ .string = parent_page.url_path });
+        try ancestor_map.put(a, "title", .{ .string = title });
+        try ancestors_list.append(a, .{ .map = ancestor_map });
+        current_url = parent_page.url_path;
+    }
+    std.mem.reverse(toupee.Value, ancestors_list.items);
+    const ancestors = try a.dupe(toupee.Value, ancestors_list.items);
+    defer a.free(ancestors);
+    try ctx.putAt("document.ancestors", .{ .list = ancestors });
+
+    if (scan_result.children_map.get(entry.url_path)) |children| {
+        const child_vals = try a.alloc(toupee.Value, children.len);
+        for (children, child_vals) |child_page, *cv| {
+            const title = getDocTitle(child_page.frontmatter) orelse "";
+            var child_map = ValueMap{};
+            try child_map.put(a, "path", .{ .string = child_page.url_path });
+            try child_map.put(a, "title", .{ .string = title });
+            cv.* = .{ .map = child_map };
+        }
+        std.mem.sort(toupee.Value, child_vals, {}, struct {
+            fn lessThan(_: void, lhs: toupee.Value, rhs: toupee.Value) bool {
+                const l_path = if (lhs == .map) (lhs.map.get("path") orelse return false) else return false;
+                const r_path = if (rhs == .map) (rhs.map.get("path") orelse return true) else return true;
+                const l_str = if (l_path == .string) l_path.string else return false;
+                const r_str = if (r_path == .string) r_path.string else return true;
+                return std.mem.order(u8, l_str, r_str) == .lt;
+            }
+        }.lessThan);
+        try ctx.putAt("document.children", .{ .list = child_vals });
+    } else {
+        try ctx.putAt("document.children", .{ .list = &[_]toupee.Value{} });
+    }
+
+    try ctx.putAt("page.toc", toc_value);
+    try ctx.putAt("document.toc", toc_value);
+    if (excerpt) |e| {
+        try ctx.putAt("page.excerpt", .{ .string = e });
+        try ctx.putAt("document.excerpt", .{ .string = e });
+    } else {
+        try ctx.putAt("document.excerpt", .{ .string = "" });
+    }
+
+    if (entry.frontmatter == .map) {
+        var fm_it = entry.frontmatter.map.iterator();
+        while (fm_it.next()) |fm_entry| {
+            const key = try std.fmt.allocPrint(a, "page.{s}", .{fm_entry.key_ptr.*});
+            try ctx.putAt(key, fm_entry.value_ptr.*);
+            if (std.mem.eql(u8, fm_entry.key_ptr.*, "document") and fm_entry.value_ptr.* == .map) {
+                var doc_it = fm_entry.value_ptr.*.map.iterator();
+                while (doc_it.next()) |doc_entry| {
+                    const doc_key = try std.fmt.allocPrint(a, "document.{s}", .{doc_entry.key_ptr.*});
+                    const val = doc_entry.value_ptr.*;
+                    const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+                    try ctx.putAt(doc_key, val_copy);
+                }
+            }
+        }
+    }
+
+    try ctx.setSlot("", shortcoded);
+
+    const style_name = getStyleFromCascade(a, entry, scan_result, base_ctx) orelse "default";
+    const style_path = try std.fmt.allocPrint(a, "styles.{s}", .{style_name});
+    defer a.free(style_path);
+    if (ctx.resolve(style_path)) |style_val| {
+        try ctx.putAt("document.style", style_val);
+    }
+    const layout_short = getLayoutFromCascade(a, entry, scan_result, base_ctx) orelse
+        base_ctx.resolveString("document.layout") orelse "page.html";
+    try ctx.putAt("document.layout", .{ .string = try a.dupe(u8, layout_short) });
+
+    const layout_name = blk: {
+        const target_style = style_name;
+        const path = blk2: {
+            if (std.mem.indexOf(u8, layout_short, ":")) |colon_pos| {
+                const s = layout_short[0..colon_pos];
+                const p = layout_short[colon_pos + 1 ..];
+                break :blk2 try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ s, p });
+            }
+            if (std.mem.indexOf(u8, layout_short, "/") != null) {
+                break :blk2 try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ target_style, layout_short });
+            }
+            break :blk2 try std.fmt.allocPrint(a, "{s}/templates/layouts/{s}", .{ target_style, layout_short });
+        };
+        defer a.free(path);
+        break :blk try a.dupe(u8, path);
+    };
+
+    const style_loader = root_mod.StyleLoader{
+        .templates = template_map,
+        .style_name = style_name,
+    };
+    const loader = style_loader.loader();
+
+    const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
+        if (err != error.TemplateNotFound) return err;
+        const src = (loader.getSource(a, layout_name) catch return error.MissingTemplate) orelse return error.MissingTemplate;
+        defer a.free(src);
+        break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| return e;
+    };
+
+    return .{
+        .output_html = output_html,
+        .search_content = search_content,
+    };
+}
+
+/// Paginate config extracted from frontmatter.
+pub const PaginateConfig = struct {
+    collection: []const u8,
+    size: usize,
+    path: []const u8,
+    alias: []const u8,
+};
+
+/// Extracts paginate config from frontmatter if present.
+pub fn getPaginateConfig(fm: toupee.Value) ?PaginateConfig {
+    if (fm != .map) return null;
+    const paginate_val = fm.map.get("paginate") orelse return null;
+    if (paginate_val != .map) return null;
+    const coll = paginate_val.map.get("collection") orelse return null;
+    if (coll != .string) return null;
+    const size_val = paginate_val.map.get("size") orelse return null;
+    if (size_val != .integer) return null;
+    const path_val = paginate_val.map.get("path");
+    const path_str = if (path_val) |pv| if (pv == .string) pv.string else "page" else "page";
+    const alias_val = paginate_val.map.get("alias");
+    const alias_str = if (alias_val) |av| if (av == .string) av.string else "posts" else "posts";
+    return .{
+        .collection = coll.string,
+        .size = @intCast(size_val.integer),
+        .path = path_str,
+        .alias = alias_str,
+    };
+}
+
+/// Resolves a collection from context by dot-path (e.g. "pages.posts").
+fn resolveCollection(ctx: *const toupee.Context, path: []const u8) ?[]const toupee.Value {
+    const resolved = ctx.resolve(path) orelse return null;
+    if (resolved != .list) return null;
+    return resolved.list;
+}
+
+/// Converts a pagination URL path (e.g. "/posts/", "/posts/page/2/") to output file path.
+fn paginateUrlPathToFile(a: Allocator, url_path: []const u8) ![]const u8 {
+    var trimmed = url_path;
+    if (trimmed.len > 0 and trimmed[0] == '/') trimmed = trimmed[1..];
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '/') trimmed = trimmed[0 .. trimmed.len - 1];
+    if (trimmed.len == 0) return try a.dupe(u8, "index.html");
+    return try std.fmt.allocPrint(a, "{s}/index.html", .{trimmed});
+}
+
+/// Renders all pages sequentially. Parallel rendering (thread pool)
+/// is deferred to a later step. Pages with paginate config produce multiple output files.
+pub fn renderAll(
+    a: Allocator,
+    scan_result: *const scanner_mod.ScanResult,
+    engine: *const toupee.Engine,
+    base_ctx: *const toupee.Context,
+    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
+    content_parsers: []const ContentParserEntry,
+    transform_registry: *const toupee.transform.Registry,
     output_dir: fs.Dir,
 ) ![]RenderResult {
+    const all_pages = scan_result.pages;
     const results = try a.alloc(RenderResult, all_pages.len);
 
     for (all_pages, 0..) |*page, i| {
-        const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers);
+        const paginate_cfg = getPaginateConfig(page.frontmatter);
 
-        output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
-        var f = try output_dir.createFile(page.output_file, .{});
-        defer f.close();
-        try f.writeAll(result.output_html);
+        if (paginate_cfg != null and page.is_section) {
+            const cfg = paginate_cfg.?;
+            const items = resolveCollection(@constCast(base_ctx), cfg.collection) orelse {
+                results[i] = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
+                var f = try output_dir.createFile(page.output_file, .{});
+                defer f.close();
+                try f.writeAll(results[i].output_html);
+                continue;
+            };
 
-        results[i] = result;
+            const base_path = page.url_path;
+            const chunks = try paginate(a, items, cfg.size, base_path, cfg.path);
+            defer a.free(chunks);
+
+            var first_result: ?RenderResult = null;
+            for (chunks) |chunk| {
+                const result = try renderOneWithPaginate(a, page, chunk, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                const file_path = try paginateUrlPathToFile(a, chunk.output_path);
+                defer a.free(file_path);
+                output_dir.makePath(std.fs.path.dirname(file_path) orelse ".") catch {};
+                var f = try output_dir.createFile(file_path, .{});
+                defer f.close();
+                try f.writeAll(result.output_html);
+                if (first_result == null) first_result = result;
+            }
+            results[i] = first_result.?;
+        } else {
+            const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+            output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
+            var f = try output_dir.createFile(page.output_file, .{});
+            defer f.close();
+            try f.writeAll(result.output_html);
+            results[i] = result;
+        }
     }
 
     return results;
+}
+
+/// Resolves `{{ variable }}` interpolations in content using the given context.
+/// Supports `{{ path }}` and `{{ path | transform }}` / `{{ path | transform:arg }}`.
+/// Runs before content parsing (zjot) so Djot links get resolved URLs.
+fn resolveInterpolations(
+    a: Allocator,
+    content: []const u8,
+    ctx: *const toupee.Context,
+    transform_registry: *const toupee.transform.Registry,
+) ![]const u8 {
+    var out = std.ArrayListUnmanaged(u8){};
+    defer out.deinit(a);
+    var pos: usize = 0;
+
+    while (std.mem.indexOfPos(u8, content, pos, "{{")) |open| {
+        try out.appendSlice(a, content[pos..open]);
+        pos = open + 2;
+
+        const close = std.mem.indexOfPos(u8, content, pos, "}}") orelse {
+            try out.appendSlice(a, "{{");
+            pos = open + 2;
+            continue;
+        };
+
+        var inner = std.mem.trim(u8, content[pos..close], " \t\n\r");
+        pos = close + 2;
+
+        // Split on | for transforms (e.g. {{ x | upper }} or {{ x | date:%B %e, %Y }})
+        const pipe = std.mem.indexOf(u8, inner, "|");
+        const path = if (pipe) |p| std.mem.trim(u8, inner[0..p], " \t\n\r") else inner;
+
+        const resolved = ctx.resolve(path) orelse {
+            try out.appendSlice(a, "");
+            continue;
+        };
+
+        const str_val = try resolved.toStringValue(a) orelse {
+            try out.appendSlice(a, "");
+            continue;
+        };
+        defer a.free(str_val);
+
+        if (pipe) |p| {
+            var transform_part = std.mem.trim(u8, inner[p + 1 ..], " \t\n\r");
+            const colon = std.mem.indexOf(u8, transform_part, ":");
+            const tname = if (colon) |c| transform_part[0..c] else transform_part;
+            const targs = if (colon) |c| blk: {
+                const arg_str = std.mem.trim(u8, transform_part[c + 1 ..], " \t\n\r");
+                const arg_slice = try a.alloc([]const u8, 1);
+                arg_slice[0] = arg_str;
+                break :blk arg_slice;
+            } else &[_][]const u8{};
+
+            defer if (colon != null) a.free(targs);
+
+            if (transform_registry.get(tname)) |tfn| {
+                const transformed = tfn(a, str_val, targs) catch {
+                    try out.appendSlice(a, str_val);
+                    continue;
+                };
+                defer a.free(transformed);
+                try out.appendSlice(a, transformed);
+            } else {
+                try out.appendSlice(a, str_val);
+            }
+        } else {
+            try out.appendSlice(a, str_val);
+        }
+    }
+    try out.appendSlice(a, content[pos..]);
+    return try out.toOwnedSlice(a);
 }
 
 /// Dispatches content to the appropriate parser by file extension.
@@ -153,8 +594,17 @@ pub fn extractExcerptPublic(a: Allocator, fm: toupee.Value, content: []const u8)
 
 fn extractExcerpt(a: Allocator, fm: toupee.Value, content: []const u8) ?[]const u8 {
     if (fm == .map) {
+        // Top-level description
         if (fm.map.get("description")) |desc| {
             if (desc == .string) return desc.string;
+        }
+        // document.description (frontmatter cascade)
+        if (fm.map.get("document")) |doc_val| {
+            if (doc_val == .map) {
+                if (doc_val.map.get("description")) |desc| {
+                    if (desc == .string) return desc.string;
+                }
+            }
         }
     }
 
@@ -228,18 +678,249 @@ pub const PaginationChunk = struct {
     output_path: []const u8,
 };
 
+pub fn getDocTitle(fm: toupee.Value) ?[]const u8 {
+    if (fm != .map) return null;
+    if (fm.map.get("document")) |doc_val| {
+        if (doc_val == .map) {
+            if (doc_val.map.get("title")) |title_val| {
+                if (title_val == .string) return title_val.string;
+            }
+        }
+    }
+    return null;
+}
+
 fn getLayoutName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
-    const val = fm.map.get("layout") orelse return null;
-    if (val != .string) return null;
-    return val.string;
+    // Prefer document.layout (data cascade), then top-level layout
+    if (fm.map.get("document")) |doc_val| {
+        if (doc_val == .map) {
+            if (doc_val.map.get("layout")) |layout_val| {
+                if (layout_val == .string) return layout_val.string;
+            }
+        }
+    }
+    if (fm.map.get("layout")) |val| {
+        if (val == .string) return val.string;
+    }
+    return null;
+}
+
+/// Merges document.data from ancestor _index pages and the current page into context (root first, closest wins).
+/// Applies document.data.document.* to document.* and document.data.site.* to site.*.
+/// Includes the current page so section _index document.data applies when rendering that section.
+fn mergeDocumentDataCascade(
+    a: Allocator,
+    entry: *const scanner_mod.PageEntry,
+    scan_result: *const scanner_mod.ScanResult,
+    ctx: *toupee.Context,
+) !void {
+    var merged_doc = ValueMap{};
+    var merged_site = ValueMap{};
+
+    var ancestors: std.ArrayListUnmanaged(*const scanner_mod.PageEntry) = .{};
+    defer ancestors.deinit(a);
+    var current_url = entry.url_path;
+    while (scan_result.parent_map.get(current_url)) |parent_opt| {
+        const parent = parent_opt orelse break;
+        try ancestors.append(a, parent);
+        current_url = parent.url_path;
+    }
+    std.mem.reverse(*const scanner_mod.PageEntry, ancestors.items);
+
+    // Process ancestors root-first, then current page (closest wins)
+    for (ancestors.items) |ancestor| {
+        const data_val = getDocumentData(ancestor.frontmatter) orelse continue;
+        if (data_val != .map) continue;
+        if (data_val.map.get("document")) |doc_val| {
+            if (doc_val == .map) {
+                var it = doc_val.map.iterator();
+                while (it.next()) |e| {
+                    try merged_doc.put(a, e.key_ptr.*, e.value_ptr.*);
+                }
+            }
+        }
+        if (data_val.map.get("site")) |site_val| {
+            if (site_val == .map) {
+                var it = site_val.map.iterator();
+                while (it.next()) |e| {
+                    try merged_site.put(a, e.key_ptr.*, e.value_ptr.*);
+                }
+            }
+        }
+    }
+    // Include current page so its document.data applies when rendering itself (e.g. guest _index site override)
+    if (getDocumentData(entry.frontmatter)) |data_val| {
+        if (data_val == .map) {
+            if (data_val.map.get("document")) |doc_val| {
+                if (doc_val == .map) {
+                    var it = doc_val.map.iterator();
+                    while (it.next()) |e| {
+                        try merged_doc.put(a, e.key_ptr.*, e.value_ptr.*);
+                    }
+                }
+            }
+            if (data_val.map.get("site")) |site_val| {
+                if (site_val == .map) {
+                    var it = site_val.map.iterator();
+                    while (it.next()) |e| {
+                        try merged_site.put(a, e.key_ptr.*, e.value_ptr.*);
+                    }
+                }
+            }
+        }
+    }
+
+    var doc_it = merged_doc.iterator();
+    while (doc_it.next()) |e| {
+        if (std.mem.eql(u8, e.key_ptr.*, "style") and e.value_ptr.* == .string) {
+            continue;
+        }
+        const key = try std.fmt.allocPrint(a, "document.{s}", .{e.key_ptr.*});
+        defer a.free(key);
+        const val = e.value_ptr.*;
+        const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+        try ctx.putAt(key, val_copy);
+    }
+
+    if (merged_site.count() > 0) {
+        var site_map = ValueMap{};
+        if (ctx.resolve("site")) |existing| {
+            if (existing == .map) {
+                var it = existing.map.iterator();
+                while (it.next()) |e| {
+                    try site_map.put(a, e.key_ptr.*, e.value_ptr.*);
+                }
+            }
+        }
+        var site_it = merged_site.iterator();
+        while (site_it.next()) |e| {
+            const val = e.value_ptr.*;
+            const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+            try site_map.put(a, e.key_ptr.*, val_copy);
+        }
+        try ctx.put("site", .{ .map = site_map });
+    }
+}
+
+/// Extracts document.data from frontmatter (document.data.document.layout, document.data.site.*).
+fn getDocumentData(fm: toupee.Value) ?toupee.Value {
+    if (fm != .map) return null;
+    const doc_val = fm.map.get("document") orelse return null;
+    if (doc_val != .map) return null;
+    return doc_val.map.get("data");
+}
+
+/// Resolves layout from data cascade: ancestor _index document.data.document (closest first), then base_ctx, then page frontmatter.
+/// Section (_index) pages: explicit `document.layout` in frontmatter wins; they do not inherit `document.data.document.layout`
+/// from parent _index (that applies to leaf descendants only). Then `data/document.yaml` layout, then caller's `page.html` fallback.
+fn getLayoutFromCascade(
+    a: Allocator,
+    entry: *const scanner_mod.PageEntry,
+    scan_result: *const scanner_mod.ScanResult,
+    base_ctx: *const toupee.Context,
+) ?[]const u8 {
+    _ = a;
+    if (entry.is_section) {
+        if (getLayoutName(entry.frontmatter)) |s| return s;
+        if (base_ctx.resolveString("document.layout")) |s| return s;
+        return null;
+    }
+    // Leaf pages: 1. Walk parent chain, document.data.document.layout from each ancestor (closest first wins)
+    var current_url = entry.url_path;
+    while (scan_result.parent_map.get(current_url)) |parent_opt| {
+        const parent = parent_opt orelse break;
+        if (getDocumentData(parent.frontmatter)) |data_val| {
+            if (data_val == .map) {
+                if (data_val.map.get("document")) |nested_doc| {
+                    if (nested_doc == .map) {
+                        if (nested_doc.map.get("layout")) |layout_val| {
+                            if (layout_val == .string) return layout_val.string;
+                        }
+                    }
+                }
+            }
+        }
+        current_url = parent.url_path;
+    }
+    // 2. Base context document.layout (from data/document.yaml etc.)
+    if (base_ctx.resolveString("document.layout")) |s| return s;
+    // 3. Page's own frontmatter
+    return getLayoutName(entry.frontmatter);
+}
+
+/// Resolves style from data cascade (same order as layout).
+fn getStyleFromCascade(
+    a: Allocator,
+    entry: *const scanner_mod.PageEntry,
+    scan_result: *const scanner_mod.ScanResult,
+    base_ctx: *const toupee.Context,
+) ?[]const u8 {
+    _ = a;
+    // 1. Parent chain first, document.data.document.style (closest wins)
+    var current_url = entry.url_path;
+    while (scan_result.parent_map.get(current_url)) |parent_opt| {
+        const parent = parent_opt orelse break;
+        if (getDocumentData(parent.frontmatter)) |data_val| {
+            if (data_val == .map) {
+                if (data_val.map.get("document")) |nested_doc| {
+                    if (nested_doc == .map) {
+                        if (nested_doc.map.get("style")) |style_val| {
+                            if (style_val == .string) return style_val.string;
+                        }
+                    }
+                }
+            }
+        }
+        current_url = parent.url_path;
+    }
+    // 2. This page's frontmatter (overrides data/document.yaml defaults)
+    if (getStyleName(entry.frontmatter)) |s| return s;
+    // 3. Base context (data/document.yaml)
+    if (base_ctx.resolve("document")) |doc_val| {
+        if (doc_val == .map) {
+            if (doc_val.map.get("style")) |style_val| {
+                if (style_val == .string) return style_val.string;
+            }
+        }
+    }
+    return null;
 }
 
 fn getStyleName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
-    const val = fm.map.get("style") orelse return null;
-    if (val != .string) return null;
-    return val.string;
+    // Prefer document.style (data cascade), then top-level style
+    if (fm.map.get("document")) |doc_val| {
+        if (doc_val == .map) {
+            if (doc_val.map.get("style")) |style_val| {
+                if (style_val == .string) return style_val.string;
+            }
+        }
+    }
+    if (fm.map.get("style")) |val| {
+        if (val == .string) return val.string;
+    }
+    return null;
+}
+
+/// `toupee.Context.initFrom` shallow-copies top-level keys; the nested `document` map is the same
+/// storage as in `base_ctx`. Per-page `putAt("document.*", …)` would mutate site-wide defaults and
+/// break later `base_ctx.resolveString("document.layout")` across renders. Replace `document` in
+/// `ctx` with a shallow clone (string values duped; keys duped).
+fn detachPerPageDocumentMap(a: Allocator, ctx: *toupee.Context, base_ctx: *const toupee.Context) !void {
+    const doc_val = base_ctx.resolve("document") orelse return;
+    if (doc_val != .map) return;
+    var clone: ValueMap = .{};
+    var it = doc_val.map.iterator();
+    while (it.next()) |e| {
+        const val = e.value_ptr.*;
+        const val_copy: toupee.Value = if (val == .string)
+            .{ .string = try a.dupe(u8, val.string) }
+        else
+            val;
+        try clone.put(a, try a.dupe(u8, e.key_ptr.*), val_copy);
+    }
+    try ctx.put("document", .{ .map = clone });
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -382,4 +1063,41 @@ test "paginate: first page uses base path" {
 
     try testing.expectEqualStrings("/posts/", chunks[0].output_path);
     try testing.expectEqualStrings("/posts/page/2/", chunks[1].output_path);
+}
+
+// Documents Toupee behaviour: `initFrom` copies `Value` by value; nested `.map` shares storage with parent.
+test "Toupee initFrom: child putAt document.layout mutates parent document map" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = toupee.Context.init(a);
+    defer parent.deinit();
+    var doc_map: ValueMap = .{};
+    try doc_map.put(a, "layout", .{ .string = try a.dupe(u8, "base.html") });
+    try parent.put("document", .{ .map = doc_map });
+
+    var child = try toupee.Context.initFrom(a, &parent);
+    defer child.deinit();
+    try child.putAt("document.layout", .{ .string = try a.dupe(u8, "other.html") });
+
+    try testing.expectEqualStrings("other.html", parent.resolveString("document.layout").?);
+}
+
+test "detachPerPageDocumentMap: child document.layout does not change base_ctx" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = toupee.Context.init(a);
+    defer parent.deinit();
+    var doc_map: ValueMap = .{};
+    try doc_map.put(a, "layout", .{ .string = try a.dupe(u8, "base.html") });
+    try parent.put("document", .{ .map = doc_map });
+
+    var child = try toupee.Context.initFrom(a, &parent);
+    defer child.deinit();
+    try detachPerPageDocumentMap(a, &child, &parent);
+    try child.putAt("document.layout", .{ .string = try a.dupe(u8, "post.html") });
+
+    try testing.expectEqualStrings("base.html", parent.resolveString("document.layout").?);
+    try testing.expectEqualStrings("post.html", child.resolveString("document.layout").?);
 }

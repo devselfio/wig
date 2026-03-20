@@ -51,9 +51,9 @@ pub const WigError = error{
 };
 
 /// Resolves template names relative to a style during rendering.
-/// Short names (e.g. `base.html`) resolve within the current style's
-/// `layouts/` then `includes/` directories. Names prefixed with `_core/`
-/// resolve from the shared `_core` directories. Full paths are tried as-is.
+/// Explicit paths: `layouts/X.html`, `blocks/X.html` resolve within the current style.
+/// Cross-style: `style:path` (e.g. `_core:layouts/base.html`) resolves from another style.
+/// Short names (e.g. `page.html`) try layouts then blocks.
 pub const StyleLoader = struct {
     templates: *const std.StringArrayHashMapUnmanaged([]const u8),
     style_name: []const u8,
@@ -68,25 +68,39 @@ pub const StyleLoader = struct {
     fn getSource(ptr: *const anyopaque, a: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
         const self: *const StyleLoader = @ptrCast(@alignCast(ptr));
 
+        // Cross-style: style:path (e.g. _core:layouts/base.html)
+        if (std.mem.indexOf(u8, name, ":")) |colon_pos| {
+            const target_style = name[0..colon_pos];
+            const path = name[colon_pos + 1 ..];
+            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ target_style, path });
+            defer a.free(full);
+            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
+            return null;
+        }
+
+        // Legacy _core/ prefix
         if (std.mem.startsWith(u8, name, "_core/")) {
             const short = name["_core/".len..];
-            const paths = [_][]const u8{ "_core/layouts/", "_core/includes/" };
-            for (paths) |prefix| {
-                const full = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, short });
-                defer a.free(full);
-                if (self.templates.get(full)) |src| return try a.dupe(u8, src);
-            }
+            const full = try std.fmt.allocPrint(a, "_core/templates/{s}", .{short});
+            defer a.free(full);
+            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
             return null;
         }
 
+        // Try as-is first (full path like default/templates/layouts/page.html)
+        if (self.templates.get(name)) |src| return try a.dupe(u8, src);
+
+        // Paths with slash: layouts/X or blocks/X → style/templates/layouts/X or style/templates/blocks/X
         if (std.mem.indexOf(u8, name, "/") != null) {
-            if (self.templates.get(name)) |src| return try a.dupe(u8, src);
+            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ self.style_name, name });
+            defer a.free(full);
+            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
             return null;
         }
 
-        const prefixes = [_][]const u8{ "/layouts/", "/includes/" };
-        for (prefixes) |suffix| {
-            const full = try std.fmt.allocPrint(a, "{s}{s}{s}", .{ self.style_name, suffix, name });
+        // Short names: try layouts then blocks
+        for ([_][]const u8{ "layouts/", "blocks/" }) |subdir| {
+            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}{s}", .{ self.style_name, subdir, name });
             defer a.free(full);
             if (self.templates.get(full)) |src| return try a.dupe(u8, src);
         }
@@ -206,7 +220,7 @@ pub const Site = struct {
                 var token_result = try tokens.compute(ba, params);
                 defer token_result.deinit();
                 try style_ctx.putAt(
-                    try std.fmt.allocPrint(ba, "styles.{s}.tokens", .{style_cfg.name}),
+                    try std.fmt.allocPrint(ba, "styles.{s}.computed_tokens", .{style_cfg.name}),
                     token_result.value,
                 );
             }
@@ -216,11 +230,15 @@ pub const Site = struct {
         const site_val = try context.combToToupee(ba, site_cfg.raw);
         try style_ctx.put("site", site_val);
 
-        // Put data files into context
+        // Put data files into context (resolve colours palette indirection)
         if (data_result.value == .map) {
             var data_it = data_result.value.map.iterator();
             while (data_it.next()) |entry| {
-                try style_ctx.put(entry.key_ptr.*, entry.value_ptr.*);
+                var val = entry.value_ptr.*;
+                if (std.mem.eql(u8, entry.key_ptr.*, "colours") and val == .map) {
+                    val = try colours.resolveColoursData(ba, val);
+                }
+                try style_ctx.put(entry.key_ptr.*, val);
             }
         }
 
@@ -237,7 +255,32 @@ pub const Site = struct {
             for (style_cfgs) |style_cfg| {
                 const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
                 if (assets_val_opt) |assets_val| {
-                    if (assets_val == .object) {
+                    if (assets_val == .array) {
+                        for (assets_val.array) |item| {
+                            if (item != .string) continue;
+                            const bundle_path = item.string;
+                            if (std.mem.indexOf(u8, bundle_path, "/")) |slash| {
+                                const bundle_type = bundle_path[0..slash];
+                                const template_rel = bundle_path;
+                                const result = bundles.processBundleToPath(
+                                    ba,
+                                    style_cfg.name,
+                                    bundle_path,
+                                    template_rel,
+                                    styles_dir,
+                                    &style_ctx,
+                                    output_dir,
+                                ) catch continue;
+                                const bundle_name = std.fs.path.stem(bundle_path[slash + 1 ..]);
+                                try asset_entries.append(ba, .{
+                                    .style_name = style_cfg.name,
+                                    .bundle_type = bundle_type,
+                                    .bundle_name = bundle_name,
+                                    .result = result,
+                                });
+                            }
+                        }
+                    } else if (assets_val == .object) {
                         for (assets_val.object) |type_entry| {
                             const bundle_type = switch (type_entry.key) {
                                 .string => |s| s,
@@ -319,6 +362,8 @@ pub const Site = struct {
         // Skip the root "pages" collection when nested collections exist,
         // because putAt("pages", list) followed by putAt("pages.posts", list)
         // would conflict (pages can't be both a list and a map).
+        // When a key is a prefix of another (e.g. pages.blog and pages.blog.special),
+        // put the list at key.items to avoid PathConflict (can't have both list and map at key).
         const has_nested = blk: {
             var coll_check = scan_result.collections.iterator();
             while (coll_check.next()) |entry| {
@@ -327,10 +372,40 @@ pub const Site = struct {
             break :blk false;
         };
 
+        const CollPair = struct { key: []const u8, value: toupee.Value };
+        var keys_to_put = std.ArrayListUnmanaged(CollPair){};
         var coll_it = scan_result.collections.iterator();
         while (coll_it.next()) |entry| {
             if (has_nested and std.mem.eql(u8, entry.key_ptr.*, "pages")) continue;
-            try style_ctx.putAt(entry.key_ptr.*, entry.value_ptr.*);
+            var put_key = entry.key_ptr.*;
+            const put_val = entry.value_ptr.*;
+            var coll_it2 = scan_result.collections.iterator();
+            while (coll_it2.next()) |other| {
+                if (std.mem.eql(u8, other.key_ptr.*, entry.key_ptr.*)) continue;
+                const prefix = try std.fmt.allocPrint(ba, "{s}.", .{entry.key_ptr.*});
+                defer ba.free(prefix);
+                if (std.mem.startsWith(u8, other.key_ptr.*, prefix)) {
+                    put_key = try std.fmt.allocPrint(ba, "{s}.items", .{entry.key_ptr.*});
+                    break;
+                }
+            }
+            try keys_to_put.append(ba, .{ .key = put_key, .value = put_val });
+        }
+        std.mem.sort(CollPair, keys_to_put.items, {}, struct {
+            fn lessThan(_: void, lhs: CollPair, rhs: CollPair) bool {
+                var lhs_dots: usize = 0;
+                var rhs_dots: usize = 0;
+                for (lhs.key) |c| {
+                    if (c == '.') lhs_dots += 1;
+                }
+                for (rhs.key) |c| {
+                    if (c == '.') rhs_dots += 1;
+                }
+                return lhs_dots > rhs_dots;
+            }
+        }.lessThan);
+        for (keys_to_put.items) |pair| {
+            try style_ctx.putAt(pair.key, pair.value);
         }
 
         // Load templates per-style into engine and a shared template map.
@@ -345,7 +420,7 @@ pub const Site = struct {
             defer styles_dir2.close();
 
             // Load _core templates (shared across all styles)
-            for ([_][]const u8{ "layouts", "includes" }) |subdir| {
+            for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
                 const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
                 if (styles_dir2.openDir(core_subdir, .{ .iterate = true })) |cd| {
                     var core_dir = cd;
@@ -363,7 +438,7 @@ pub const Site = struct {
 
             // Load per-style templates
             for (style_cfgs) |style_cfg| {
-                for ([_][]const u8{ "layouts", "includes" }) |subdir| {
+                for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
                     const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
                     if (styles_dir2.openDir(style_subdir, .{ .iterate = true })) |sd3| {
                         var tmpl_dir = sd3;
@@ -378,38 +453,75 @@ pub const Site = struct {
                         }
                     } else |_| {}
                 }
-
-                // Backward compatibility: load from html/ subdirectory
-                const html_subdir = try std.fmt.allocPrint(ba, "{s}/html", .{style_cfg.name});
-                if (styles_dir2.openDir(html_subdir, .{ .iterate = true })) |sd3| {
-                    var html_dir = sd3;
-                    defer html_dir.close();
-                    var hit = html_dir.iterate();
-                    while (try hit.next()) |entry| {
-                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                        const tmpl_name = try std.fmt.allocPrint(ba, "{s}/html/{s}", .{ style_cfg.name, entry.name });
-                        const content = try html_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                        try engine.addTemplate(tmpl_name, content);
-                        try template_map.put(ba, tmpl_name, content);
-                    }
-                } else |_| {}
             }
         } else |_| {}
 
+        // Transform registry for {{ }} interpolation
+        var transform_reg = toupee.transform.Registry{};
+        try transform_reg.registerBuiltins(ba);
+        defer transform_reg.deinit(ba);
+
         // Render pages with per-style template resolution
-        _ = try pages.renderAll(
+        const render_results = try pages.renderAll(
             ba,
-            scan_result.pages,
+            &scan_result,
             &engine,
             &style_ctx,
             &template_map,
             self.options.content_parsers,
+            &transform_reg,
             output_dir,
         );
 
+        // Generate search.json
+        var search_entries = std.ArrayListUnmanaged(search.SpecSearchEntry){};
+        for (scan_result.pages, render_results) |*page, result| {
+            if (page.is_draft) continue;
+            const content_plain = search.stripHtml(ba, result.search_content) catch result.search_content;
+            const title = pages.getDocTitle(page.frontmatter) orelse "";
+            const excerpt = pages.extractExcerptPublic(ba, page.frontmatter, result.search_content) orelse content_plain;
+            var tags_list: []const []const u8 = &.{};
+            if (page.frontmatter == .map) {
+                if (page.frontmatter.map.get("document")) |doc| {
+                    if (doc == .map) {
+                        if (doc.map.get("tags")) |tags_val| {
+                            if (tags_val == .list) {
+                                const tag_strs = try ba.alloc([]const u8, tags_val.list.len);
+                                for (tags_val.list, tag_strs) |t, *out| {
+                                    out.* = if (t == .string) t.string else "";
+                                }
+                                tags_list = tag_strs;
+                            }
+                        }
+                    }
+                }
+            }
+            const date_str = if (page.frontmatter == .map) blk: {
+                if (page.frontmatter.map.get("document")) |doc| {
+                    if (doc == .map) {
+                        if (doc.map.get("date")) |d| {
+                            if (d == .string) break :blk d.string;
+                        }
+                    }
+                }
+                break :blk null;
+            } else null;
+            const section = sectionFromUrl(ba, page.url_path) catch null;
+            try search_entries.append(ba, .{
+                .url = page.absolute_url,
+                .title = title,
+                .content = content_plain,
+                .excerpt = excerpt,
+                .tags = tags_list,
+                .date = date_str,
+                .section = section,
+            });
+        }
+        try search.generateSearchJson(ba, search_entries.items, output_dir);
+
         // Generate feeds
         for (site_cfg.feeds) |feed_cfg| {
-            try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, output_dir);
+            try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir);
         }
 
         // Generate sitemap
@@ -481,7 +593,7 @@ pub const Site = struct {
         if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
             var sdir = sd;
             defer sdir.close();
-            for ([_][]const u8{ "layouts", "includes", "html" }) |subdir| {
+            for ([_][]const u8{ "templates", "includes" }) |subdir| {
                 const core_subdir_str = std.fmt.allocPrint(a, "_core/{s}", .{subdir}) catch continue;
                 defer a.free(core_subdir_str);
                 if (sdir.openDir(core_subdir_str, .{ .iterate = true })) |cd| {
@@ -499,7 +611,7 @@ pub const Site = struct {
                 } else |_| {}
             }
             for (style_cfgs) |style_cfg| {
-                for ([_][]const u8{ "layouts", "includes", "html" }) |subdir| {
+                for ([_][]const u8{ "templates", "includes" }) |subdir| {
                     const ssd = std.fmt.allocPrint(a, "{s}/{s}", .{ style_cfg.name, subdir }) catch continue;
                     defer a.free(ssd);
                     if (sdir.openDir(ssd, .{ .iterate = true })) |sd2| {
@@ -528,13 +640,23 @@ pub const Site = struct {
             try diags.append(a, .{
                 .kind = .err,
                 .message = d.message,
-                .template_name = d.template_name,
+                .template_name = d.template,
             });
         }
 
         return try diags.toOwnedSlice(a);
     }
 };
+
+/// Derives section from url_path: /blog/post/ -> "blog", / -> null.
+fn sectionFromUrl(a: Allocator, url_path: []const u8) !?[]const u8 {
+    var trimmed = std.mem.trim(u8, url_path, "/");
+    if (trimmed.len == 0) return null;
+    if (std.mem.indexOf(u8, trimmed, "/")) |idx| {
+        return try a.dupe(u8, trimmed[0..idx]);
+    }
+    return null;
+}
 
 /// Recursively copies `assets/` to the output directory.
 fn copyAssets(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir) !void {
