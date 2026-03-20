@@ -26,6 +26,8 @@ pub const PageEntry = struct {
 pub const ScanResult = struct {
     pages: []PageEntry,
     collections: ValueMap,
+    parent_map: std.StringArrayHashMapUnmanaged(?*const PageEntry),
+    children_map: std.StringArrayHashMapUnmanaged([]const *const PageEntry),
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: *ScanResult) void {
@@ -60,9 +62,14 @@ pub fn scan(
     var collections = ValueMap{};
     try buildCollections(a, entries.items, &collections);
 
+    const parent_map = try buildParentMap(a, entries.items);
+    const children_map = try buildChildrenMap(a, entries.items);
+
     return .{
         .pages = entries.items,
         .collections = collections,
+        .parent_map = parent_map,
+        .children_map = children_map,
         .arena = arena,
     };
 }
@@ -243,16 +250,26 @@ pub fn deriveOutputPath(a: Allocator, source_path: []const u8) ![]const u8 {
     const ext = fs.path.extension(filename);
     const stem = filename[0 .. filename.len - ext.len];
 
-    if (std.mem.eql(u8, stem, "_404")) {
-        return try a.dupe(u8, "404.html");
+    // _404, _500, etc. -> 404.html, 500.html
+    if (stem.len >= 2 and stem[0] == '_') {
+        var all_digits = true;
+        for (stem[1..]) |c| {
+            if (!std.ascii.isDigit(c)) {
+                all_digits = false;
+                break;
+            }
+        }
+        if (all_digits) return try std.fmt.allocPrint(a, "{s}.html", .{stem[1..]});
     }
 
     if (std.mem.eql(u8, stem, "_index")) {
         return try std.fmt.allocPrint(a, "{s}index.html", .{dir_part});
     }
 
+    // Root index.dj -> index.html; sub/index.dj -> sub/index/index.html
     if (std.mem.eql(u8, stem, "index")) {
-        return try std.fmt.allocPrint(a, "{s}index.html", .{dir_part});
+        if (dir_part.len == 0) return try a.dupe(u8, "index.html");
+        return try std.fmt.allocPrint(a, "{s}index/index.html", .{dir_part});
     }
 
     return try std.fmt.allocPrint(a, "{s}{s}/index.html", .{ dir_part, stem });
@@ -286,10 +303,43 @@ fn parentDir(path: []const u8) []const u8 {
     return "";
 }
 
+/// Builds a single page value with path, url, source, and merged document (path + frontmatter).
+fn buildPageValue(a: Allocator, page: *const PageEntry) !toupee.Value {
+    var page_map = ValueMap{};
+    try page_map.put(a, "path", .{ .string = page.url_path });
+    try page_map.put(a, "url", .{ .string = page.absolute_url });
+    try page_map.put(a, "source", .{ .string = page.source_path });
+
+    // Build document map: path first, then overlay frontmatter document
+    var doc_map = ValueMap{};
+    try doc_map.put(a, "path", .{ .string = page.url_path });
+    try doc_map.put(a, "url", .{ .string = page.absolute_url });
+    if (page.frontmatter == .map) {
+        if (page.frontmatter.map.get("document")) |doc_val| {
+            if (doc_val == .map) {
+                var doc_it = doc_val.map.iterator();
+                while (doc_it.next()) |doc_entry| {
+                    try doc_map.put(a, doc_entry.key_ptr.*, doc_entry.value_ptr.*);
+                }
+            }
+        }
+        var fm_it = page.frontmatter.map.iterator();
+        while (fm_it.next()) |entry| {
+            if (!std.mem.eql(u8, entry.key_ptr.*, "document")) {
+                try page_map.put(a, entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+    }
+    try page_map.put(a, "document", .{ .map = doc_map });
+    return .{ .map = page_map };
+}
+
 /// Builds collection maps from page entries. Each directory produces a
 /// collection at its full dot-path (e.g. `pages.posts`). Section pages
 /// (`_index`) are excluded from collection lists. Collections are sorted
 /// by filename descending (newest first for date-prefixed blogs).
+/// For the root "pages" collection, also builds a slug-keyed map for direct
+/// access (pages.document, pages.two, etc.).
 fn buildCollections(
     a: Allocator,
     pages: []const PageEntry,
@@ -303,19 +353,8 @@ fn buildCollections(
         const key = page.collection_key;
         var list = if (buckets.get(key)) |l| l else std.ArrayListUnmanaged(toupee.Value){};
 
-        var page_map = ValueMap{};
-        try page_map.put(a, "path", .{ .string = page.url_path });
-        try page_map.put(a, "url", .{ .string = page.absolute_url });
-        try page_map.put(a, "source", .{ .string = page.source_path });
-
-        if (page.frontmatter == .map) {
-            var fm_it = page.frontmatter.map.iterator();
-            while (fm_it.next()) |entry| {
-                try page_map.put(a, entry.key_ptr.*, entry.value_ptr.*);
-            }
-        }
-
-        try list.append(a, .{ .map = page_map });
+        const page_val = try buildPageValue(a, &page);
+        try list.append(a, page_val);
         try buckets.put(a, key, list);
     }
 
@@ -334,6 +373,71 @@ fn buildCollections(
         const items = try a.dupe(toupee.Value, entry.value_ptr.items);
         try collections.put(a, entry.key_ptr.*, .{ .list = items });
     }
+
+    // For root "pages" collection, build slug-keyed map for direct access (pages.document, pages.two)
+    var pages_by_slug = ValueMap{};
+    for (pages) |page| {
+        if (!std.mem.eql(u8, page.collection_key, "pages")) continue;
+
+        const page_val = try buildPageValue(a, &page);
+        const slug = if (page.is_section) "document" else blk: {
+            const stem = std.fs.path.stem(page.source_path);
+            break :blk stem;
+        };
+        try pages_by_slug.put(a, slug, page_val);
+    }
+    if (pages_by_slug.count() > 0) {
+        try collections.put(a, "pages", .{ .map = pages_by_slug });
+    }
+}
+
+/// URL path of parent directory. "/docs/alpha/" -> "/docs/", "/docs/" -> "/", "/" -> empty.
+fn urlPathParent(url_path: []const u8) []const u8 {
+    if (url_path.len <= 1) return "";
+    var end = url_path.len;
+    while (end > 1 and url_path[end - 1] == '/') end -= 1;
+    if (end <= 1) return "/";
+    var idx = end - 1;
+    while (idx > 0 and url_path[idx] != '/') idx -= 1;
+    if (idx <= 0) return "/";
+    return url_path[0 .. idx + 1];
+}
+
+/// Builds url_path -> parent page map for section hierarchy.
+fn buildParentMap(a: Allocator, pages: []const PageEntry) !std.StringArrayHashMapUnmanaged(?*const PageEntry) {
+    var url_to_page = std.StringArrayHashMapUnmanaged(*const PageEntry){};
+    for (pages) |*p| try url_to_page.put(a, p.url_path, p);
+
+    var parent_map = std.StringArrayHashMapUnmanaged(?*const PageEntry){};
+    for (pages) |*p| {
+        const parent_url = urlPathParent(p.url_path);
+        const parent = if (parent_url.len == 0) null else url_to_page.get(parent_url);
+        try parent_map.put(a, p.url_path, parent);
+    }
+    return parent_map;
+}
+
+/// Builds url_path -> children pages map for section hierarchy.
+fn buildChildrenMap(a: Allocator, pages: []const PageEntry) !std.StringArrayHashMapUnmanaged([]const *const PageEntry) {
+    var children_lists = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(*const PageEntry)){};
+    for (pages) |*p| {
+        const parent_url = urlPathParent(p.url_path);
+        if (parent_url.len == 0) continue;
+        var list = children_lists.getPtr(parent_url) orelse blk: {
+            const new_list = std.ArrayListUnmanaged(*const PageEntry){};
+            try children_lists.put(a, parent_url, new_list);
+            break :blk children_lists.getPtr(parent_url).?;
+        };
+        try list.append(a, p);
+    }
+
+    var children_map = std.StringArrayHashMapUnmanaged([]const *const PageEntry){};
+    var it = children_lists.iterator();
+    while (it.next()) |entry| {
+        const slice = try a.dupe(*const PageEntry, entry.value_ptr.items);
+        try children_map.put(a, entry.key_ptr.*, slice);
+    }
+    return children_map;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
