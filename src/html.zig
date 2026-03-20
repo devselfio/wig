@@ -10,22 +10,20 @@ pub fn stripTags(a: Allocator, html: []const u8) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
 
-    var in_tag = false;
     var i: usize = 0;
     while (i < html.len) {
         if (html[i] == '<') {
-            in_tag = true;
-            i += 1;
-            continue;
-        }
-        if (html[i] == '>') {
-            in_tag = false;
-            i += 1;
-            continue;
-        }
-        if (in_tag) {
-            i += 1;
-            continue;
+            const gt = std.mem.indexOfScalarPos(u8, html, i + 1, '>');
+            if (gt) |pos| {
+                i = pos + 1;
+                continue;
+            }
+            // Unclosed tag: treat as literal
+            while (i < html.len) {
+                try buf.append(a, html[i]);
+                i += 1;
+            }
+            break;
         }
 
         if (html[i] == '&') {
@@ -108,4 +106,11 @@ test "stripTags: self-closing tags" {
     const r = try stripTags(a, "text<br/>more");
     defer a.free(r);
     try testing.expectEqualStrings("textmore", r);
+}
+
+test "stripTags: unclosed tag treated as literal" {
+    const a = testing.allocator;
+    const r = try stripTags(a, "text<div no close");
+    defer a.free(r);
+    try testing.expectEqualStrings("text<div no close", r);
 }
