@@ -69,12 +69,12 @@ wig/
     session.zig     # cookie-based sessions, MemoryStore
     scaffold.zig    # wig init, add style, add block, install
     html.zig        # shared HTML utilities (stripTags)
-    test_runner.zig # spec test runner (NN_*.yaml full-site builds)
+    test_runner.zig # spec test runner (`NNN_*.yaml` full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
     output_verifier.zig # output verification: HTML normalization, glob matching
     output_paths.zig  # canonical zig-out/site paths (build + future static server)
   test/
-    NN_*.yaml       # spec tests (primary integration tests; full-site build + output verification)
+    NNN_*.yaml      # spec tests (3-digit id prefix; primary integration tests)
 ```
 
 ## Architecture
@@ -85,7 +85,7 @@ Wig is a library that users import into their own Zig project. `wig init` scaffo
 
 ### SSG and optional web framework
 
-**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, YAML specs in `test/NN_*.yaml`, and the CLI cover this end-to-end.
+**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, YAML specs in `test/NNN_*.yaml` (decimal id prefix), and the CLI cover this end-to-end.
 
 **Optional web framework** pieces (`app.zig`, `router.zig`, `handler.zig`, `session.zig`, and helpers such as `devServer`) exist for users who want HTTP routing, handlers, and sessions on top of a built site. This layer is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite (which only drives full static builds), and APIs may change. Proper specification, coverage, and likely **spec-runner extensions** (e.g. HTTP-level or app-lifecycle tests) are follow-on work.
 
@@ -392,9 +392,9 @@ CSS files with frontmatter are rendered through Toupee but do **not** have the `
 
 ### Template reusability
 
-**Section-agnostic listing:** Prefer `document.children` (and includes with `context="document.children as …"`) so one block works for any section without hardcoding `pages.{section}`. See `test/13_post_iteration.yaml`, `test/14_parent_children_links.yaml`, and `test/34_blog_e2e.yaml`.
+**Section-agnostic listing:** Prefer `document.children` (and includes with `context="document.children as …"`) so one block works for any section without hardcoding `pages.{section}`. See `test/013_post_iteration.yaml`, `test/014_parent_children_links.yaml`, and `test/034_blog_e2e.yaml`.
 
-**Pagination uses an explicit collection path:** `paginate.collection` names a dot-path into the page map (e.g. `pages.posts`). That is intentional — pagination is configured in frontmatter and must point at a concrete collection. See `test/32_pagination.yaml`. This does not conflict with preferring `document.children` in templates; use whichever matches the job (reusable section lists vs paginated slices of a named collection).
+**Pagination uses an explicit collection path:** `paginate.collection` names a dot-path into the page map (e.g. `pages.posts`). That is intentional — pagination is configured in frontmatter and must point at a concrete collection. See `test/032_pagination.yaml`. This does not conflict with preferring `document.children` in templates; use whichever matches the job (reusable section lists vs paginated slices of a named collection).
 
 ```html
 <t-include template="blocks/list-posts.html" context="document.children as posts" />
@@ -471,7 +471,7 @@ Context on tag pages: `tag.tags` (all tags with counts), `tag.documents` (matchi
 
 ### Pagination
 
-Frontmatter `paginate:` enables paginated list pages. The **`collection`** field is always an explicit dot-path (e.g. `pages.posts`), not `document.children` — see [Template reusability](#template-reusability) for how that relates to section-agnostic templates. Full behaviour (context shape, URL scheme) is defined by `test/32_pagination.yaml`.
+Frontmatter `paginate:` enables paginated list pages. The **`collection`** field is always an explicit dot-path (e.g. `pages.posts`), not `document.children` — see [Template reusability](#template-reusability) for how that relates to section-agnostic templates. Full behaviour (context shape, URL scheme) is defined by `test/032_pagination.yaml`.
 
 ```yaml
 paginate:
@@ -512,22 +512,47 @@ Always under `<site_root>/zig-out/site/` (see `wig.output_paths`). Production bu
 
 ## Testing
 
+### Philosophy: YAML specs + Zig unit tests
+
+Wig uses **two complementary** test layers:
+
+| Layer | Role | Audience |
+|-------|------|----------|
+| **`test/NNN_*.yaml` specs** | End-to-end, **self-contained** scenarios: minimal site in `input.files`, declared **`test.action`**, observable checks under **`output`** (today: built files; later: status, diagnostics, HTTP expectations where applicable). | Contributors, reviewers, and **tooling** (including AI agents) — the spec is both **regression test** and **executable documentation** of how the product is supposed to behave. |
+| **Inline `test` blocks** | Fast, **narrow** checks: single functions, parsers, edge cases, and internals that would be noisy or fragile in YAML. | Implementers refactoring modules. |
+
+**Design goals for the YAML format**
+
+1. **Prefer specs for user-visible behaviour** — Anything an author or embedder can rely on (cascade rules, URLs, feeds, errors, CLI-equivalent flows) should eventually be expressible as **input → action → expected outcome**, so the suite stays the **canonical narrative** of Wig’s behaviour.
+2. **Grow the schema deliberately** — Extend **`test.action`**, **`input`**, and **`output`** (and related keys) when a feature needs integration coverage; document new fields in this file and add at least one spec that uses them. Avoid turning YAML into an unconstrained second language: **small vocabulary, clear semantics**.
+3. **Honest runner parity** — The runner must implement what the schema promises. Until it does, treat missing branches as **TODO** and say so here (see below). Specs should not claim behaviour the runner does not execute.
+4. **When YAML is a poor fit** — Long-lived processes (**watch**, **live reload**, real **TCP** servers), timing/races, and heavy fuzzing belong in **Zig tests** or manual/e2e flows. For those features, still add a YAML spec **only when** you can assert a **deterministic** slice (e.g. “after one build, file X exists”) or keep the story in **`test.comment`** and point to Zig tests for the non-deterministic part.
+5. **Static HTTP can stay in the story** — Request → status/body/headers against a built tree or in-memory `App.dispatch` is a good fit for YAML **once** the runner supports it; full browser or WebSocket replay is not.
+
+**Trade-offs (intentional)**
+
+- Specs are **slower** and **heavier** than unit tests; keep each file **focused** (one main behaviour + `test.name` / `test.comment` explaining *why*).
+- Golden `output.files` **churn** when formatting changes; prefer stable assertions (normalization already lives in `output_verifier.zig`) and small fixtures.
+- **Duplication** with unit tests is acceptable when the spec documents the **integrated** story; avoid re-stating the same edge case in five YAML files unless each teaches a different author-facing scenario.
+
 ### Inline unit tests
 
-Every module has inline `test` blocks covering its public API. Run with `zig build test`.
+Every module has inline `test` blocks covering its public API. Run with `zig build test`. They **do not replace** YAML specs; they prove **local correctness** while specs prove **wired-up behaviour**.
 
 ### Spec tests (primary integration tests)
 
-Full-site build tests in `wig/test/NN_*.yaml` are the primary integration tests. They run via `runSpecTests` in `test_runner.zig`. Each defines a complete site (data, styles, pages), runs `Site.init()` + `buildAll()`, and verifies output via `output_verifier.zig`. `zig build test` runs them.
+Full-site tests in `wig/test/NNN_*.yaml` are the **primary integration tests** and **living documentation**. They run via `runSpecTests` in `test_runner.zig` and `zig build test`.
 
-Spec format:
+**Runner status (parity):** Today the runner **always** runs `Site.init` + `buildAll(.{ .clean = true })` and checks `output.files` (and `output.exit` for expected failures). The **`test.action`** block in YAML is **reserved for future behaviour selection** (e.g. `validate` only, `build` then HTTP expectations, incremental second pass). New features should **declare** the intended `action` shape in specs **and** extend `test_runner.zig` in the same change (or follow-up) so the schema stays truthful.
+
+Spec format (illustrative — extend `action` / `output` as capabilities grow):
 
 ```yaml
 test:
   name: Test name.
-  comment: What this tests.
+  comment: What this tests (and, for agents, what behaviour is guaranteed).
   action:
-    wig: build
+    wig: build   # reserved vocabulary; runner must implement each variant
   fixtures: []
 input:
   files:
@@ -535,6 +560,7 @@ input:
     styles: { ... }
     pages: { ... }
 output:
+  exit: 0        # optional; 1 = expect build/init failure
   files:
     index.html: |
       expected content
@@ -542,10 +568,11 @@ output:
 
 Specs use `templates: layouts:` and `templates: blocks:` (or equivalent). Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`. The test runner KEY_MAP maps `layouts` → `templates/layouts`, `blocks` → `templates/blocks`.
 
-Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output.files` are the ground truth for behaviour.
+Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output` are the **ground truth** for behaviour. Prefer writing or extending a spec **when adding an author-facing feature** unless the feature is explicitly in the “YAML not a fit” bucket above.
 
 ### Test runner modules
 
+- **Spec file names:** `{id}_{slug}.yaml` where `id` is **at least two** decimal digits (convention: **three**, zero-padded, e.g. `034_blog_e2e.yaml`) so the suite can grow to **999** specs before renaming. Discovery sorts by **numeric** id (not plain strings, so `100_` orders after `099_`). **`WIG_TEST`** filters by numeric id: `34`, `034`, and `034` all match spec `034_…`.
 - **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (defaults match `output_paths.default_site_output_rel` and `default_test_workspace_rel`). Pass to `runSpecTests(..., config)`.
 - **OutputVerifier** (`output_verifier.zig`): Verifies output directory against spec; HTML normalization, glob matching (`*` only), stack/arena for comparisons.
 - **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; future loaders (e.g. zip fixtures) can swap in.

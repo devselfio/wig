@@ -52,7 +52,8 @@ pub const defaultSpecLoader = SpecLoader{
 
 // ── Entry ────────────────────────────────────────────────────────────────
 
-/// Parses WIG_TEST env format (e.g. "00" or "00,01,02") into a list of test numbers.
+/// Parses WIG_TEST env format (e.g. "0", "34", "034", or "00,01,02") into a list of
+/// decimal id strings. Matching against a spec file is **numeric** (`34` matches `034_*.yaml`).
 /// Caller owns the returned Filter; call filter.deinit(a) when done.
 fn parseFilter(a: Allocator, filter_str: ?[]const u8) !?Filter {
     const f = filter_str orelse return null;
@@ -69,7 +70,7 @@ fn parseFilter(a: Allocator, filter_str: ?[]const u8) !?Filter {
     return Filter{ .numbers = list };
 }
 
-/// Filter for WIG_TEST env: list of test numbers to run (e.g. "00", "01").
+/// Filter for WIG_TEST env: list of decimal id strings; see `matchesSpecFilename`.
 const Filter = struct {
     numbers: std.ArrayListUnmanaged([]const u8),
 
@@ -78,13 +79,40 @@ const Filter = struct {
         self.numbers.deinit(a);
     }
 
-    fn matches(self: Filter, num: []const u8) bool {
+    fn matchesSpecFilename(self: Filter, filename: []const u8) bool {
+        const pref = specNumericPrefix(filename) orelse return false;
+        const file_id = parseSpecNumericId(pref) orelse return false;
         for (self.numbers.items) |n| {
-            if (std.mem.eql(u8, n, num)) return true;
+            const want = parseSpecNumericId(n) orelse continue;
+            if (want == file_id) return true;
         }
         return false;
     }
 };
+
+/// Leading decimal digits of a spec filename, if there are at least two digits and the
+/// next character is `'_'` (e.g. `000` for `000_one_page.yaml`).
+fn specNumericPrefix(filename: []const u8) ?[]const u8 {
+    var end: usize = 0;
+    while (end < filename.len and std.ascii.isDigit(filename[end])) : (end += 1) {}
+    if (end < 2) return null;
+    if (end >= filename.len or filename[end] != '_') return null;
+    return filename[0..end];
+}
+
+fn parseSpecNumericId(digits: []const u8) ?usize {
+    if (digits.len == 0) return null;
+    return std.fmt.parseInt(usize, digits, 10) catch null;
+}
+
+fn specFilenameLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+    const pl = specNumericPrefix(lhs) orelse return false;
+    const pr = specNumericPrefix(rhs) orelse return true;
+    const nl = parseSpecNumericId(pl) orelse return false;
+    const nr = parseSpecNumericId(pr) orelse return true;
+    if (nl != nr) return nl < nr;
+    return std.mem.order(u8, lhs, rhs) == .lt;
+}
 
 /// Isolated workspace for a spec test run. Creates {workspace_dir}/{run_id}/ and manages cleanup.
 const TestWorkspace = struct {
@@ -156,7 +184,8 @@ const TestWorkspace = struct {
     }
 };
 
-/// Discovers spec test filenames (NN_*.yaml) in test_dir, sorted by number.
+/// Discovers spec test filenames (`{digits}_{name}.yaml`, ≥2 leading digits) in test_dir,
+/// sorted by **numeric** id then filename (so `100_` orders after `99_`).
 /// Caller owns returned items; call a.free() on each and list.deinit(a).
 fn discoverSpecTests(a: Allocator, test_dir: fs.Dir) !std.ArrayListUnmanaged([]const u8) {
     var names = std.ArrayListUnmanaged([]const u8){};
@@ -164,15 +193,10 @@ fn discoverSpecTests(a: Allocator, test_dir: fs.Dir) !std.ArrayListUnmanaged([]c
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".yaml")) continue;
-        if (entry.name.len >= 2 and std.ascii.isDigit(entry.name[0]) and std.ascii.isDigit(entry.name[1])) {
-            try names.append(a, try a.dupe(u8, entry.name));
-        }
+        if (specNumericPrefix(entry.name) == null) continue;
+        try names.append(a, try a.dupe(u8, entry.name));
     }
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn cmp(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.cmp);
+    std.mem.sort([]const u8, names.items, {}, specFilenameLessThan);
     return names;
 }
 
@@ -198,7 +222,7 @@ fn timestampRunId(buf: []u8) ![]const u8 {
     });
 }
 
-/// Scans test/ for NN_*.yaml, sorts by number, runs each (or filtered subset).
+/// Scans test/ for `{digits}_*.yaml` (≥2 digit id), sorts by numeric id, runs each (or filtered subset).
 /// If run_id_out is provided, fills it with the timestamp run id (YYYYMMDD-HHMMSS).
 /// If config is null, uses default paths (zig-out/site, zig-out/test).
 /// If loader is null, uses defaultSpecLoader.
@@ -235,9 +259,8 @@ pub fn runSpecTests(
     var to_run = std.ArrayListUnmanaged([]const u8){};
     defer to_run.deinit(a);
     for (names.items) |filename| {
-        const num = filename[0..2];
         if (filter_parsed) |*f| {
-            if (!f.matches(num)) continue;
+            if (!f.matchesSpecFilename(filename)) continue;
         }
         try to_run.append(a, filename);
     }
@@ -469,6 +492,21 @@ fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value)
 }
 
 // ── Test ──────────────────────────────────────────────────────────────────
+
+test "specNumericPrefix and WIG_TEST numeric match" {
+    const testing = std.testing;
+    try testing.expectEqualStrings("000", specNumericPrefix("000_one_page.yaml").?);
+    try testing.expectEqualStrings("34", specNumericPrefix("34_blog.yaml").?);
+    try testing.expect(specNumericPrefix("9_bad.yaml") == null);
+    try testing.expect(specNumericPrefix("no_digits.yaml") == null);
+
+    var f = Filter{ .numbers = .{} };
+    defer f.deinit(testing.allocator);
+    try f.numbers.append(testing.allocator, try testing.allocator.dupe(u8, "34"));
+    try testing.expect(f.matchesSpecFilename("034_blog_e2e.yaml"));
+    try testing.expect(f.matchesSpecFilename("34_blog_e2e.yaml"));
+    try testing.expect(!f.matchesSpecFilename("033_tags.yaml"));
+}
 
 test "wig integration test suite" {
     var test_dir = fs.cwd().openDir("test", .{}) catch |err| {
