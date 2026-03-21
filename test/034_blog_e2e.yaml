@@ -61,30 +61,26 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Welcome.
       blog:
         _index.dj: |
           ---
-          document:
-            title: Blog
-            layout: list.html
+          title: Blog
+          layout: list.html
           ---
           Posts.
         first.dj: |
           ---
-          document:
-            title: First Post
-            layout: post.html
+          title: First Post
+          layout: post.html
           ---
           First content.
         second.dj: |
           ---
-          document:
-            title: Second Post
-            layout: post.html
+          title: Second Post
+          layout: post.html
           ---
           Second content.
     assets:

@@ -31,20 +31,17 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Home page.
       _404.dj: |
         ---
-        document:
-          title: Not Found
+        title: Not Found
         ---
         Page not found.
       _500.dj: |
         ---
-        document:
-          title: Server Error
+        title: Server Error
         ---
         Internal server error.
 output:

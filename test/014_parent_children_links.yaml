@@ -33,16 +33,14 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Root
+        title: Root
         ---
         root
       docs:
         _index.dj: |
           ---
-          document:
-            title: Docs
-            layout: section.html
+          title: Docs
+          layout: section.html
           data:
             document:
               layout: child.html
@@ -50,20 +48,17 @@ input:
           Documentation hub.
         alpha.dj: |
           ---
-          document:
-            title: Alpha
+          title: Alpha
           ---
           Alpha content.
         beta.dj: |
           ---
-          document:
-            title: Beta
+          title: Beta
           ---
           Beta content.
         gamma.dj: |
           ---
-          document:
-            title: Gamma
+          title: Gamma
           ---
           Gamma content.
 output:

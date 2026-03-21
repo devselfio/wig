@@ -83,15 +83,12 @@ const TermBucket = struct {
 
 /// Extracts taxonomy terms from a page's frontmatter. Handles both list
 /// values (`tags: [zig, web]`) and single string values (`tags: zig`).
-/// Reads `document.{field}` (wig frontmatter) as well as top-level `{field}`.
+/// Reads only `document.{field}` (canonical page frontmatter root is `document`).
 pub fn getTerms(fm: toupee.Value, field: []const u8) ?[]const toupee.Value {
     if (fm != .map) return null;
-    const val = blk: {
-        if (fm.map.get(field)) |v| break :blk v;
-        const doc = fm.map.get("document") orelse return null;
-        if (doc != .map) return null;
-        break :blk doc.map.get(field) orelse return null;
-    };
+    const doc = fm.map.get("document") orelse return null;
+    if (doc != .map) return null;
+    const val = doc.map.get(field) orelse return null;
     return switch (val) {
         .list => |l| l,
         .string => @as(*const [1]toupee.Value, @ptrCast(&val)),
@@ -134,10 +131,12 @@ test "slugify: mixed case" {
 }
 
 fn makeFmMap(a: Allocator, tags: []const toupee.Value) !toupee.Value {
-    var map = ValueMap{};
-    try map.put(a, "title", .{ .string = "Test" });
+    var doc = ValueMap{};
+    try doc.put(a, "title", .{ .string = "Test" });
     const tag_slice = try a.dupe(toupee.Value, tags);
-    try map.put(a, "tags", .{ .list = tag_slice });
+    try doc.put(a, "tags", .{ .list = tag_slice });
+    var map = ValueMap{};
+    try map.put(a, "document", .{ .map = doc });
     return .{ .map = map };
 }
 
@@ -191,8 +190,10 @@ test "buildIndex: string-as-single-element list" {
     defer arena.deinit();
     const a = arena.allocator();
 
+    var doc = ValueMap{};
+    try doc.put(a, "tags", .{ .string = "solo" });
     var fm_map = ValueMap{};
-    try fm_map.put(a, "tags", .{ .string = "solo" });
+    try fm_map.put(a, "document", .{ .map = doc });
 
     const pages = [_]scanner_mod.PageEntry{
         .{
@@ -219,8 +220,10 @@ test "buildIndex: page with no tags skipped" {
     defer arena.deinit();
     const a = arena.allocator();
 
+    var doc = ValueMap{};
+    try doc.put(a, "title", .{ .string = "No Tags" });
     var fm_map = ValueMap{};
-    try fm_map.put(a, "title", .{ .string = "No Tags" });
+    try fm_map.put(a, "document", .{ .map = doc });
 
     const pages = [_]scanner_mod.PageEntry{
         .{
@@ -247,11 +250,13 @@ test "buildIndex: multiple taxonomies" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    var fm_map = ValueMap{};
+    var doc = ValueMap{};
     const tags = [_]toupee.Value{.{ .string = "zig" }};
     const cats = [_]toupee.Value{.{ .string = "tutorial" }};
-    try fm_map.put(a, "tags", .{ .list = try a.dupe(toupee.Value, &tags) });
-    try fm_map.put(a, "categories", .{ .list = try a.dupe(toupee.Value, &cats) });
+    try doc.put(a, "tags", .{ .list = try a.dupe(toupee.Value, &tags) });
+    try doc.put(a, "categories", .{ .list = try a.dupe(toupee.Value, &cats) });
+    var fm_map = ValueMap{};
+    try fm_map.put(a, "document", .{ .map = doc });
 
     const pages = [_]scanner_mod.PageEntry{
         .{

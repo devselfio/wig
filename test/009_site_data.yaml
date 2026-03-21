@@ -35,14 +35,12 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Welcome.
       about.dj: |
         ---
-        document:
-          title: About
+        title: About
         ---
         About page.
 output:

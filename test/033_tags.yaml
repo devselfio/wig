@@ -49,30 +49,26 @@ input:
       blog:
         a.dj: |
           ---
-          document:
-            title: Doc A
-            tags: [music, tech]
+          title: Doc A
+          tags: [music, tech]
           ---
           A.
         b.dj: |
           ---
-          document:
-            title: Doc B
-            tags: [music]
+          title: Doc B
+          tags: [music]
           ---
           B.
         c.dj: |
           ---
-          document:
-            title: Doc C
-            tags: [tech]
+          title: Doc C
+          tags: [tech]
           ---
           C.
         d.dj: |
           ---
-          document:
-            title: Doc D
-            tags: [tech, zig]
+          title: Doc D
+          tags: [tech, zig]
           ---
           D.
 output:

@@ -178,7 +178,9 @@ fn parsePageFile(
     if (fm_result == null) return error.MissingFrontmatter;
     const fm = fm_result.?;
 
-    const fm_toupee = try context_mod.combToToupee(a, fm.data);
+    const canonical_fm = try frontmatter.normalizeWigPageFrontmatter(a, fm.data);
+
+    const fm_toupee = try context_mod.combToToupee(a, canonical_fm);
     const stem = filename[0 .. filename.len - ext.len];
 
     const output_file = try deriveOutputPath(a, rel_path);
@@ -206,8 +208,8 @@ fn parsePageFile(
         .frontmatter = fm_toupee,
         .collection_key = collection_key,
         .is_section = isSection(stem),
-        .is_draft = getBool(fm.data, "draft"),
-        .is_debug = getBool(fm.data, "debug"),
+        .is_draft = getBoolInDocument(canonical_fm, "draft"),
+        .is_debug = getBoolInDocument(canonical_fm, "debug"),
     };
 }
 
@@ -229,6 +231,11 @@ fn getBool(val: comb.Value, key: []const u8) bool {
         .boolean => |b| b,
         else => false,
     };
+}
+
+fn getBoolInDocument(root: comb.Value, key: []const u8) bool {
+    const doc = root.get("document") orelse return false;
+    return getBool(doc, key);
 }
 
 /// Derives the output file path from a source path using clean URL rules.
@@ -325,12 +332,6 @@ pub fn buildPageValue(a: Allocator, page: *const PageEntry) !toupee.Value {
                 while (doc_it.next()) |doc_entry| {
                     try doc_map.put(a, doc_entry.key_ptr.*, doc_entry.value_ptr.*);
                 }
-            }
-        }
-        var fm_it = page.frontmatter.map.iterator();
-        while (fm_it.next()) |entry| {
-            if (!std.mem.eql(u8, entry.key_ptr.*, "document")) {
-                try page_map.put(a, entry.key_ptr.*, entry.value_ptr.*);
             }
         }
     }
@@ -742,6 +743,23 @@ test "scan: missing frontmatter is an error" {
     const exts = [_][]const u8{".dj"};
     const result = scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
     try testing.expectError(error.MissingFrontmatter, result);
+}
+
+test "scan: invalid page frontmatter root is an error" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("pages");
+    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
+    defer pages_dir.close();
+
+    var f = try pages_dir.createFile("bad.dj", .{});
+    try f.writeAll("---\n42\n---\nbody");
+    f.close();
+
+    const exts = [_][]const u8{".dj"};
+    const result = scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    try testing.expectError(error.InvalidWigPageFrontmatter, result);
 }
 
 test "scan: draft pages excluded when site.draft is false" {

@@ -79,15 +79,6 @@ pub const StyleLoader = struct {
             return null;
         }
 
-        // Legacy _core/ prefix
-        if (std.mem.startsWith(u8, name, "_core/")) {
-            const short = name["_core/".len..];
-            const full = try std.fmt.allocPrint(a, "_core/templates/{s}", .{short});
-            defer a.free(full);
-            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
-            return null;
-        }
-
         // Try as-is first (full path like default/templates/layouts/page.html)
         if (self.templates.get(name)) |src| return try a.dupe(u8, src);
 

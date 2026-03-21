@@ -37,9 +37,8 @@ input:
       posts:
         _index.dj: |
           ---
-          document:
-            title: Posts
-            layout: list.html
+          title: Posts
+          layout: list.html
           paginate:
             collection: pages.posts
             size: 2
@@ -49,20 +48,17 @@ input:
           Blog index.
         a.dj: |
           ---
-          document:
-            title: Post A
+          title: Post A
           ---
           A.
         b.dj: |
           ---
-          document:
-            title: Post B
+          title: Post B
           ---
           B.
         c.dj: |
           ---
-          document:
-            title: Post C
+          title: Post C
           ---
           C.
 output:

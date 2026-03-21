@@ -31,8 +31,7 @@ input:
     pages:
       _index.html: |
         ---
-        document:
-          title: HTML Page
+        title: HTML Page
         ---
         <h1>Hello from HTML</h1>
         <p>No Djot here.</p>

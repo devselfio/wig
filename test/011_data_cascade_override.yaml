@@ -26,40 +26,35 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          data:
-            document:
-              style: default
+        data:
+          document:
+            style: default
         ---
         root
       blog:
         _index.dj: |
           ---
-          document:
-            data:
-              document:
-                layout: blog-post.html
+          data:
+            document:
+              layout: blog-post.html
           ---
           blog index
         post_a.dj: |
           ---
-          document:
-            title: Post A
+          title: Post A
           ---
           Post A content.
         special:
           _index.dj: |
             ---
-            document:
-              data:
-                document:
-                  layout: special.html
+            data:
+              document:
+                layout: special.html
             ---
             special index
           post_b.dj: |
             ---
-            document:
-              title: Post B
+            title: Post B
             ---
             Post B content.
 output:

@@ -31,37 +31,32 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Home.
       blog:
         _index.dj: |
           ---
-          document:
-            title: Blog
-            layout: list.html
+          title: Blog
+          layout: list.html
           ---
           Blog.
         alpha.dj: |
           ---
-          document:
-            title: Alpha
-            date: 2026-03-10
+          title: Alpha
+          date: 2026-03-10
           ---
           Alpha.
         beta.dj: |
           ---
-          document:
-            title: Beta
-            date: 2026-03-15
+          title: Beta
+          date: 2026-03-15
           ---
           Beta.
         gamma.dj: |
           ---
-          document:
-            title: Gamma
-            date: 2026-03-01
+          title: Gamma
+          date: 2026-03-01
           ---
           Gamma.
 output:

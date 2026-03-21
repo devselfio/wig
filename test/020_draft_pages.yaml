@@ -22,21 +22,18 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Home.
       published.dj: |
         ---
-        document:
-          title: Published
+        title: Published
         ---
         Published page.
       draft.dj: |
         ---
-        document:
-          title: Draft
-          draft: true
+        title: Draft
+        draft: true
         ---
         Draft page.
 output:
@@ -71,21 +68,18 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Home.
       published.dj: |
         ---
-        document:
-          title: Published
+        title: Published
         ---
         Published page.
       draft.dj: |
         ---
-        document:
-          title: Draft
-          draft: true
+        title: Draft
+        draft: true
         ---
         Draft page.
 output:

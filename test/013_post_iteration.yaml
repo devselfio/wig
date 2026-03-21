@@ -54,9 +54,8 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Root
-          layout: base.html
+        title: Root
+        layout: base.html
         ---
         # Root
 
@@ -64,24 +63,21 @@ input:
       posts:
         _index.dj: |
           ---
-          document:
-            title: Post List
-            layout: post-list.html
-            data:
-              document:
-                layout: post.html
+          title: Post List
+          layout: post-list.html
+          data:
+            document:
+              layout: post.html
           ---
           Welcome to the blog.
         001_first.dj: |
           ---
-          document:
-            title: First Post
+          title: First Post
           ---
           The first post.
         002_second.dj: |
           ---
-          document:
-            title: Second Post
+          title: Second Post
           ---
           The second post.
 output:

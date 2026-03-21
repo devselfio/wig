@@ -412,7 +412,9 @@ pub const PaginateConfig = struct {
 /// Extracts paginate config from frontmatter if present.
 pub fn getPaginateConfig(fm: toupee.Value) ?PaginateConfig {
     if (fm != .map) return null;
-    const paginate_val = fm.map.get("paginate") orelse return null;
+    const doc = fm.map.get("document") orelse return null;
+    if (doc != .map) return null;
+    const paginate_val = doc.map.get("paginate") orelse return null;
     if (paginate_val != .map) return null;
     const coll = paginate_val.map.get("collection") orelse return null;
     if (coll != .string) return null;
@@ -608,11 +610,6 @@ pub fn extractExcerptPublic(a: Allocator, fm: toupee.Value, content: []const u8)
 
 fn extractExcerpt(a: Allocator, fm: toupee.Value, content: []const u8) ?[]const u8 {
     if (fm == .map) {
-        // Top-level description
-        if (fm.map.get("description")) |desc| {
-            if (desc == .string) return desc.string;
-        }
-        // document.description (frontmatter cascade)
         if (fm.map.get("document")) |doc_val| {
             if (doc_val == .map) {
                 if (doc_val.map.get("description")) |desc| {
@@ -706,16 +703,12 @@ pub fn getDocTitle(fm: toupee.Value) ?[]const u8 {
 
 fn getLayoutName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
-    // Prefer document.layout (data cascade), then top-level layout
     if (fm.map.get("document")) |doc_val| {
         if (doc_val == .map) {
             if (doc_val.map.get("layout")) |layout_val| {
                 if (layout_val == .string) return layout_val.string;
             }
         }
-    }
-    if (fm.map.get("layout")) |val| {
-        if (val == .string) return val.string;
     }
     return null;
 }
@@ -817,19 +810,16 @@ fn mergeDocumentDataCascade(
     }
 }
 
-/// Extracts per-directory cascade payload from frontmatter: `document.data` (preferred) or top-level `data`
-/// (`data.document.*`, `data.site.*`). Top-level `data` is common in fixtures; `document.data` matches AGENTS.md.
+/// Per-directory cascade payload: `document.data` on the page frontmatter map.
+/// Authors may write `data:` at the YAML root; `normalizeWigPageFrontmatter` folds it here before render.
 fn getDocumentData(fm: toupee.Value) ?toupee.Value {
     if (fm != .map) return null;
-    if (fm.map.get("document")) |doc_val| {
-        if (doc_val == .map) {
-            if (doc_val.map.get("data")) |d| return d;
-        }
-    }
-    return fm.map.get("data");
+    const doc_val = fm.map.get("document") orelse return null;
+    if (doc_val != .map) return null;
+    return doc_val.map.get("data");
 }
 
-/// Resolves layout from data cascade: ancestor `document.data` / top-level `data` (closest first), then this page's
+/// Resolves layout from data cascade: ancestor `document.data` (closest first), then this page's
 /// frontmatter `document.layout`, then `data/document.yaml` (same priority as `getStyleFromCascade`).
 /// Section (_index) pages: explicit `document.layout` in frontmatter wins; they do not inherit section `data.document.layout`
 /// from parent _index (that applies to leaf descendants only).
@@ -909,16 +899,12 @@ fn getStyleFromCascade(
 
 fn getStyleName(fm: toupee.Value) ?[]const u8 {
     if (fm != .map) return null;
-    // Prefer document.style (data cascade), then top-level style
     if (fm.map.get("document")) |doc_val| {
         if (doc_val == .map) {
             if (doc_val.map.get("style")) |style_val| {
                 if (style_val == .string) return style_val.string;
             }
         }
-    }
-    if (fm.map.get("style")) |val| {
-        if (val == .string) return val.string;
     }
     return null;
 }
@@ -992,8 +978,10 @@ test "extractExcerpt: frontmatter description overrides" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    var doc = ValueMap{};
+    try doc.put(a, "description", .{ .string = "Custom description" });
     var map: ValueMap = .{};
-    try map.put(a, "description", .{ .string = "Custom description" });
+    try map.put(a, "document", .{ .map = doc });
 
     const excerpt = extractExcerpt(a, .{ .map = map }, "<p>Ignored.</p>");
     try testing.expectEqualStrings("Custom description", excerpt.?);
@@ -1009,8 +997,10 @@ test "getLayoutName: from frontmatter" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    var doc = ValueMap{};
+    try doc.put(a, "layout", .{ .string = "default/post.html" });
     var map: ValueMap = .{};
-    try map.put(a, "layout", .{ .string = "default/post.html" });
+    try map.put(a, "document", .{ .map = doc });
     try testing.expectEqualStrings("default/post.html", getLayoutName(.{ .map = map }).?);
 }
 

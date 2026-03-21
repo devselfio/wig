@@ -22,23 +22,20 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
-          date: 2026-03-01
+        title: Home
+        date: 2026-03-01
         ---
         Home.
       about.dj: |
         ---
-        document:
-          title: About
+        title: About
         ---
         About.
       blog:
         _index.dj: |
           ---
-          document:
-            title: Blog
-            date: 2026-03-10
+          title: Blog
+          date: 2026-03-10
           ---
           Blog.
 output:

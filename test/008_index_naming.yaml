@@ -31,15 +31,13 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Root
+        title: Root
         ---
         Root page.
       sub:
         index.dj: |
           ---
-          document:
-            title: Index Page
+          title: Index Page
           ---
           This is a normal page named index, not a section index.
 output:

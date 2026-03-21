@@ -22,24 +22,21 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Welcome to the site.
       blog:
         _index.dj: |
           ---
-          document:
-            title: Blog
+          title: Blog
           ---
           Blog index.
         post.dj: |
           ---
-          document:
-            title: My Post
-            date: 2026-03-16
-            description: A post about things.
-            tags: [zig, web]
+          title: My Post
+          date: 2026-03-16
+          description: A post about things.
+          tags: [zig, web]
           ---
           # My Post
 

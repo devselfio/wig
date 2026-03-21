@@ -27,8 +27,7 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Article
+        title: Article
         ---
         # Introduction
 

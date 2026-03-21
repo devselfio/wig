@@ -24,44 +24,38 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         home
       normal.dj: |
         ---
-        document:
-          title: Normal
+        title: Normal
         ---
         normal
       guest:
         _index.dj: |
           ---
-          document:
-            title: Guest Section
-            data:
-              site:
-                author: GuestAuthor
-                title: Guest Site
+          title: Guest Section
+          data:
+            site:
+              author: GuestAuthor
+              title: Guest Site
           ---
           guest index
         post.dj: |
           ---
-          document:
-            title: Guest Post
+          title: Guest Post
           ---
           guest post
         deep:
           _index.dj: |
             ---
-            document:
-              title: Deep Section
+            title: Deep Section
             ---
             deep section
           leaf.dj: |
             ---
-            document:
-              title: Deep Leaf
+            title: Deep Leaf
             ---
             deep leaf
 output:

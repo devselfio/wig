@@ -42,71 +42,61 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: L0
+        title: L0
         ---
         Level 0.
       a:
         _index.dj: |
           ---
-          document:
-            title: L1
+          title: L1
           ---
           Level 1.
         b:
           _index.dj: |
             ---
-            document:
-              title: L2
+            title: L2
             ---
             Level 2.
           c:
             _index.dj: |
               ---
-              document:
-                title: L3
+              title: L3
               ---
               Level 3.
             d:
               _index.dj: |
                 ---
-                document:
-                  title: L4
+                title: L4
                 ---
                 Level 4.
               e:
                 _index.dj: |
                   ---
-                  document:
-                    title: L5
+                  title: L5
                   ---
                   Level 5.
                 f:
                   _index.dj: |
                     ---
-                    document:
-                      title: L6
+                    title: L6
                     ---
                     Level 6.
                   g:
                     _index.dj: |
                       ---
-                      document:
-                        title: L7
+                      title: L7
                       ---
                       Level 7.
                     h:
                       _index.dj: |
                         ---
-                        document:
-                          title: L8
+                        title: L8
                         ---
                         Level 8.
                       i:
                         _index.dj: |
                           ---
-                          document:
-                            title: L9
+                          title: L9
                           ---
                           Level 9.
 output:

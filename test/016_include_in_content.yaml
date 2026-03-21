@@ -34,8 +34,7 @@ input:
     pages:
       djot_page.dj: |
         ---
-        document:
-          title: Djot Page
+        title: Djot Page
         ---
         # Djot Content
 
@@ -44,8 +43,7 @@ input:
         ```
       html_page.html: |
         ---
-        document:
-          title: HTML Page
+        title: HTML Page
         ---
         <h1>HTML Content</h1>
         <t-include template="blocks/callout.html">Important note.</t-include>

@@ -49,17 +49,15 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Page One
+        title: Page One
         ---
         # Page 1
 
         [Page 2]({{ pages.two.document.path }})
       two.dj: |
         ---
-        document:
-          title: Page Two
-          layout: two.html
+        title: Page Two
+        layout: two.html
         ---
         # Page 2
 

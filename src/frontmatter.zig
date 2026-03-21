@@ -63,6 +63,68 @@ fn findClosingFence(text: []const u8) ?usize {
     return null;
 }
 
+pub const NormalizePageFrontmatterError = error{ InvalidWigPageFrontmatter, OutOfMemory };
+
+/// Normalizes page YAML to the canonical shape the rest of Wig expects: a single top-level
+/// `document` mapping whose value is the **YAML root object** (every root key copied under `document`).
+///
+/// There is no special case for a sole root key `document:` — that key becomes `document.document`
+/// in template context (see `test/035_frontmatter_document_key.yaml`). To set `document.title`,
+/// use a root-level `title:` key (or any other key name that should live directly under `document`).
+///
+/// Empty fence body `---\n---` becomes `document: {}`. Scalars, arrays, or `document:` with a
+/// non-mapping value at the root are rejected.
+pub fn normalizeWigPageFrontmatter(a: Allocator, root: comb.Value) NormalizePageFrontmatterError!comb.Value {
+    switch (root) {
+        .null_val => {
+            const doc_key: comb.Value = .{ .string = try a.dupe(u8, "document") };
+            const empty_doc: comb.Value = .{ .object = &.{} };
+            const outer = try a.dupe(comb.Entry, &[_]comb.Entry{
+                .{ .key = doc_key, .value = empty_doc },
+            });
+            return .{ .object = outer };
+        },
+        .object => |entries| {
+            if (entries.len == 1) {
+                const e0 = entries[0];
+                switch (e0.key) {
+                    .string => |s| {
+                        if (std.mem.eql(u8, s, "document") and e0.value != .object) {
+                            return error.InvalidWigPageFrontmatter;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            const doc_key: comb.Value = .{ .string = try a.dupe(u8, "document") };
+            const outer = try a.dupe(comb.Entry, &[_]comb.Entry{
+                .{ .key = doc_key, .value = .{ .object = entries } },
+            });
+            return .{ .object = outer };
+        },
+        else => return error.InvalidWigPageFrontmatter,
+    }
+}
+
+/// True if `root` is already `{ document: <mapping> }` (post-normalize shape).
+pub fn validateWigPageFrontmatterRoot(root: comb.Value) error{InvalidWigPageFrontmatter}!void {
+    const entries = switch (root) {
+        .object => |o| o,
+        else => return error.InvalidWigPageFrontmatter,
+    };
+    if (entries.len != 1) return error.InvalidWigPageFrontmatter;
+    const e0 = entries[0];
+    const key_str = switch (e0.key) {
+        .string => |s| s,
+        else => return error.InvalidWigPageFrontmatter,
+    };
+    if (!std.mem.eql(u8, key_str, "document")) return error.InvalidWigPageFrontmatter;
+    switch (e0.value) {
+        .object => {},
+        else => return error.InvalidWigPageFrontmatter,
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -171,4 +233,63 @@ test "findClosingFence: basic" {
     try testing.expectEqual(@as(?usize, 12), findClosingFence("title: Test\n---\n"));
     try testing.expectEqual(@as(?usize, 0), findClosingFence("---\n"));
     try testing.expect(findClosingFence("no fence here") == null);
+}
+
+test "normalizeWigPageFrontmatter: flat keys become document.*" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var p = try comb.parse(testing.allocator, "title: Hi\ndraft: true\n");
+    defer p.deinit();
+    const n = try normalizeWigPageFrontmatter(a, p.value);
+    try validateWigPageFrontmatterRoot(n);
+    const doc = n.get("document").?;
+    try testing.expectEqualStrings("Hi", doc.getStr("title").?);
+    try testing.expect(doc.get("draft").?.boolean);
+}
+
+test "normalizeWigPageFrontmatter: sole root document: becomes document.document.*" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var p = try comb.parse(testing.allocator, "document:\n  title: Hi\n");
+    defer p.deinit();
+    const n = try normalizeWigPageFrontmatter(a, p.value);
+    try validateWigPageFrontmatterRoot(n);
+    const inner = n.get("document").?.get("document").?;
+    try testing.expectEqualStrings("Hi", inner.getStr("title").?);
+    try testing.expect(n.get("document").?.get("title") == null);
+}
+
+test "normalizeWigPageFrontmatter: null root is empty document" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const n = try normalizeWigPageFrontmatter(a, .null_val);
+    try validateWigPageFrontmatterRoot(n);
+    try testing.expectEqual(@as(usize, 0), n.get("document").?.object.len);
+}
+
+test "normalizeWigPageFrontmatter: rejects scalar root" {
+    const a = testing.allocator;
+    try testing.expectError(error.InvalidWigPageFrontmatter, normalizeWigPageFrontmatter(a, .{ .integer = 42 }));
+}
+
+test "normalizeWigPageFrontmatter: rejects document non-map" {
+    const a = testing.allocator;
+    var p = try comb.parse(a, "document: hello\n");
+    defer p.deinit();
+    try testing.expectError(error.InvalidWigPageFrontmatter, normalizeWigPageFrontmatter(a, p.value));
+}
+
+test "parse + normalize: empty fence body" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "---\n---\nSome content.";
+    var result = (try parse(testing.allocator, source)).?;
+    defer result.deinit();
+    const n = try normalizeWigPageFrontmatter(a, result.data);
+    try validateWigPageFrontmatterRoot(n);
+    try testing.expectEqual(@as(usize, 0), n.get("document").?.object.len);
 }

@@ -196,33 +196,41 @@ Toupee uses `<t-*>` HTML elements. Key tags:
 
 ### Frontmatter
 
-YAML only, delimited by `---`. Required for all pages in `pages/`. Frontmatter has exactly one top-level key: `document:`.
+YAML only, delimited by `---`. Required for all pages in `pages/`.
 
-- `document:` -- all page metadata (title, layout, style, date, tags, etc.). Merged into `document.*` in the rendering context.
-- `document.data:` -- cascading data for child pages. Wig processes this at build time and **strips it from the template context**. It is a build instruction, not template data.
+**Single rule:** Wig loads the YAML **root object** and places it under the template context key `document` unchanged in shape: each **root key** `K` becomes **`document.K`**. There is no second spelling (no “implicit merge” of a root `document:` block into `document.*`).
+
+- Root `title:` → `document.title`. Root `data:` → `document.data` (cascade payload). Root `draft:` → `document.draft`, etc.
+- If the root includes a key literally named `document`, its value is exposed as **`document.document`** (nested keys are `document.document.*`). That is almost never what you want for normal metadata; use root keys such as `title:` instead. See `test/035_frontmatter_document_key.yaml`.
+
+Normalization only wraps the parse result as `{ document: <root mapping> }` for the internal pipeline. An empty fence (`---` then `---`) yields an empty `document` map. A sole root key `document:` **must** map to an object; a scalar (e.g. `document: foo`) is invalid.
+
+**Well-known root keys** (each lives under `document` after load): `title`, `layout`, `style`, `date`, `tags`, `description`, `thumbnail`, `draft`, `debug`, `data` (cascade payload), `paginate`, etc. — merged into `document.*` in the rendering context except where noted below.
+
+`document.data` — cascading data for child pages. Wig processes this at build time and **strips it from the template context**. It is a build instruction, not template data.
 
 Example leaf page:
+
 ```yaml
 ---
-document:
-  title: About Us
+title: About Us
 ---
 ```
 
 Example section index (`_index.dj`) with cascading defaults:
+
 ```yaml
 ---
-document:
-  layout: blog-index.html
-  title: Blog Posts
-  data:
-    document:
-      style: blog
-      layout: blog-post.html
+layout: blog-index.html
+title: Blog Posts
+data:
+  document:
+    style: blog
+    layout: blog-post.html
 ---
 ```
 
-Pages inherit `document.*` values from the cascade (see Data cascade below). Frontmatter `document:` values override inherited defaults.
+Pages inherit `document.*` values from the cascade (see Data cascade below). This page’s frontmatter overrides inherited defaults at `document.*`.
 
 Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colours.*`, `site.*`, etc.).
 
@@ -245,12 +253,12 @@ Sources merged in priority order (highest priority last -- later sources overrid
 2. Render flags (`site.draft`, `site.debug`)
 3. Style manifest data (`styles.{name}.*`)
 4. Page collection (`pages.*`) and taxonomies (`taxonomies.tags`)
-5. Directory-level cascading data (from `document.data:` in `_index.dj` frontmatter, or top-level `data:` with the same shape, applied to child pages)
-6. Page frontmatter `document:` (highest priority -- overrides all inherited `document.*` values)
+5. Directory-level cascading data (`document.data`, from root key `data:` in `_index.dj` frontmatter, applied to child pages)
+6. The current page's frontmatter fields (highest priority -- overrides all inherited `document.*` values)
 
 **Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
 
-**Directory-level data overrides:** The `document.data:` key in `_index.dj` frontmatter can override any data key, not just `document:`. For example, `document: data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
+**Directory-level data overrides:** Root key `data:` in `_index.dj` frontmatter (`document.data` after load) can override any data key. For example, `data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
 
 ### Page collection
 
@@ -261,7 +269,7 @@ The `pages` context key is a nested map mirroring the `pages/` directory tree (`
 - `pages/blog/_index.dj` -> `pages.blog.document` (section index metadata)
 - `pages/blog/post_one.dj` -> `pages.blog.post_one.document` (child page metadata)
 
-Metadata keys include `path` (URL path), `title`, `date`, and all other frontmatter `document:` values. Example: `pages.blog.post_one.document.path` -> `/blog/post-one/`.
+Metadata keys include `path` (URL path), `title`, `date`, and all other keys copied from page YAML into that page’s `document` map. Example: `pages.blog.post_one.document.path` -> `/blog/post-one/`.
 
 **`document` is a reserved key.** A page or directory named `document` is an error.
 
@@ -275,7 +283,7 @@ When rendering a page, `document.*` is populated by merging (in priority order):
 
 1. `data/document.yaml` -- global document defaults
 2. Directory-level `data.document:` from ancestor `_index.dj` files
-3. The page's own frontmatter `document:` values (highest priority)
+3. The page's own frontmatter as `document.*` (highest priority)
 
 Wig also injects computed values:
 
@@ -336,11 +344,10 @@ styles/default/
 
 The path prefix selects the subdirectory. No resolution order or fallback is needed.
 
-**Short form for document.layout:** Because Wig knows the style and that `document.layout` is always a layout, frontmatter can use the short form:
+**Short form for document.layout:** Because Wig knows the style and that `document.layout` is always a layout, frontmatter can use the short form at the YAML root:
 
 ```yaml
-document:
-  layout: page.html
+layout: page.html
 ```
 
 Resolves to `{style}/templates/layouts/page.html`. No `layouts/` prefix needed in frontmatter.
@@ -352,7 +359,7 @@ Resolves to `{style}/templates/layouts/page.html`. No `layouts/` prefix needed i
 | `blocks/paragraph.html` | Current style's blocks |
 | `_core:blocks/paragraph.html` | `_core` style's blocks |
 
-Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved.
+Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved. Cross-style references use **`style:path` only** (there is no `_core/layouts/...` slash alias).
 
 ### Bundles
 
@@ -417,8 +424,7 @@ feeds:
 Pages opt into feeds via frontmatter:
 
 ```yaml
-document:
-  feeds: [posts, tech]
+feeds: [posts, tech]
 ```
 
 Output: `feeds/{name}.xml` as valid Atom XML. Entries sorted by `document.date` (newest first). Each entry includes title, URL, date, and excerpt (from `document.excerpt`).

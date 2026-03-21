@@ -35,16 +35,14 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Djot Data
+        title: Djot Data
         ---
         Twitter: {{ meta.social.twitter }}
 
         GitHub: {{ meta.social.github }}
       html_page.html: |
         ---
-        document:
-          title: HTML Data
+        title: HTML Data
         ---
         <p>Twitter: <t-var name="meta.social.twitter" /></p>
         <p>GitHub: <t-var name="meta.social.github" /></p>

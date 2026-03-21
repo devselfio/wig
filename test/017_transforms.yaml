@@ -31,19 +31,17 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Hello World
-          date: 2026-03-16
-          author: quiteclose
+        title: Hello World
+        date: 2026-03-16
+        author: quiteclose
         ---
         Title: {{ document.title | upper }}
 
         Date: {{ document.date | date:%B %e, %Y }}
       about.dj: |
         ---
-        document:
-          title: About Us
-          author: quiteclose
+        title: About Us
+        author: quiteclose
         ---
         Slug: {{ document.title | slugify }}
 

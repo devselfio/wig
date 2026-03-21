@@ -26,18 +26,16 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: With Description
-          description: A custom excerpt from frontmatter.
-          thumbnail: /images/hero.jpg
+        title: With Description
+        description: A custom excerpt from frontmatter.
+        thumbnail: /images/hero.jpg
         ---
         This first paragraph is NOT the excerpt.
 
         Second paragraph.
       no_desc.dj: |
         ---
-        document:
-          title: Without Description
+        title: Without Description
         ---
         This first paragraph IS the excerpt.
 

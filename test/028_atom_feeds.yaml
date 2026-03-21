@@ -26,40 +26,35 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Home.
       blog:
         _index.dj: |
           ---
-          document:
-            title: Blog
+          title: Blog
           ---
           Blog index.
         first.dj: |
           ---
-          document:
-            title: First Post
-            date: 2026-03-10
-            description: The first post ever.
-            feeds: [posts]
+          title: First Post
+          date: 2026-03-10
+          description: The first post ever.
+          feeds: [posts]
           ---
           First post content.
         second.dj: |
           ---
-          document:
-            title: Second Post
-            date: 2026-03-15
-            description: A follow-up post.
-            feeds: [posts]
+          title: Second Post
+          date: 2026-03-15
+          description: A follow-up post.
+          feeds: [posts]
           ---
           Second post content.
         no_feed.dj: |
           ---
-          document:
-            title: No Feed
-            date: 2026-03-12
+          title: No Feed
+          date: 2026-03-12
           ---
           This page is not in any feed.
 output:

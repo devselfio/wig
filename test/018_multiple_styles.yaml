@@ -40,15 +40,13 @@ input:
     pages:
       _index.dj: |
         ---
-        document:
-          title: Home
+        title: Home
         ---
         Default style page.
       alt.dj: |
         ---
-        document:
-          title: Alt
-          style: minimal
+        title: Alt
+        style: minimal
         ---
         Minimal style page.
 output:
