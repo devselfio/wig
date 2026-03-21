@@ -1,0 +1,34 @@
+/*
+ * grid
+ * Auto-fill responsive grid without media queries.
+ * Every Layout: https://every-layout.dev/layouts/grid/
+ *
+ * --gutter
+ *   Gap between items (default 1.5rem).
+ * --grid-min-item-size
+ *   Minimum column width (default 16rem).
+ * --grid-placement
+ *   auto-fill or auto-fit (default auto-fill).
+ *
+ * [data-layout='50-50']
+ * [data-layout='thirds']
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(
+    var(--grid-placement, auto-fill),
+    minmax(min(var(--grid-min-item-size, 16rem), 100%), 1fr)
+  );
+  gap: var(--gutter, var(--space-l, 1.5rem));
+}
+
+.grid[data-layout='50-50'] {
+  --grid-placement: auto-fit;
+  --grid-min-item-size: clamp(16rem, 50vw, 33rem);
+}
+
+.grid[data-layout='thirds'] {
+  --grid-placement: auto-fit;
+  --grid-min-item-size: clamp(16rem, 33%, 20rem);
+}

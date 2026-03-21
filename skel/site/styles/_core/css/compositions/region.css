@@ -1,0 +1,12 @@
+/*
+ * region
+ * Vertical padding for page sections (composition).
+ *
+ * --region-space
+ *   Block padding (default 1.5rem).
+ */
+
+.region {
+  padding-block: var(--region-space, var(--space-m, 1.5rem));
+  position: relative;
+}

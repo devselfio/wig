@@ -1,0 +1,30 @@
+/*
+ * text-sizes
+ * Fluid type steps from the site token pipeline (--size-step-* on :root).
+ * Fallback rem values keep utilities usable before surface.css runs.
+ */
+
+:where(.text-step-5) {
+  font-size: var(--size-step-5, 2rem);
+}
+:where(.text-step-4) {
+  font-size: var(--size-step-4, 1.75rem);
+}
+:where(.text-step-3) {
+  font-size: var(--size-step-3, 1.5rem);
+}
+:where(.text-step-2) {
+  font-size: var(--size-step-2, 1.25rem);
+}
+:where(.text-step-1) {
+  font-size: var(--size-step-1, 1.125rem);
+}
+:where(.text-step-0) {
+  font-size: var(--size-step-0, 1rem);
+}
+:where(.text-step--1) {
+  font-size: var(--size-step--1, 0.875rem);
+}
+:where(.text-step--2) {
+  font-size: var(--size-step--2, 0.75rem);
+}

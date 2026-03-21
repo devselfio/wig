@@ -1,0 +1,12 @@
+/*
+ * narrow
+ * Exception layer example: constrain width for a subsection inside a wide row.
+ * Prefer sparingly; prefer compositions for layout.
+ * [data-exception="narrow"] on a wrapper
+ * --exception-narrow: max inline size (default 45ch)
+ */
+
+[data-exception='narrow'] {
+  max-inline-size: var(--exception-narrow, 45ch);
+  margin-inline: auto;
+}

@@ -1,6 +1,6 @@
 # Wig
 
-A library-first static site generator in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, colour scheme management, and multi-style site architecture.
+A library-first static site generator in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, color scheme management, and multi-style site architecture.
 
 **Roadmap (workspace root):** [`WIG_ROADMAP.md`](../WIG_ROADMAP.md) — releases, dimension score targets vs peer deep-dives, intentional trade-offs, replay cadence.
 
@@ -39,7 +39,9 @@ zig build test     # run all tests (unit + spec tests)
 zig build run      # run the wig CLI
 ```
 
-The `zig build render`, `zig build serve`, `zig build validate` steps are for **scaffolded projects** (after `wig init`); the user's build.zig defines those. The wig repo builds the CLI and runs tests.
+**Binary workflow:** `wig init [path]` then `wig build [path] [--clean]` writes the static site to `<site-root>/zig-out/site/` (same layout as the spec runner). No project `build.zig` is required for SSG.
+
+**Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build validate` wrappers; that is separate from the stock CLI.
 
 ## Project structure
 
@@ -52,7 +54,7 @@ wig/
     main.zig        # wig CLI entry point
     config.zig      # site config + style manifest loading
     tokens.zig      # fluid typography + spacing computation (CUBE CSS)
-    colours.zig     # colour scheme resolution (palette indirection)
+    colours.zig     # color scheme resolution (palette indirection; data key `colors` or legacy `colours`)
     context.zig     # Comb.Value/std.json.Value -> Toupee.Value translation
     frontmatter.zig # shared YAML frontmatter detection + stripping
     bundles.zig     # asset bundles (CSS + JS): render, concat, hash
@@ -67,7 +69,7 @@ wig/
     router.zig      # route matching, path parameters, groups
     handler.zig     # request Context, Response, handler signatures
     session.zig     # cookie-based sessions, MemoryStore
-    scaffold.zig    # wig init, add style, add block, install
+    scaffold.zig    # wig init (copies skel/site), add style, add block, install
     html.zig        # shared HTML utilities (stripTags)
     test_runner.zig # spec test runner (`NNN_*.yaml` full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
@@ -75,17 +77,19 @@ wig/
     output_paths.zig  # canonical zig-out/site paths (build + future static server)
   test/
     NNN_*.yaml      # spec tests (3-digit id prefix; primary integration tests)
+  skel/
+    site/           # default project tree copied by `wig init` (`_core` + `default`, data, pages, assets)
 ```
 
 ## Architecture
 
-### Library-first
+### Library-first, CLI-first SSG
 
-Wig is a library that users import into their own Zig project. `wig init` scaffolds a project with `build.zig`, `src/render.zig`, `src/serve.zig`, and `src/validate.zig`. Users own these files and can customise them.
+Wig is a Zig library (`Site`, `Site.buildAll`, …) and ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `_core`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
 
 ### SSG and optional web framework
 
-**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, YAML specs in `test/NNN_*.yaml` (decimal id prefix), and the CLI cover this end-to-end.
+**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, the **`wig build`** command, and YAML specs in `test/NNN_*.yaml` (decimal id prefix).
 
 **Optional web framework** pieces (`app.zig`, `router.zig`, `handler.zig`, `session.zig`, and helpers such as `devServer`) exist for users who want HTTP routing, handlers, and sessions on top of a built site. This layer is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite (which only drives full static builds), and APIs may change. Proper specification, coverage, and likely **spec-runner extensions** (e.g. HTTP-level or app-lifecycle tests) are follow-on work.
 
@@ -232,7 +236,7 @@ data:
 
 Pages inherit `document.*` values from the cascade (see Data cascade below). This page’s frontmatter overrides inherited defaults at `document.*`.
 
-Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colours.*`, `site.*`, etc.).
+Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colors.*`, `site.*`, etc.; legacy sites may still use a top-level `colours` data directory and `colours.*` paths).
 
 ### Clean URLs
 
@@ -330,7 +334,7 @@ styles/default/
 
 - `templates/layouts/` -- page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
 - `templates/blocks/` -- CUBE blocks (components). Use `<t-include template="blocks/card.html" />`. Each block has CSS in `css/blocks/` and HTML in `templates/blocks/`.
-- `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colours). Files without frontmatter are plain text.
+- `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
 - `patterns/` -- pattern library examples. One HTML file per block in `patterns/blocks/`; discovered from `css/blocks/*.css` doc comments.
 
 ### Template resolution
@@ -375,25 +379,27 @@ bundles:
 
 Bundles are concatenated in declared order. Files with frontmatter are rendered through Toupee first, then concatenated. Output location follows the style's directory structure.
 
-### Colour schemes
+### Color schemes
 
-Wig uses a three-layer colour indirection system:
+Wig uses a three-layer color indirection system:
 
-1. **Palette** -- maps colour names to hex values. Each scheme uses its own native naming.
+1. **Palette** -- maps color names to hex values. Each scheme uses its own native naming.
 2. **Styles** -- maps semantic roles (`text.primary`, `background.primary`, `text.link`) to palette names.
 3. **Syntax** -- maps code highlighting roles (`keyword`, `string`, `comment`) to palette names.
 
-Schemes have `light` and `dark` variants. Scheme data lives in `data/colours/{name}.yaml`. The style manifest declares which scheme to use: `scheme: mono`.
+Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{name}.yaml` (merged as `colors.{name}` in site data). The style manifest declares which scheme to use: `scheme: mono`.
 
-**Palette pre-resolution:** Wig resolves palette indirection at load time. When colour scheme data is loaded, Wig walks the `styles` and `syntax` maps and replaces palette names with their hex values. Template authors access resolved values directly (e.g. `colours.mono.light.styles.text.primary` contains `"#000000"`, not `"black"`).
+**Palette pre-resolution:** Wig resolves palette indirection at load time. When scheme data is loaded, Wig walks the `styles` and `syntax` maps and replaces palette names with their hex values. Template authors access resolved values directly (e.g. `colors.mono.light.styles.text.primary` contains `"#000000"`, not `"black"`).
 
-**Dynamic path resolution (Toupee 0.2+):** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colours.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
+**Legacy:** A `data/colours/` directory is still supported; it merges as the top-level `colours` key and receives the same resolution. Prefer `data/colors/` and `colors.*` for new sites.
+
+**Dynamic path resolution (Toupee 0.2+):** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colors.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
 
 ### CSS rendering context
 
 CSS files with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style assets, not pages). They receive the full site context minus `document.*`:
 - `styles.*` -- all style manifests
-- `colours.*` -- all colour scheme data (pre-resolved)
+- `colors.*` -- all color scheme data from `data/colors/` (pre-resolved); legacy `colours.*` if you use `data/colours/`
 - `site.*` -- site configuration
 - All other data directory keys
 

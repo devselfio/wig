@@ -1,0 +1,14 @@
+/*
+ * cluster
+ * Horizontal flex row that wraps; good for meta rows, toolbars, tag lists.
+ * --cluster-space: gap between items (default 1rem)
+ * --cluster-vertical-align: align-items (default center)
+ */
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cluster-space, 1rem);
+  justify-content: flex-start;
+  align-items: var(--cluster-vertical-align, center);
+}

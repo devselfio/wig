@@ -1,0 +1,23 @@
+name: default
+scheme: mono
+
+tokens:
+  viewport:
+    min: 320
+    max: 1240
+  typography:
+    base:
+      min: 18
+      max: 20
+    scale:
+      min: 1.2
+      max: 1.25
+    steps:
+      above: 5
+      below: 2
+  spacing:
+    base: 16
+    scale: 1.5
+
+bundles:
+  - css/surface.css

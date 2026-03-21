@@ -1,0 +1,12 @@
+/*
+ * indent
+ * Inline-start border for blockquotes, notes, callouts.
+ *
+ * --indent-size
+ * --indent-color
+ */
+
+.indent {
+  border-inline-start: var(--indent-size, var(--space-xs-l, 0.5rem)) solid
+    var(--indent-color, currentColor);
+}

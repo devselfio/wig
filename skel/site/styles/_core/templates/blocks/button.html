@@ -1,0 +1,5 @@
+<t-if var="href">
+<a class="button" t-var:href="href" t-var:data-variant="variant" t-var:aria-label="aria-label"><t-slot /></a>
+<t-else />
+<button class="button" t-var:type="type" t-var:data-variant="variant" t-var:aria-label="aria-label"><t-slot /></button>
+</t-if>

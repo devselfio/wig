@@ -1,0 +1,63 @@
+/*
+ * button
+ * Styled control as <button> or <a> (use templates/blocks/button.html).
+ *
+ * --button-bg
+ * --button-color
+ * --button-border
+ * --button-padding
+ * --button-radius
+ *
+ * [data-variant='primary']
+ * [data-variant='ghost']
+ * [data-variant='icon-only']
+ */
+
+.button {
+  --button-bg: var(--color-bg-secondary, var(--color-bg-primary, Canvas));
+  --button-color: currentColor;
+  --button-border: var(--stroke, 1px solid currentColor);
+  --button-padding: 0.5em 1.2em;
+  --button-radius: var(--radius-s, 0.2rem);
+
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: var(--button-padding);
+  background: var(--button-bg);
+  color: var(--button-color);
+  border: var(--button-border);
+  border-radius: var(--button-radius);
+  font-family: var(--font-heading, system-ui, sans-serif);
+  font-size: inherit;
+  font-weight: 500;
+  line-height: var(--leading-fine, 1.1);
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter var(--transition-base, 250ms) ease;
+}
+
+.button:hover {
+  filter: brightness(1.1);
+}
+
+.button:active {
+  filter: brightness(0.95);
+}
+
+.button[data-variant='primary'] {
+  --button-bg: var(--color-text-primary, CanvasText);
+  --button-color: var(--color-bg-primary, Canvas);
+  --button-border: 1px solid transparent;
+}
+
+.button[data-variant='ghost'] {
+  --button-bg: transparent;
+  --button-border: var(--stroke, 1px solid currentColor);
+}
+
+.button[data-variant='icon-only'] {
+  --button-padding: 0.45em;
+  aspect-ratio: 1;
+  justify-content: center;
+}

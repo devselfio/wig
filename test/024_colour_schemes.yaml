@@ -1,5 +1,5 @@
 test:
-  name: Colour scheme CSS generation.
+  name: Color scheme CSS generation.
   comment: Tests palette indirection -- Wig pre-resolves palette names to hex at load time.
   action:
     wig: build
@@ -12,7 +12,7 @@ input:
       document.yaml: |
         style: default
         layout: page.html
-      colours:
+      colors:
         mono.yaml: |
           light:
             meta:
@@ -50,18 +50,18 @@ input:
           name: default
           scheme: mono
           bundles:
-            - css/colours.css
+            - css/colors.css
         layouts:
           page.html: |
             <t-slot />
         css:
-          colours.css: |
+          colors.css: |
             ---
             ---
             :root {
-              --text-primary: <t-raw name="colours.mono.light.styles.text.primary" />;
-              --text-link: <t-raw name="colours.mono.light.styles.text.link" />;
-              --bg-primary: <t-raw name="colours.mono.light.styles.background.primary" />;
+              --text-primary: <t-raw name="colors.mono.light.styles.text.primary" />;
+              --text-link: <t-raw name="colors.mono.light.styles.text.link" />;
+              --bg-primary: <t-raw name="colors.mono.light.styles.background.primary" />;
             }
     pages:
       _index.dj: |
@@ -73,7 +73,7 @@ output:
     index.html: |
       <p>Home.</p>
     css:
-      colours.css: |
+      colors.css: |
         :root {
           --text-primary: #000000;
           --text-link: #0066cc;

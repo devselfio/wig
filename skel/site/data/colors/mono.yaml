@@ -1,0 +1,67 @@
+light:
+  meta:
+    name: Mono Light
+  palette:
+    white: "#ffffff"
+    black: "#000000"
+    grey: "#57606a"
+    blue: "#0550ae"
+    green: "#116329"
+    orange: "#953800"
+    purple: "#8250df"
+  styles:
+    text:
+      primary: black
+      secondary: grey
+      emphasis: black
+      heading: black
+      link: blue
+    background:
+      primary: white
+      secondary: grey
+      embed: grey
+  syntax:
+    variable: "#8250df"
+    constant: "#8250df"
+    punctuation: "#57606a"
+    operator: "#000000"
+    number: "#116329"
+    type: "#953800"
+    function: "#0550ae"
+    string: "#0550ae"
+    comment: "#57606a"
+    keyword: "#0550ae"
+
+dark:
+  meta:
+    name: Mono Dark
+  palette:
+    white: "#f0f6fc"
+    black: "#0d1117"
+    grey: "#8b949e"
+    blue: "#58a6ff"
+    green: "#3fb950"
+    orange: "#ffa657"
+    purple: "#d2a8ff"
+  styles:
+    text:
+      primary: white
+      secondary: grey
+      emphasis: white
+      heading: white
+      link: blue
+    background:
+      primary: black
+      secondary: grey
+      embed: grey
+  syntax:
+    variable: "#d2a8ff"
+    constant: "#d2a8ff"
+    punctuation: "#8b949e"
+    operator: "#f0f6fc"
+    number: "#3fb950"
+    type: "#ffa657"
+    function: "#58a6ff"
+    string: "#58a6ff"
+    comment: "#8b949e"
+    keyword: "#58a6ff"

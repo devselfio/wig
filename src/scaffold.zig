@@ -14,60 +14,76 @@ const style_subdirs = [_][]const u8{
     "css/fonts",
     "css/globals",
     "css/utilities",
+    "css/exceptions",
     "patterns/blocks",
     "patterns/compositions",
     "patterns/utilities",
+    "patterns/exceptions",
+    "patterns/fonts",
+    "patterns/globals",
 };
 
-/// Scaffolds a new Wig project at the given path.
-///
-/// Creates the standard directory structure: data/, pages/, styles/, assets/.
-/// Also creates styles/default/ with CUBE-aligned subdirs and writes a minimal
-/// site config and starter index page.
+/// Copies `wig/skel/site` (resolved next to the wig binary or from cwd) into `dst_abs`.
+fn copyTree(a: Allocator, src_abs: []const u8, dst_abs: []const u8) !void {
+    var src_root = try fs.openDirAbsolute(src_abs, .{ .iterate = true });
+    defer src_root.close();
+    var dst_root = try fs.openDirAbsolute(dst_abs, .{});
+    defer dst_root.close();
+
+    var walker = try src_root.walk(a);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        switch (entry.kind) {
+            .directory => {},
+            .file => {
+                if (fs.path.dirname(entry.path)) |d| {
+                    try dst_root.makePath(d);
+                }
+                const content = try src_root.readFileAlloc(a, entry.path, 10 * 1024 * 1024);
+                defer a.free(content);
+                var out = try dst_root.createFile(entry.path, .{});
+                defer out.close();
+                try out.writeAll(content);
+            },
+            else => {},
+        }
+    }
+}
+
+fn fallBackCwdSkel(a: Allocator) ![]const u8 {
+    const cwd = try fs.cwd().realpathAlloc(a, ".");
+    defer a.free(cwd);
+    const p = try fs.path.join(a, &.{ cwd, "skel", "site" });
+    try fs.accessAbsolute(p, .{});
+    return p;
+}
+
+/// Resolves the skeleton site directory (`skel/site` under the wig repo).
+pub fn resolveSkelSiteDir(a: Allocator) ![]const u8 {
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe = fs.selfExePath(&exe_buf) catch return try fallBackCwdSkel(a);
+    const exe_dir = fs.path.dirname(exe) orelse return try fallBackCwdSkel(a);
+    const candidate = try fs.path.join(a, &.{ exe_dir, "..", "skel", "site" });
+    defer a.free(candidate);
+    const resolved = try fs.path.resolve(a, &.{candidate});
+    fs.accessAbsolute(resolved, .{}) catch {
+        a.free(resolved);
+        return try fallBackCwdSkel(a);
+    };
+    return resolved;
+}
+
+/// Scaffolds a new Wig project by copying `skel/site` (see `resolveSkelSiteDir`).
 pub fn init(a: Allocator, target_path: []const u8) !void {
+    fs.cwd().makePath(target_path) catch {};
     const abs = try fs.realpathAlloc(a, target_path);
     defer a.free(abs);
 
-    for (project_dirs) |dir_name| {
-        const dir_path = try fs.path.join(a, &.{ abs, dir_name });
-        defer a.free(dir_path);
-        try fs.makeDirAbsolute(dir_path);
-    }
+    const skel = try resolveSkelSiteDir(a);
+    defer a.free(skel);
 
-    // CUBE directory structure for default style
-    var project_dir = try fs.openDirAbsolute(abs, .{});
-    defer project_dir.close();
-    for (style_subdirs) |subdir| {
-        const full = try std.fmt.allocPrint(a, "styles/default/{s}", .{subdir});
-        try project_dir.makePath(full);
-        a.free(full);
-    }
-
-    const config_path = try fs.path.join(a, &.{ abs, "data", "site.yaml" });
-    defer a.free(config_path);
-    {
-        var f = try fs.createFileAbsolute(config_path, .{});
-        defer f.close();
-        try f.writeAll(
-            \\url: https://example.com
-            \\title: My Wig Site
-            \\
-        );
-    }
-
-    const index_path = try fs.path.join(a, &.{ abs, "pages", "index.dj" });
-    defer a.free(index_path);
-    {
-        var f = try fs.createFileAbsolute(index_path, .{});
-        defer f.close();
-        try f.writeAll(
-            \\---
-            \\title: Home
-            \\---
-            \\Welcome to your new Wig site.
-            \\
-        );
-    }
+    try copyTree(a, skel, abs);
 }
 
 /// Installs a style from wig-stand or a git URL.
@@ -101,7 +117,7 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
         const content = try std.fmt.allocPrint(a,
             \\# Style: {s}
             \\#
-            \\# Tokens, colour schemes, and asset bundles for this style.
+            \\# Tokens, color schemes, and asset bundles for this style.
             \\
             \\viewport:
             \\  min: 320
@@ -236,6 +252,11 @@ test "init: creates project directories and CUBE style structure" {
     defer testing.allocator.free(layouts_path);
     var layouts_dir = try fs.openDirAbsolute(layouts_path, .{});
     layouts_dir.close();
+
+    const core_manifest = try fs.path.join(testing.allocator, &.{ abs, "styles", "_core", "style.yaml" });
+    defer testing.allocator.free(core_manifest);
+    const cm = try fs.openFileAbsolute(core_manifest, .{});
+    cm.close();
 }
 
 test "addStyle: creates manifest with correct name" {

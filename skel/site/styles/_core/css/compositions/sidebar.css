@@ -1,0 +1,25 @@
+/*
+ * sidebar
+ * Two-column layout: sidebar + main. Below the gap threshold it stacks.
+ * Based on Every Layout’s sidebar; tune with custom properties.
+ * --sidebar-target-width: ideal sidebar width (default 20rem)
+ * --sidebar-content-min: minimum main column width (default 50%)
+ * --sidebar-gap: gap between columns (default 1rem)
+ */
+
+.sidebar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sidebar-gap, 1rem);
+}
+
+.sidebar > :first-child {
+  flex-basis: var(--sidebar-target-width, 20rem);
+  flex-grow: 1;
+}
+
+.sidebar > :last-child {
+  flex-basis: 0;
+  flex-grow: 999;
+  min-inline-size: var(--sidebar-content-min, 50%);
+}

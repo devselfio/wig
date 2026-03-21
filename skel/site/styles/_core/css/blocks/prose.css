@@ -1,0 +1,27 @@
+/*
+ * prose
+ * Long-form content: comfortable measure and heading/list spacing.
+ * --prose-measure: max inline size (default 65ch)
+ * --prose-heading-space: space above headings (default 1.5em)
+ */
+
+.prose {
+  max-inline-size: var(--prose-measure, 65ch);
+}
+
+.prose :where(h1, h2, h3, h4) {
+  margin-block: var(--prose-heading-space, 1.5em) 0.5em;
+  text-wrap: balance;
+}
+
+.prose :where(p, li) {
+  max-inline-size: var(--prose-measure, 65ch);
+}
+
+.prose :where(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
+.prose :where(li + li) {
+  margin-block-start: 0.35em;
+}

@@ -1,0 +1,13 @@
+/*
+ * center
+ * Max-width wrapper with horizontal padding — typical “container” composition.
+ * --center-max: max inline size (default 65ch)
+ * --center-padding: inline padding (default 1rem)
+ */
+
+.center {
+  box-sizing: content-box;
+  max-inline-size: var(--center-max, 65ch);
+  margin-inline: auto;
+  padding-inline: var(--center-padding, 1rem);
+}

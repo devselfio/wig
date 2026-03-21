@@ -1,0 +1,23 @@
+/*
+ * Document (global)
+ *
+ * Baseline typography and canvas colors on `body`. Semantic custom properties are
+ * optional: when a site style defines tokens/scheme, these pick them up;
+ * otherwise fall back to system colors.
+ */
+
+body {
+  font-family: var(
+    --font-body,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Ubuntu,
+    Cantarell,
+    Noto Sans,
+    sans-serif
+  );
+  color: var(--color-text-primary, CanvasText);
+  background-color: var(--color-bg-primary, Canvas);
+}

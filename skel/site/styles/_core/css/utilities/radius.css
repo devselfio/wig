@@ -1,0 +1,17 @@
+/*
+ * radius
+ * Small radius scale using a single base token.
+ * --radius-base: corner radius (default 0.25rem)
+ */
+
+.rounded-none {
+  border-radius: 0;
+}
+
+.rounded {
+  border-radius: var(--radius-base, 0.25rem);
+}
+
+.rounded-lg {
+  border-radius: calc(var(--radius-base, 0.25rem) * 2);
+}

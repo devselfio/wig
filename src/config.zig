@@ -582,11 +582,11 @@ test "loadDataFiles: loads nested namespace" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("data/colours");
+    try tmp.dir.makePath("data/colors");
 
-    var colours_dir = try tmp.dir.openDir("data/colours", .{});
-    defer colours_dir.close();
-    var cf = try colours_dir.createFile("solarized.yaml", .{});
+    var colors_dir = try tmp.dir.openDir("data/colors", .{});
+    defer colors_dir.close();
+    var cf = try colors_dir.createFile("solarized.yaml", .{});
     try cf.writeAll("name: Solarized\ntype: dark");
     cf.close();
 
@@ -596,9 +596,9 @@ test "loadDataFiles: loads nested namespace" {
     var result = try loadDataFiles(std.testing.allocator, abs);
     defer result.deinit();
 
-    const colours_val = result.value.map.get("colours") orelse
+    const colors_val = result.value.map.get("colors") orelse
         return error.TestUnexpectedResult;
-    const solarized = colours_val.map.get("solarized") orelse
+    const solarized = colors_val.map.get("solarized") orelse
         return error.TestUnexpectedResult;
     const name = solarized.map.get("name") orelse
         return error.TestUnexpectedResult;

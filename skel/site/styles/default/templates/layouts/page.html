@@ -1,0 +1,12 @@
+<t-extend template="_core:layouts/base.html">
+<t-define name="head">
+<link rel="stylesheet" t-var:href="assets._core.css.cube.path" />
+<link rel="stylesheet" t-var:href="assets.default.css.surface.path" />
+</t-define>
+<t-define name="body">
+<t-include template="_core:blocks/skip-link.html" />
+<main id="main-content" class="wrapper region flow">
+<t-slot />
+</main>
+</t-define>
+</t-extend>

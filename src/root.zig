@@ -383,7 +383,9 @@ fn buildPhase_styleTokensSiteData(
         var data_it = data_result.value.map.iterator();
         while (data_it.next()) |entry| {
             var val = entry.value_ptr.*;
-            if (std.mem.eql(u8, entry.key_ptr.*, "colours") and val == .map) {
+            if ((std.mem.eql(u8, entry.key_ptr.*, "colors") or
+                std.mem.eql(u8, entry.key_ptr.*, "colours")) and val == .map)
+            {
                 val = try colours.resolveColoursData(ba, val);
             }
             try style_ctx.put(entry.key_ptr.*, val);

@@ -1,0 +1,18 @@
+/*
+ * switcher
+ * Items sit in a row until the row would be narrower than --switcher-threshold,
+ * then they stack (Every Layout switcher).
+ * --switcher-threshold: width at which layout switches (default 30rem)
+ * --switcher-gap: gap between items (default 1rem)
+ */
+
+.switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--switcher-gap, 1rem);
+}
+
+.switcher > * {
+  flex-grow: 1;
+  flex-basis: calc((var(--switcher-threshold, 30rem) - 100%) * 999);
+}

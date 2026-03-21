@@ -139,7 +139,7 @@ pub fn resolve(
     return .{ .value = .{ .map = result_map }, .arena = arena };
 }
 
-/// Resolves palette indirection in data/colours structure.
+/// Resolves palette indirection in `data/colors/` (or legacy `data/colours/`) merged as the top-level `colors` / `colours` map.
 /// Replaces style role values (e.g. "black") with hex from palette (e.g. "#000000").
 pub fn resolveColoursData(a: Allocator, colours_val: toupee.Value) !toupee.Value {
     if (colours_val != .map) return colours_val;

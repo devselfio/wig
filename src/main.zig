@@ -14,12 +14,22 @@ pub fn main() !void {
     if (std.mem.eql(u8, command, "init")) {
         const path = args.next() orelse ".";
         try wig.scaffold.init(a, path);
+    } else if (std.mem.eql(u8, command, "build")) {
+        const opts = parsePathAndClean(&args);
+        var site = try wig.Site.init(a, .{ .root = opts.path });
+        defer site.deinit();
+        site.buildAll(.{ .clean = opts.clean }) catch |err| {
+            std.debug.print("wig build: failed ({any})\n", .{err});
+            return err;
+        };
+        std.debug.print("wig build: ok → {s}/zig-out/site/\n", .{opts.path});
     } else if (std.mem.eql(u8, command, "validate")) {
         const path = args.next() orelse ".";
         var site = try wig.Site.init(a, .{ .root = path });
         defer site.deinit();
         const external = hasFlag(&args, "--external");
-        try site.validate(.{ .external_links = external });
+        const diags = try site.validate(.{ .external_links = external });
+        defer site.allocator.free(diags);
     } else if (std.mem.eql(u8, command, "install")) {
         const name_or_url = args.next() orelse {
             std.debug.print("wig install: missing style name or URL\n", .{});
@@ -66,13 +76,37 @@ fn printUsage() void {
         \\
         \\Commands:
         \\  init [path]                  Scaffold a new Wig project
-        \\  install <name|url>           Install a style from wig-stand or URL
+        \\  build [path] [--clean]       Build static site to zig-out/site/
+        \\  install <name|url>          Install a style from wig-stand or URL
         \\  add style <name>             Create a new empty style
         \\  add block <style> <name>     Add a block pattern to a style
         \\  styles <name> manifest       List asset bundle files for a style
         \\  validate [path] [--external] Validate without building
         \\
     , .{});
+}
+
+const PathAndClean = struct {
+    path: []const u8,
+    clean: bool,
+};
+
+/// Parses optional `[path]` and `--clean` in any order after the subcommand.
+fn parsePathAndClean(args: *std.process.ArgIterator) PathAndClean {
+    var path: ?[]const u8 = null;
+    var clean = false;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--clean")) {
+            clean = true;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("wig build: unknown option '{s}'\n", .{arg});
+        } else if (path == null) {
+            path = arg;
+        } else {
+            std.debug.print("wig build: unexpected extra argument '{s}'\n", .{arg});
+        }
+    }
+    return .{ .path = path orelse ".", .clean = clean };
 }
 
 fn hasFlag(args: *std.process.ArgIterator, flag: []const u8) bool {

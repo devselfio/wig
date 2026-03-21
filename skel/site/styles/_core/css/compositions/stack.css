@@ -1,0 +1,14 @@
+/*
+ * stack
+ * Vertical rhythm: children spaced with gap (flex column).
+ * --stack-space: gap between stacked items (default 1rem)
+ * --stack-align: align-items (default stretch)
+ */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: var(--stack-align, stretch);
+  justify-content: flex-start;
+  gap: var(--stack-space, 1rem);
+}

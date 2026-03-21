@@ -1,0 +1,5 @@
+<t-if var="href">
+<a class="tag" t-var:href="href" t-var:data-variant="variant"><t-var name="label" /><t-if var="count"><span class="count"><t-var name="count" /></span></t-if></a>
+<t-else />
+<span class="tag" t-var:data-variant="variant"><t-var name="label" /><t-if var="count"><span class="count"><t-var name="count" /></span></t-if></span>
+</t-if>

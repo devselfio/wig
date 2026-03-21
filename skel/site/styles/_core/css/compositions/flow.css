@@ -1,0 +1,12 @@
+/*
+ * flow
+ * Vertical rhythm via the lobotomised owl selector (composition layer).
+ * Every Layout stack discussion: https://every-layout.dev/layouts/stack/
+ *
+ * --flow-space
+ *   Space between sibling elements (default 1em).
+ */
+
+.flow > * + * {
+  margin-block-start: var(--flow-space, 1em);
+}

@@ -1,0 +1,23 @@
+/*
+ * repel
+ * Push clusters to opposite ends; wraps when space is tight.
+ *
+ * --gutter
+ *   Gap between items (default 1rem).
+ * --repel-vertical-alignment
+ *   align-items (default center).
+ *
+ * [data-nowrap]
+ */
+
+.repel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: var(--repel-vertical-alignment, center);
+  gap: var(--gutter, var(--space-m, 1rem));
+}
+
+.repel[data-nowrap] {
+  flex-wrap: nowrap;
+}

@@ -1,0 +1,44 @@
+---
+---
+
+:root {
+<t-for step in styles.default.computed_tokens.typography>
+  --size-<t-var name="step.name" />: <t-var name="step.value" />;
+</t-for>
+
+  --color-text-primary: <t-raw name="colors.mono.light.styles.text.primary" />;
+  --color-text-secondary: <t-raw name="colors.mono.light.styles.text.secondary" />;
+  --color-text-emphasis: <t-raw name="colors.mono.light.styles.text.emphasis" />;
+  --color-text-heading: <t-raw name="colors.mono.light.styles.text.heading" />;
+  --color-text-link: <t-raw name="colors.mono.light.styles.text.link" />;
+
+  --color-bg-primary: <t-raw name="colors.mono.light.styles.background.primary" />;
+  --color-bg-secondary: <t-raw name="colors.mono.light.styles.background.secondary" />;
+  --color-bg-embed: <t-raw name="colors.mono.light.styles.background.embed" />;
+
+  --syntax-variable: <t-raw name="colors.mono.light.syntax.variable" />;
+  --syntax-constant: <t-raw name="colors.mono.light.syntax.constant" />;
+  --syntax-punctuation: <t-raw name="colors.mono.light.syntax.punctuation" />;
+  --syntax-operator: <t-raw name="colors.mono.light.syntax.operator" />;
+  --syntax-number: <t-raw name="colors.mono.light.syntax.number" />;
+  --syntax-type: <t-raw name="colors.mono.light.syntax.type" />;
+  --syntax-function: <t-raw name="colors.mono.light.syntax.function" />;
+  --syntax-string: <t-raw name="colors.mono.light.syntax.string" />;
+  --syntax-comment: <t-raw name="colors.mono.light.syntax.comment" />;
+  --syntax-keyword: <t-raw name="colors.mono.light.syntax.keyword" />;
+
+  --font-heading: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-body: var(--font-heading);
+
+  --space-xs-l: 0.5rem;
+  --space-m: 1rem;
+  --space-l: 1.5rem;
+  --gutter: 1rem;
+  --radius-s: 0.2rem;
+  --transition-base: 250ms;
+  --leading-fine: 1.1;
+
+  --stroke: 1px solid <t-raw name="colors.mono.light.styles.text.primary" />;
+  --stroke-light: 1px solid <t-raw name="colors.mono.light.styles.text.secondary" />;
+}

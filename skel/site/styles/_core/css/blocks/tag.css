@@ -1,0 +1,46 @@
+/*
+ * tag
+ * Inline label or taxonomy chip; optional count (see templates/blocks/tag.html).
+ *
+ * --tag-bg
+ * --tag-color
+ * --tag-font-size
+ * --tag-padding
+ *
+ * [data-variant='active']
+ */
+
+.tag {
+  --tag-bg: var(--color-bg-secondary, var(--color-bg-primary, Canvas));
+  --tag-color: currentColor;
+  --tag-font-size: var(--size-step--1, 0.875rem);
+  --tag-padding: 0.15em 0.5em;
+
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  padding: var(--tag-padding);
+  background: var(--tag-bg);
+  color: var(--tag-color);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--tag-font-size);
+  line-height: var(--leading-fine, 1.1);
+  border-radius: var(--radius-s, 0.2rem);
+  border: var(--stroke-light, 1px solid color-mix(in srgb, currentColor 30%, transparent));
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.tag:hover {
+  filter: brightness(1.15);
+}
+
+.tag[data-variant='active'] {
+  --tag-bg: var(--color-text-primary, CanvasText);
+  --tag-color: var(--color-bg-primary, Canvas);
+}
+
+.tag .count {
+  font-weight: 700;
+  opacity: 0.7;
+}

@@ -1,0 +1,31 @@
+/*
+ * text-colors
+ * Map semantic scheme roles to text and backgrounds.
+ * Define --color-text-* and --color-bg-* on :root in your site style (e.g. surface.css).
+ */
+
+:where(.text-primary) {
+  color: var(--color-text-primary, CanvasText);
+}
+:where(.text-secondary) {
+  color: var(--color-text-secondary, color-mix(in srgb, CanvasText 70%, Canvas));
+}
+:where(.text-emphasis) {
+  color: var(--color-text-emphasis, CanvasText);
+}
+:where(.text-heading) {
+  color: var(--color-text-heading, CanvasText);
+}
+:where(.text-link) {
+  color: var(--color-text-link, LinkText);
+}
+
+:where(.bg-primary) {
+  background: var(--color-bg-primary, Canvas);
+}
+:where(.bg-secondary) {
+  background: var(--color-bg-secondary, color-mix(in srgb, CanvasText 6%, Canvas));
+}
+:where(.bg-embed) {
+  background: var(--color-bg-embed, color-mix(in srgb, CanvasText 10%, Canvas));
+}

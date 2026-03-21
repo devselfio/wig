@@ -1,0 +1,14 @@
+/*
+ * System font stack
+ *
+ * Optional utility: apply to headings or UI when you want explicit control.
+ * Body already uses this stack in globals/document.css.
+ */
+
+.font-system {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
+}

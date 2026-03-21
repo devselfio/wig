@@ -1,0 +1,23 @@
+/*
+ * Syntax highlighting
+ *
+ * Maps the 10 canonical syntax roles to --syntax-* custom properties.
+ * Used by LDT for run-time highlighting in <textarea> elements.
+ *
+ * Ordering: more semantically meaningful roles appear last so that when
+ * multiple classes apply to the same element, the most specific wins via
+ * source order at equal specificity.
+ */
+
+pre code { color: var(--color-text-primary, inherit); }
+
+.variable    { color: var(--syntax-variable, #005cc5); }
+.constant    { color: var(--syntax-constant, #6f42c1); }
+.punctuation { color: var(--syntax-punctuation, #24292f); }
+.operator    { color: var(--syntax-operator, #cf222e); }
+.number      { color: var(--syntax-number, #0550ae); }
+.type        { color: var(--syntax-type, #953800); }
+.function    { color: var(--syntax-function, #8250df); }
+.string      { color: var(--syntax-string, #0a3069); }
+.comment     { color: var(--syntax-comment, #57606a); }
+.keyword     { color: var(--syntax-keyword, #cf222e); }
