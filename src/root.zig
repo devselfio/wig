@@ -829,9 +829,10 @@ pub const Site = struct {
     }
 
     /// Validates the site without rendering. Checks config, manifests,
-    /// frontmatter, and template resolution. Optionally checks external links.
+    /// frontmatter, and template resolution. The `--external` CLI flag is
+    /// accepted; full external URL checking is planned for v0.2+ (v0.1 emits a
+    /// warning when the flag is set).
     pub fn validate(self: *Site, options: ValidateOptions) ![]const Diagnostic {
-        _ = options;
         const a = self.allocator;
 
         var diags: std.ArrayListUnmanaged(Diagnostic) = .{};
@@ -925,6 +926,13 @@ pub const Site = struct {
                 .kind = .err,
                 .message = d.message,
                 .template_name = d.template,
+            });
+        }
+
+        if (options.external_links) {
+            try diags.append(a, .{
+                .kind = .warning,
+                .message = "External link checking (--external) is not implemented yet; planned for v0.2+",
             });
         }
 

@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const version_string = @import("build.zig.zon").version;
+    const semver = std.SemanticVersion.parse(version_string) catch @panic("build.zig.zon: invalid .version");
+    const build_options = b.addOptions();
+    build_options.addOption(std.SemanticVersion, "version", semver);
+
     const toupee_dep = b.dependency("toupee", .{ .target = target, .optimize = optimize });
     const comb_dep = b.dependency("comb", .{ .target = target, .optimize = optimize });
     const zjot_dep = b.dependency("zjot", .{ .target = target, .optimize = optimize });
@@ -26,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "wig", .module = mod },
+                .{ .name = "options", .module = build_options.createModule() },
             },
         }),
     });
