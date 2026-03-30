@@ -1,4 +1,5 @@
 const std = @import("std");
+const skel = @import("src/skel.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -55,4 +56,22 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    const skel_step = b.step("skel", "Rebuild src/skel/*.tar from skel/<term>/ when sources are newer");
+    skel_step.makeFn = skelStepMake;
+}
+
+fn skelStepMake(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
+    const b = step.owner;
+    const gpa = options.gpa;
+    const root = b.build_root.path orelse {
+        std.log.err("skel: build root path unavailable", .{});
+        return error.MakeFailed;
+    };
+    for (skel.terms) |term| {
+        skel.repack(gpa, root, term) catch |err| {
+            std.log.err("skel repack '{s}': {s}", .{ term, @errorName(err) });
+            return error.MakeFailed;
+        };
+    }
 }

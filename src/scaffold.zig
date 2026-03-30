@@ -1,4 +1,5 @@
 const std = @import("std");
+const skel = @import("skel.zig");
 
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
@@ -23,67 +24,9 @@ const style_subdirs = [_][]const u8{
     "patterns/globals",
 };
 
-/// Copies `wig/skel/site` (resolved next to the wig binary or from cwd) into `dst_abs`.
-fn copyTree(a: Allocator, src_abs: []const u8, dst_abs: []const u8) !void {
-    var src_root = try fs.openDirAbsolute(src_abs, .{ .iterate = true });
-    defer src_root.close();
-    var dst_root = try fs.openDirAbsolute(dst_abs, .{});
-    defer dst_root.close();
-
-    var walker = try src_root.walk(a);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        switch (entry.kind) {
-            .directory => {},
-            .file => {
-                if (fs.path.dirname(entry.path)) |d| {
-                    try dst_root.makePath(d);
-                }
-                const content = try src_root.readFileAlloc(a, entry.path, 10 * 1024 * 1024);
-                defer a.free(content);
-                var out = try dst_root.createFile(entry.path, .{});
-                defer out.close();
-                try out.writeAll(content);
-            },
-            else => {},
-        }
-    }
-}
-
-fn fallBackCwdSkel(a: Allocator) ![]const u8 {
-    const cwd = try fs.cwd().realpathAlloc(a, ".");
-    defer a.free(cwd);
-    const p = try fs.path.join(a, &.{ cwd, "skel", "site" });
-    try fs.accessAbsolute(p, .{});
-    return p;
-}
-
-/// Resolves the skeleton site directory (`skel/site` under the wig repo).
-pub fn resolveSkelSiteDir(a: Allocator) ![]const u8 {
-    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe = fs.selfExePath(&exe_buf) catch return try fallBackCwdSkel(a);
-    const exe_dir = fs.path.dirname(exe) orelse return try fallBackCwdSkel(a);
-    const candidate = try fs.path.join(a, &.{ exe_dir, "..", "skel", "site" });
-    defer a.free(candidate);
-    const resolved = try fs.path.resolve(a, &.{candidate});
-    fs.accessAbsolute(resolved, .{}) catch {
-        a.free(resolved);
-        return try fallBackCwdSkel(a);
-    };
-    return resolved;
-}
-
-/// Scaffolds a new Wig project by copying `skel/site` (see `resolveSkelSiteDir`).
+/// Scaffolds a new Wig project by extracting the embedded default skeleton (`src/skel/<term>.tar`).
 pub fn init(a: Allocator, target_path: []const u8) !void {
-    fs.cwd().makePath(target_path) catch {};
-    const abs = try fs.realpathAlloc(a, target_path);
-    defer a.free(abs);
-
-    const skel = try resolveSkelSiteDir(a);
-    defer a.free(skel);
-
-    try copyTree(a, skel, abs);
+    try skel.unpack(a, skel.default_init_term, target_path);
 }
 
 /// Installs a style from wig-stand or a git URL.
