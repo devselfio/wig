@@ -16,20 +16,21 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <t-slot />
-          section.html: |
-            <h1><t-var name="document.title" /></h1>
-            <t-slot />
-            <ul>
-            <t-for child in document.children>
-            <li><a t-var:href="child.path"><t-var name="child.title" /></a></li>
-            </t-for>
-            </ul>
-          child.html: |
-            <p>Parent: <a t-var:href="document.parent.path"><t-var name="document.parent.title" /></a></p>
-            <t-slot />
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            section.html: |
+              <h1><t-var name="document.title" /></h1>
+              <t-slot />
+              <ul>
+              <t-for child in document.children>
+              <li><a t-var:href="child.path"><t-var name="child.title" /></a></li>
+              </t-for>
+              </ul>
+            child.html: |
+              <p>Parent: <a t-var:href="document.parent.path"><t-var name="document.parent.title" /></a></p>
+              <t-slot />
     pages:
       _index.dj: |
         ---

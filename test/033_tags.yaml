@@ -17,30 +17,31 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <t-slot />
-          tag-index.html: |
-            <h1>Tags</h1>
-            <ul>
-              <t-for t in tag.tags>
-                <li><a t-var:href="t.path"><t-var name="t.name" /></a> (<t-var name="t.count" />)</li>
-              </t-for>
-            </ul>
-          tag-list.html: |
-            <h1><t-var name="tag.document.title" /></h1>
-            <p>Path tags: <t-var name="tag.path_tags" /></p>
-            <ul>
-              <t-for doc in tag.documents>
-                <li><a t-var:href="doc.document.path"><t-var name="doc.document.title" /></a></li>
-              </t-for>
-            </ul>
-            <p>Add tag:</p>
-            <ul>
-              <t-for t in tag.tags>
-                <li><a t-var:href="t.path"><t-var name="t.name" /></a></li>
-              </t-for>
-            </ul>
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            tag-index.html: |
+              <h1>Tags</h1>
+              <ul>
+                <t-for t in tag.tags>
+                  <li><a t-var:href="t.path"><t-var name="t.name" /></a> (<t-var name="t.count" />)</li>
+                </t-for>
+              </ul>
+            tag-list.html: |
+              <h1><t-var name="tag.document.title" /></h1>
+              <p>Path tags: <t-var name="tag.path_tags" /></p>
+              <ul>
+                <t-for doc in tag.documents>
+                  <li><a t-var:href="doc.document.path"><t-var name="doc.document.title" /></a></li>
+                </t-for>
+              </ul>
+              <p>Add tag:</p>
+              <ul>
+                <t-for t in tag.tags>
+                  <li><a t-var:href="t.path"><t-var name="t.name" /></a></li>
+                </t-for>
+              </ul>
     pages:
       _index.dj: |
         ---

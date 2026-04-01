@@ -16,9 +16,10 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <t-var name="document.path" />
+        templates:
+          layouts:
+            page.html: |
+              <t-var name="document.path" />
     pages:
       _index.dj: |
         ---

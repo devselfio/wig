@@ -16,13 +16,14 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          base.html: |
-            [<t-var name="document.style.name" />:<t-var name="document.layout" />] <t-slot />
-          blog-post.html: |
-            [blog-post] <t-slot />
-          special.html: |
-            [special] <t-slot />
+        templates:
+          layouts:
+            base.html: |
+              [<t-var name="document.style.name" />:<t-var name="document.layout" />] <t-slot />
+            blog-post.html: |
+              [blog-post] <t-slot />
+            special.html: |
+              [special] <t-slot />
     pages:
       _index.dj: |
         ---

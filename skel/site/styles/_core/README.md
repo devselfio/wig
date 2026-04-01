@@ -20,4 +20,4 @@
 
 ## Site style contract
 
-Your **default** (or theme) style should ship a small **surface** (or tokens) bundle that defines semantic custom properties consumed by `_core`, e.g. `colors.*` → `--color-text-primary`, `computed_tokens.typography` → `--size-step-*`, plus `--stroke`, `--radius-s`, `--space-m`, etc. See `styles/default/css/surface.css` in the skeleton site.
+Your **default** (or theme) style should ship a small **surface** (or tokens) bundle that defines semantic custom properties consumed by `_core`, e.g. `colors.*` → `--color-text-primary`, `tokens.computed.typography` → `--size-step-*`, plus `--stroke`, `--radius-s`, `--space-m`, etc. See `styles/default/css/surface.css` in the skeleton site.

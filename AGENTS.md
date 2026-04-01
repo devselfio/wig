@@ -327,7 +327,9 @@ styles/default/
     globals/*.css
     utilities/*.css
   patterns/
-    blocks/*.html    # pattern library examples (one per block)
+    blocks/
+      *.yaml         # optional — merged into styles.{name}.patterns (see Pattern library)
+      *.html         # HTML examples for pattern library / docs
     compositions/*.html
     utilities/*.html
 ```
@@ -335,7 +337,7 @@ styles/default/
 - `templates/layouts/` -- page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
 - `templates/blocks/` -- CUBE blocks (components). Use `<t-include template="blocks/card.html" />`. Each block has CSS in `css/blocks/` and HTML in `templates/blocks/`.
 - `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
-- `patterns/` -- pattern library examples. One HTML file per block in `patterns/blocks/`; discovered from `css/blocks/*.css` doc comments.
+- `patterns/` -- pattern library material. **`patterns/{category}/*.yaml`** manifests are merged into template context (see **Pattern library**). HTML files under `patterns/**` can illustrate blocks; CSS doc-comment parsing in `patterns.zig` is separate and may feed future pattern index pages — it is not the same code path as YAML manifest merge.
 
 ### Template resolution
 
@@ -367,17 +369,31 @@ Parsing: split on first colon. If present, left = style name, right = path. Appl
 
 ### Bundles
 
-Asset bundles are declared explicitly in `style.yaml`:
+Asset bundles are declared in `style.yaml` as a **nested map only**: `bundles` → **term** (e.g. `css`, `js`) → **bundle name** → **YAML sequence** of file path strings. There is no flat list form at the `bundles` key, and each bundle’s file list must be an array (a one-file bundle is `[ default/css/surface.css ]`, not a single unquoted path scalar). Each path is relative to the site’s **`styles/`** directory when the build opens it (e.g. `default/css/surface.css` for the `default` style).
+
+**Legacy alias:** the style manifest may use the top-level key **`assets`** instead of **`bundles`** with the same nested shape; Wig treats them equivalently when loading `style.yaml`.
 
 ```yaml
 name: default
 bundles:
-  - css/tokens.css
-  - css/global.css
-  - css/utilities.css
+  css:
+    surface:
+      - default/css/surface.css
+    main:
+      - default/css/reset.css
+      - default/css/main.css
+  js:
+    app:
+      - default/js/app.js
 ```
 
-Bundles are concatenated in declared order. Files with frontmatter are rendered through Toupee first, then concatenated. Output location follows the style's directory structure.
+The **term** (`css`, `js`, …) is only a grouping label: it names the output subdirectory under each style’s hashed assets tree and the emitted file extension. The engine does not special-case “CSS” vs “JS” beyond that.
+
+The **bundle name** may contain `/` (e.g. `nested/demo`); output files go under `assets/{style}/{term}/…` with the same directory nesting, and the filename is `{leaf}.{hash}.{term}` where `leaf` is the last segment of the bundle name.
+
+Templates read root-relative URLs from **`assets.{style}.{term}.…`** — **one nested map key per `/` segment** in the bundle name (not a single key containing a slash), e.g. `assets.default.css.nested.demo.path` for bundle name `nested/demo` under term `css`.
+
+**Site `assets/`** at the project root (not under `styles/`) is copied verbatim into the output `assets/` directory by the build; it is separate from style bundles (no hashing, no manifest entry).
 
 ### Color schemes
 
@@ -398,7 +414,7 @@ Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{nam
 ### CSS rendering context
 
 CSS files with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style assets, not pages). They receive the full site context minus `document.*`:
-- `styles.*` -- all style manifests
+- `styles.*` -- all style manifests; **`styles.{name}.tokens.computed`** holds fluid typography and spacing from `tokens.compute` (e.g. `styles.default.tokens.computed.typography` as a list of `{name, value}` maps)
 - `colors.*` -- all color scheme data from `data/colors/` (pre-resolved); legacy `colours.*` if you use `data/colours/`
 - `site.*` -- site configuration
 - All other data directory keys
@@ -415,7 +431,11 @@ CSS files with frontmatter are rendered through Toupee but do **not** have the `
 
 ### Pattern library
 
-Each style has a `patterns/` directory mirroring the CSS structure: `patterns/blocks/`, `patterns/compositions/`, `patterns/utilities/`. Block examples live in `patterns/blocks/*.html` (one per block). Wig discovers blocks from `css/blocks/*.css` doc comments and pairs them with examples from `patterns/blocks/`.
+**YAML manifests (authoring for templates):** Each style may include **`patterns/{category}/{stem}.yaml`** files. After Comb parse, they are merged into context at **`styles.{style}.patterns.{category}.{stem}`** (nested maps: category → stem → fields). In page layouts, the active style is available as **`document.style`**, so a block manifest is reachable as **`document.style.patterns.blocks.{stem}.name`** (and other fields you define: `description`, `example`, `variants`, …). The skeleton includes **[`skel/site/styles/default/patterns/blocks/example.yaml`](skel/site/styles/default/patterns/blocks/example.yaml)** as a minimal example.
+
+**HTML examples:** Optional **`patterns/{category}/*.html`** files can sit beside manifests for human-facing examples.
+
+**CSS doc comments vs YAML:** [`patterns.zig`](patterns.zig) can discover pattern-like metadata from **`css/blocks/*.css`** doc comments and (when that pipeline is fully wired) contribute **pattern library pages** — a different mechanism from **`pattern_manifests.zig`**, which only loads YAML into the Toupee context during **`buildAll`**. For structured data used in templates, **prefer YAML manifests**; treat CSS doc discovery as complementary documentation / future index generation, not a replacement for manifest merge.
 
 ### Feeds
 
@@ -578,7 +598,7 @@ output:
       expected content
 ```
 
-Specs use `templates: layouts:` and `templates: blocks:` (or equivalent). Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`. The test runner KEY_MAP maps `layouts` → `templates/layouts`, `blocks` → `templates/blocks`.
+Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.
 
 Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output` are the **ground truth** for behaviour. Prefer writing or extending a spec **when adding an author-facing feature** unless the feature is explicitly in the “YAML not a fit” bucket above.
 

@@ -19,6 +19,7 @@ pub const toc_mod = @import("toc.zig");
 pub const search = @import("search.zig");
 pub const feeds = @import("feeds.zig");
 pub const patterns = @import("patterns.zig");
+const pattern_manifests = @import("pattern_manifests.zig");
 pub const app = @import("app.zig");
 pub const router = @import("router.zig");
 pub const handler = @import("handler.zig");
@@ -370,7 +371,7 @@ fn buildPhase_styleTokensSiteData(
             var token_result = try tokens.compute(ba, params);
             defer token_result.deinit();
             try style_ctx.putAt(
-                try std.fmt.allocPrint(ba, "styles.{s}.computed_tokens", .{style_cfg.name}),
+                try std.fmt.allocPrint(ba, "styles.{s}.tokens.computed", .{style_cfg.name}),
                 token_result.value,
             );
         }
@@ -415,32 +416,7 @@ fn buildPhase_assetBundles(
         for (style_cfgs) |style_cfg| {
             const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
             if (assets_val_opt) |assets_val| {
-                if (assets_val == .array) {
-                    for (assets_val.array) |item| {
-                        if (item != .string) continue;
-                        const bundle_path = item.string;
-                        if (std.mem.indexOf(u8, bundle_path, "/")) |slash| {
-                            const bundle_type = bundle_path[0..slash];
-                            const template_rel = bundle_path;
-                            const result = bundles.processBundleToPath(
-                                ba,
-                                style_cfg.name,
-                                bundle_path,
-                                template_rel,
-                                styles_dir,
-                                style_ctx,
-                                output_dir,
-                            ) catch continue;
-                            const bundle_name = std.fs.path.stem(bundle_path[slash + 1 ..]);
-                            try asset_entries.append(ba, .{
-                                .style_name = style_cfg.name,
-                                .bundle_type = bundle_type,
-                                .bundle_name = bundle_name,
-                                .result = result,
-                            });
-                        }
-                    }
-                } else if (assets_val == .object) {
+                if (assets_val == .object) {
                     for (assets_val.object) |type_entry| {
                         const bundle_type = switch (type_entry.key) {
                             .string => |s| s,
@@ -773,6 +749,9 @@ pub const Site = struct {
 
         // --- Phase: CSS/JS bundles and `assets` context ---
         try buildPhase_assetBundles(ba, a, abs_root, style_cfgs, &style_ctx, output_dir);
+
+        // --- Phase: pattern YAML manifests under styles/{name}/patterns/ ---
+        try pattern_manifests.loadIntoContext(ba, abs_root, style_cfgs, &style_ctx);
 
         // --- Phase: scan pages, taxonomies, `pages` context ---
         var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx);

@@ -442,23 +442,9 @@ fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, 
     return .{ .output = dir };
 }
 
-const KEY_MAP = [_][2][]const u8{
-    .{ "templates", "templates" },
-    .{ "layouts", "templates/layouts" },
-    .{ "blocks", "templates/blocks" },
-};
-
-/// Maps spec keys to directory names: "layouts" -> "templates/layouts", "blocks" -> "templates/blocks".
-fn resolveDirName(name: []const u8) []const u8 {
-    for (KEY_MAP) |pair| {
-        if (std.mem.eql(u8, pair[0], name)) return pair[1];
-    }
-    return name;
-}
-
-/// Writes file tree; resolveDirName maps spec keys to CUBE paths (layouts→templates/layouts, blocks→templates/blocks).
+/// Writes file tree; keys are path segments as on disk (e.g. `templates` / `layouts` / `page.html`).
 fn writeFileTree(a: Allocator, dir: fs.Dir, name: []const u8, value: comb.Value) !void {
-    const dir_name = resolveDirName(name);
+    const dir_name = name;
 
     switch (value) {
         .string => |content| {

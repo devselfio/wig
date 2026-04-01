@@ -96,6 +96,7 @@ fn walkDir(
         var it = dir.iterate();
         while (try it.next()) |entry| {
             if (entry.kind != .file) continue;
+            if (isHidden(entry.name)) continue;
             const ext = fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (!isSection(stem)) continue;
@@ -116,6 +117,7 @@ fn walkDir(
         var it = dir.iterate();
         while (try it.next()) |entry| {
             if (entry.kind != .file) continue;
+            if (isHidden(entry.name)) continue;
             const ext = fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (isSection(stem)) continue;
@@ -143,6 +145,7 @@ fn walkDir(
         var it = dir.iterate();
         while (try it.next()) |entry| {
             if (entry.kind != .directory) continue;
+            if (isHidden(entry.name)) continue;
 
             const sub_prefix = if (rel_prefix.len > 0)
                 try std.fmt.allocPrint(a, "{s}/{s}", .{ rel_prefix, entry.name })
@@ -223,6 +226,11 @@ fn isValidExtension(ext: []const u8, registered: []const []const u8) bool {
 
 fn isSection(stem: []const u8) bool {
     return std.mem.eql(u8, stem, "_index");
+}
+
+/// Skip dot-prefixed names (e.g. `._foo`, macOS AppleDouble metadata; `.git`).
+fn isHidden(name: []const u8) bool {
+    return name.len > 0 and name[0] == '.';
 }
 
 fn getBool(val: comb.Value, key: []const u8) bool {

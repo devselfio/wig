@@ -16,14 +16,15 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <nav>
-            <t-for heading in document.toc>
-            <a t-var:href="heading.id" t-var:data-level="heading.level"><t-var name="heading.text" /></a>
-            </t-for>
-            </nav>
-            <t-slot />
+        templates:
+          layouts:
+            page.html: |
+              <nav>
+              <t-for heading in document.toc>
+              <a t-var:href="heading.id" t-var:data-level="heading.level"><t-var name="heading.text" /></a>
+              </t-for>
+              </nav>
+              <t-slot />
     pages:
       _index.dj: |
         ---

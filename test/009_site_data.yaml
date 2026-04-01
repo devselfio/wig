@@ -18,20 +18,21 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <!DOCTYPE html>
-            <html lang="en">
-              <head>
-                <meta charset="utf-8">
-                <title><t-var name="document.title" /> ~ <t-var name="site.title" /></title>
-                <meta name="author" t-var:content="site.author" />
-                <link rel="canonical" t-var:href="document.url" />
-              </head>
-              <body>
-                <t-slot />
-              </body>
-            </html>
+        templates:
+          layouts:
+            page.html: |
+              <!DOCTYPE html>
+              <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <title><t-var name="document.title" /> ~ <t-var name="site.title" /></title>
+                  <meta name="author" t-var:content="site.author" />
+                  <link rel="canonical" t-var:href="document.url" />
+                </head>
+                <body>
+                  <t-slot />
+                </body>
+              </html>
     pages:
       _index.dj: |
         ---

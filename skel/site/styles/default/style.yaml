@@ -20,4 +20,6 @@ tokens:
     scale: 1.5
 
 bundles:
-  - css/surface.css
+  css:
+    surface:
+      - default/css/surface.css

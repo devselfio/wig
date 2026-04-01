@@ -1,6 +1,6 @@
 test:
   name: Fluid design tokens in CSS via Toupee.
-  comment: CSS file with frontmatter renders token data into clamp() custom properties.
+  comment: CSS bundle renders computed token steps into clamp() custom properties.
   action:
     wig: build
   fixtures: []
@@ -20,28 +20,35 @@ input:
             viewport:
               min: 320
               max: 1240
-            type:
-              base: 16
-              scale: 1.25
+            typography:
+              base:
+                min: 16
+                max: 20
+              scale:
+                min: 1.25
+                max: 1.25
+              steps:
+                above: 5
+                below: 2
             spacing:
-              base: 16
-              scale: 1.5
+              negative: [0.75, 0.5, 0.25]
+              positive: [1.5, 2, 3, 4, 6]
           bundles:
-            - css/tokens.css
-        layouts:
-          page.html: |
-            <t-slot />
+            css:
+              tokens:
+                - default/css/tokens.css
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
         css:
           tokens.css: |
             ---
             ---
             :root {
-              --type-base: <t-raw name="styles.default.tokens.type.base" />px;
-              --type-scale: <t-raw name="styles.default.tokens.type.scale" />;
-              --spacing-base: <t-raw name="styles.default.tokens.spacing.base" />px;
-              --spacing-scale: <t-raw name="styles.default.tokens.spacing.scale" />;
-              --viewport-min: <t-raw name="styles.default.tokens.viewport.min" />px;
-              --viewport-max: <t-raw name="styles.default.tokens.viewport.max" />px;
+            <t-for step in styles.default.tokens.computed.typography>
+              --size-<t-var name="step.name" />: <t-var name="step.value" />;
+            </t-for>
             }
     pages:
       _index.dj: |
@@ -52,13 +59,7 @@ output:
   files:
     index.html: |
       <p>Home.</p>
-    css:
-      tokens.css: |
-        :root {
-          --type-base: 16px;
-          --type-scale: 1.25;
-          --spacing-base: 16px;
-          --spacing-scale: 1.5;
-          --viewport-min: 320px;
-          --viewport-max: 1240px;
-        }
+    assets:
+      default:
+        css:
+          tokens.*.css: true

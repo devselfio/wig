@@ -50,10 +50,13 @@ input:
           name: default
           scheme: mono
           bundles:
-            - css/colors.css
-        layouts:
-          page.html: |
-            <t-slot />
+            css:
+              colors:
+                - default/css/colors.css
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
         css:
           colors.css: |
             ---
@@ -72,10 +75,12 @@ output:
   files:
     index.html: |
       <p>Home.</p>
-    css:
-      colors.css: |
-        :root {
-          --text-primary: #000000;
-          --text-link: #0066cc;
-          --bg-primary: #ffffff;
-        }
+    assets:
+      default:
+        css:
+          colors.*.css: |
+            :root {
+              --text-primary: #000000;
+              --text-link: #0066cc;
+              --bg-primary: #ffffff;
+            }

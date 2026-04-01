@@ -17,26 +17,28 @@ input:
         style.yaml: |
           name: default
           version: "1.0"
-        layouts:
-          base.html: |
-            <!DOCTYPE html>
-            <html>
-              <head><title>[default] <t-var name="document.title" /></title></head>
-              <body>
-                <p>Style: <t-var name="document.style.name" /> v<t-var name="document.style.version" /></p>
-                <t-slot />
-              </body>
-            </html>
+        templates:
+          layouts:
+            base.html: |
+              <!DOCTYPE html>
+              <html>
+                <head><title>[default] <t-var name="document.title" /></title></head>
+                <body>
+                  <p>Style: <t-var name="document.style.name" /> v<t-var name="document.style.version" /></p>
+                  <t-slot />
+                </body>
+              </html>
       minimal:
         style.yaml: |
           name: minimal
           version: "0.1"
-        layouts:
-          base.html: |
-            <html>
-              <head><title><t-var name="document.title" /></title></head>
-              <body><t-slot /></body>
-            </html>
+        templates:
+          layouts:
+            base.html: |
+              <html>
+                <head><title><t-var name="document.title" /></title></head>
+                <body><t-slot /></body>
+              </html>
     pages:
       _index.dj: |
         ---

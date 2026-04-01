@@ -16,41 +16,42 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          base.html: |
-            <!DOCTYPE html>
-            <html lang="en">
-              <head>
-                <meta charset="utf-8">
-                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
-              </head>
-              <body>
-                <t-slot />
-              </body>
-            </html>
-          post-list.html: |
-            <t-extend template="layouts/base.html">
-              <t-define>
-                <t-slot />
-                <t-include template="blocks/list-posts.html" context="document.children as posts" />
-              </t-define>
-            </t-extend>
-          post.html: |
-            <t-extend template="layouts/base.html">
-              <t-define>
-                <article>
-                  <h1><t-var name="document.title">Untitled Document</t-var></h1>
+        templates:
+          layouts:
+            base.html: |
+              <!DOCTYPE html>
+              <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+                </head>
+                <body>
                   <t-slot />
-                </article>
-              </t-define>
-            </t-extend>
-        blocks:
-          list-posts.html: |
-            <ul>
-            <t-for post in posts>
-            <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
-            </t-for>
-            </ul>
+                </body>
+              </html>
+            post-list.html: |
+              <t-extend template="layouts/base.html">
+                <t-define>
+                  <t-slot />
+                  <t-include template="blocks/list-posts.html" context="document.children as posts" />
+                </t-define>
+              </t-extend>
+            post.html: |
+              <t-extend template="layouts/base.html">
+                <t-define>
+                  <article>
+                    <h1><t-var name="document.title">Untitled Document</t-var></h1>
+                    <t-slot />
+                  </article>
+                </t-define>
+              </t-extend>
+          blocks:
+            list-posts.html: |
+              <ul>
+              <t-for post in posts>
+              <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
+              </t-for>
+              </ul>
     pages:
       _index.dj: |
         ---

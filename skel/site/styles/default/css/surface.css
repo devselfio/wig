@@ -2,7 +2,7 @@
 ---
 
 :root {
-<t-for step in styles.default.computed_tokens.typography>
+<t-for step in styles.default.tokens.computed.typography>
   --size-<t-var name="step.name" />: <t-var name="step.value" />;
 </t-for>
 

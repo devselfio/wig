@@ -1,0 +1,6 @@
+# Optional pattern manifest — merged at styles.default.patterns.blocks.example
+# Use document.style.patterns.blocks.example.* in templates (e.g. name, description).
+name: Example
+description: Skeleton placeholder for the pattern-library YAML convention.
+example: '<div class="example" />'
+variants: []

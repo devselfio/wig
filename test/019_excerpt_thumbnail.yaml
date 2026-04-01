@@ -16,13 +16,14 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <meta name="description" t-var:content="document.excerpt" />
-            <t-if var="document.thumbnail">
-            <meta property="og:image" t-var:content="document.thumbnail" />
-            </t-if>
-            <t-slot />
+        templates:
+          layouts:
+            page.html: |
+              <meta name="description" t-var:content="document.excerpt" />
+              <t-if var="document.thumbnail">
+              <meta property="og:image" t-var:content="document.thumbnail" />
+              </t-if>
+              <t-slot />
     pages:
       _index.dj: |
         ---

@@ -16,18 +16,19 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <t-slot />
-          list.html: |
-            <h2>Newest first</h2>
-            <t-for post in pages.blog sort="document.date" order="desc">
-            <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
-            </t-for>
-            <h2>Oldest first</h2>
-            <t-for post in pages.blog sort="document.date" order="asc">
-            <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
-            </t-for>
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            list.html: |
+              <h2>Newest first</h2>
+              <t-for post in pages.blog sort="document.date" order="desc">
+              <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
+              </t-for>
+              <h2>Oldest first</h2>
+              <t-for post in pages.blog sort="document.date" order="asc">
+              <p><t-var name="post.document.date" />: <t-var name="post.document.title" /></p>
+              </t-for>
     pages:
       _index.dj: |
         ---

@@ -16,36 +16,37 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <!DOCTYPE html>
-            <html lang="en">
-              <head>
-                <meta charset="utf-8">
-                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
-              </head>
-              <body>
-                <t-slot />
-              </body>
-            </html>
-          one.html: |
-            <!DOCTYPE html>
-            <html lang="en">
-              <head>
-                <meta charset="utf-8">
-                <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
-              </head>
-              <body>
-                <t-slot />
-              </body>
-            </html>
-          two.html: |
-            <t-extend template="layouts/one.html">
-              <t-define>
-                <p>Second layout</p>
-                <t-slot />
-              </t-define>
-            </t-extend>
+        templates:
+          layouts:
+            page.html: |
+              <!DOCTYPE html>
+              <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+                </head>
+                <body>
+                  <t-slot />
+                </body>
+              </html>
+            one.html: |
+              <!DOCTYPE html>
+              <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <title><t-var name="document.title">Untitled Document</t-var> ~ <t-var name="site.title">Untitled Site</t-var></title>
+                </head>
+                <body>
+                  <t-slot />
+                </body>
+              </html>
+            two.html: |
+              <t-extend template="layouts/one.html">
+                <t-define>
+                  <p>Second layout</p>
+                  <t-slot />
+                </t-define>
+              </t-extend>
     pages:
       _index.dj: |
         ---

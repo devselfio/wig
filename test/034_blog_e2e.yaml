@@ -21,43 +21,44 @@ input:
               main:
                 - default/reset.css
                 - default/site.css
-        layouts:
-          base.html: |
-            <!DOCTYPE html>
-            <html><head><t-slot name="head" /></head><body><t-slot /></body></html>
-          page.html: |
-            <t-extend template="layouts/base.html">
-              <t-define name="head">
-                <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
-              </t-define>
-              <t-define>
-                <t-slot />
-              </t-define>
-            </t-extend>
-          post.html: |
-            <t-extend template="layouts/page.html">
-              <t-define>
-                <article>
-                  <h1><t-var name="document.title" /></h1>
+        templates:
+          layouts:
+            base.html: |
+              <!DOCTYPE html>
+              <html><head><t-slot name="head" /></head><body><t-slot /></body></html>
+            page.html: |
+              <t-extend template="layouts/base.html">
+                <t-define name="head">
+                  <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+                </t-define>
+                <t-define>
                   <t-slot />
-                </article>
-              </t-define>
-            </t-extend>
-          list.html: |
-            <t-extend template="layouts/page.html">
-              <t-define>
-                <ul>
-                  <t-for post in document.children>
-                    <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
-                  </t-for>
-                </ul>
-                <t-slot />
-              </t-define>
-            </t-extend>
+                </t-define>
+              </t-extend>
+            post.html: |
+              <t-extend template="layouts/page.html">
+                <t-define>
+                  <article>
+                    <h1><t-var name="document.title" /></h1>
+                    <t-slot />
+                  </article>
+                </t-define>
+              </t-extend>
+            list.html: |
+              <t-extend template="layouts/page.html">
+                <t-define>
+                  <ul>
+                    <t-for post in document.children>
+                      <li><a t-var:href="post.document.path"><t-var name="post.document.title" /></a></li>
+                    </t-for>
+                  </ul>
+                  <t-slot />
+                </t-define>
+              </t-extend>
         reset.css: |
-          * { margin: 0; }
+            * { margin: 0; }
         site.css: |
-          body { font-family: sans-serif; }
+            body { font-family: sans-serif; }
     pages:
       _index.dj: |
         ---
@@ -94,8 +95,8 @@ output:
         index.html: true
       second:
         index.html: true
-    css:
-      default:
-        main.*.css: true
     assets:
+      default:
+        css:
+          main.*.css: true
       favicon.ico: true

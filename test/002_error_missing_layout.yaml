@@ -14,9 +14,10 @@ input:
       default:
         style.yaml: |
           name: default
-        layouts:
-          page.html: |
-            <t-slot />
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
     pages:
       _index.dj: |
         ---

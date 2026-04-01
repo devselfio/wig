@@ -21,39 +21,11 @@ pub const BundleResult = struct {
 /// frontmatter through Toupee (merging file-level frontmatter data into the
 /// style context), passes through files without frontmatter, concatenates
 /// in manifest order, content-hashes with SHA-256 (truncated to 8 hex chars),
-/// and writes the fingerprinted file to `output_dir`.
+/// and writes under `assets/{style}/{bundle_type}/…` with filename
+/// `{leaf}.{hash}.{bundle_type}` (`leaf` = last segment of `bundle_name`; slashes
+/// in `bundle_name` create subdirectories).
 ///
-/// Processes a single bundle file and writes to an exact output path (no hash).
-/// Used for `bundles: [ "css/tokens.css" ]` array format.
-/// `output_path` is the path relative to output_dir (e.g. "css/tokens.css").
-/// `template_rel` is the path within the style dir (e.g. "css/tokens.css").
-pub fn processBundleToPath(
-    a: Allocator,
-    style_name: []const u8,
-    output_path: []const u8,
-    template_rel: []const u8,
-    styles_dir: fs.Dir,
-    style_ctx: *const toupee.Context,
-    output_dir: fs.Dir,
-) !BundleResult {
-    const full_template_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ style_name, template_rel });
-    defer a.free(full_template_path);
-
-    const content = try processFile(a, styles_dir, full_template_path, style_ctx);
-
-    output_dir.makePath(std.fs.path.dirname(output_path) orelse ".") catch {};
-    var out_file = try output_dir.createFile(output_path, .{});
-    defer out_file.close();
-    try out_file.writeAll(content);
-
-    return .{
-        .path = try a.dupe(u8, output_path),
-        .hash = "",
-        .content = content,
-    };
-}
-
-/// Returns the fingerprinted path, hash, and full content string.
+/// Returns the fingerprinted web path (root-relative), hash, and full content string.
 pub fn processBundle(
     a: Allocator,
     style_name: []const u8,
@@ -87,25 +59,43 @@ pub fn processBundle(
     const hex = std.fmt.bytesToHex(digest[0..4].*, .lower);
     const hash = try a.dupe(u8, &hex);
 
-    const filename = try std.fmt.allocPrint(a, "{s}.{s}.{s}", .{ bundle_name, hash, bundle_type });
+    var name_parts = std.ArrayListUnmanaged([]const u8){};
+    defer name_parts.deinit(a);
+    var split = std.mem.splitScalar(u8, bundle_name, '/');
+    while (split.next()) |seg| {
+        if (seg.len == 0) continue;
+        try name_parts.append(a, seg);
+    }
+    if (name_parts.items.len == 0) return error.InvalidBundleName;
+
+    const leaf = name_parts.items[name_parts.items.len - 1];
+    const filename = try std.fmt.allocPrint(a, "{s}.{s}.{s}", .{ leaf, hash, bundle_type });
     defer a.free(filename);
 
-    const out_subdir = try std.fmt.allocPrint(a, "{s}/{s}", .{ bundle_type, style_name });
-    defer a.free(out_subdir);
+    var dir_parts: std.ArrayListUnmanaged([]const u8) = .{};
+    defer dir_parts.deinit(a);
+    try dir_parts.append(a, "assets");
+    try dir_parts.append(a, style_name);
+    try dir_parts.append(a, bundle_type);
+    for (name_parts.items[0 .. name_parts.items.len - 1]) |seg| {
+        try dir_parts.append(a, seg);
+    }
+    const subdir = try fs.path.join(a, dir_parts.items);
+    defer a.free(subdir);
 
-    output_dir.makePath(out_subdir) catch {};
+    output_dir.makePath(subdir) catch {};
 
-    const out_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ out_subdir, filename });
+    const out_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ subdir, filename });
     defer a.free(out_path);
 
     var out_file = try output_dir.createFile(out_path, .{});
     defer out_file.close();
     try out_file.writeAll(content);
 
-    const path = try std.fmt.allocPrint(a, "{s}/{s}/{s}", .{ bundle_type, style_name, filename });
+    const web_path = try a.dupe(u8, out_path);
 
     return .{
-        .path = path,
+        .path = web_path,
         .hash = hash,
         .content = content,
     };
@@ -218,7 +208,8 @@ fn hasExtGlob(pattern: []const u8) bool {
 }
 
 /// Builds the asset context map from processed bundle results.
-/// Produces: `{ style_name: { bundle_type: { bundle_name: { path, hash, content } } } }`
+/// Produces: `{ style_name: { bundle_type: { … nested maps … leaf: { path, hash, content } } } }`
+/// Bundle names with `/` become nested maps (e.g. `nested/foo` → `nested` → `foo`).
 pub fn buildAssetContext(a: Allocator, results: []const AssetEntry) !toupee.Value {
     var root = ValueMap{};
 
@@ -238,12 +229,37 @@ pub fn buildAssetContext(a: Allocator, results: []const AssetEntry) !toupee.Valu
         try bundle_map.put(a, "hash", .{ .string = entry.result.hash });
         try bundle_map.put(a, "content", .{ .string = entry.result.content });
 
-        try type_map.put(a, entry.bundle_name, .{ .map = bundle_map });
+        try putNestedBundleName(a, &type_map, entry.bundle_name, .{ .map = bundle_map });
         try style_map.put(a, entry.bundle_type, .{ .map = type_map });
         try root.put(a, entry.style_name, .{ .map = style_map });
     }
 
     return .{ .map = root };
+}
+
+fn putNestedBundleName(a: Allocator, type_map: *ValueMap, bundle_name: []const u8, leaf: toupee.Value) !void {
+    var segments = std.ArrayListUnmanaged([]const u8){};
+    defer segments.deinit(a);
+    var split = std.mem.splitScalar(u8, bundle_name, '/');
+    while (split.next()) |seg| {
+        if (seg.len == 0) continue;
+        try segments.append(a, seg);
+    }
+    if (segments.items.len == 0) return error.InvalidBundleName;
+
+    var cur = type_map;
+    for (segments.items[0 .. segments.items.len - 1]) |seg| {
+        const gop = try cur.getOrPut(a, seg);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .map = ValueMap{} };
+        }
+        switch (gop.value_ptr.*) {
+            .map => |*m| cur = m,
+            else => return error.InvalidBundleName,
+        }
+    }
+    const last = segments.items[segments.items.len - 1];
+    try cur.put(a, last, leaf);
 }
 
 pub const AssetEntry = struct {
@@ -362,7 +378,7 @@ test "buildAssetContext: produces correct structure" {
             .bundle_type = "css",
             .bundle_name = "layout",
             .result = .{
-                .path = "css/default/layout.a1b2c3d4.css",
+                .path = "assets/default/css/layout.a1b2c3d4.css",
                 .hash = "a1b2c3d4",
                 .content = "body { margin: 0; }",
             },
@@ -379,7 +395,7 @@ test "buildAssetContext: produces correct structure" {
     const css_map = default_map.get("css").?.map;
     const layout_map = css_map.get("layout").?.map;
 
-    try testing.expectEqualStrings("css/default/layout.a1b2c3d4.css", layout_map.get("path").?.string);
+    try testing.expectEqualStrings("assets/default/css/layout.a1b2c3d4.css", layout_map.get("path").?.string);
     try testing.expectEqualStrings("a1b2c3d4", layout_map.get("hash").?.string);
     try testing.expectEqualStrings("body { margin: 0; }", layout_map.get("content").?.string);
 }
@@ -391,13 +407,13 @@ test "buildAssetContext: multiple bundles" {
             .style_name = "default",
             .bundle_type = "css",
             .bundle_name = "layout",
-            .result = .{ .path = "css/default/layout.abc.css", .hash = "abc", .content = "a" },
+            .result = .{ .path = "assets/default/css/layout.abc.css", .hash = "abc", .content = "a" },
         },
         .{
             .style_name = "default",
             .bundle_type = "js",
             .bundle_name = "main",
-            .result = .{ .path = "js/default/main.def.js", .hash = "def", .content = "b" },
+            .result = .{ .path = "assets/default/js/main.def.js", .hash = "def", .content = "b" },
         },
     };
 
@@ -413,6 +429,31 @@ test "buildAssetContext: multiple bundles" {
 
     const js_main = default_map.get("js").?.map.get("main").?.map;
     try testing.expectEqualStrings("def", js_main.get("hash").?.string);
+}
+
+test "buildAssetContext: nested bundle_name splits into maps" {
+    const a = testing.allocator;
+    const entries = [_]AssetEntry{
+        .{
+            .style_name = "default",
+            .bundle_type = "css",
+            .bundle_name = "nested/shape_one",
+            .result = .{
+                .path = "assets/default/css/nested/shape_one.abcd1234.css",
+                .hash = "abcd1234",
+                .content = "x",
+            },
+        },
+    };
+
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const result = try buildAssetContext(alloc, &entries);
+    const nested = result.map.get("default").?.map.get("css").?.map.get("nested").?.map;
+    const leaf = nested.get("shape_one").?.map;
+    try testing.expectEqualStrings("assets/default/css/nested/shape_one.abcd1234.css", leaf.get("path").?.string);
 }
 
 test "processFile: plain file without frontmatter" {
