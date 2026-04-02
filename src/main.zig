@@ -21,14 +21,14 @@ pub fn main() !void {
         const path = args.next() orelse ".";
         try wig.scaffold.init(a, path);
     } else if (std.mem.eql(u8, command, "build")) {
-        const opts = parsePathAndClean(&args);
+        const opts = parseBuildArgs(&args);
         var site = try wig.Site.init(a, .{ .root = opts.path });
         defer site.deinit();
-        site.buildAll(.{ .clean = opts.clean }) catch |err| {
+        const result = site.buildAll(.{ .clean = opts.clean, .pretty = opts.pretty }) catch |err| {
             std.debug.print("wig build: failed ({any})\n", .{err});
             return err;
         };
-        std.debug.print("wig build: ok → {s}/zig-out/site/\n", .{opts.path});
+        std.debug.print("wig build: ok ({d} pages) → {s}/zig-out/site/\n", .{ result.page_count, opts.path });
     } else if (std.mem.eql(u8, command, "validate")) {
         const v = parseValidateArgs(&args);
         var site = try wig.Site.init(a, .{ .root = v.path });
@@ -118,7 +118,7 @@ fn printUsage() void {
         \\
         \\Commands:
         \\  init [path]                  Scaffold a new Wig project
-        \\  build [path] [--clean]       Build static site to zig-out/site/
+        \\  build [path] [--clean] [--pretty]  Build static site to zig-out/site/
         \\  install <name|url>           Install a style (not available in v0.1.0)
         \\  add style <name>             Create a new empty style
         \\  add block <style> <name>     Add a block pattern to a style
@@ -127,18 +127,22 @@ fn printUsage() void {
     , .{});
 }
 
-const PathAndClean = struct {
+const BuildArgs = struct {
     path: []const u8,
     clean: bool,
+    pretty: bool,
 };
 
-/// Parses optional `[path]` and `--clean` in any order after the subcommand.
-fn parsePathAndClean(args: *std.process.ArgIterator) PathAndClean {
+/// Parses optional `[path]`, `--clean`, and `--pretty` in any order after the subcommand.
+fn parseBuildArgs(args: *std.process.ArgIterator) BuildArgs {
     var path: ?[]const u8 = null;
     var clean = false;
+    var pretty = false;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--clean")) {
             clean = true;
+        } else if (std.mem.eql(u8, arg, "--pretty")) {
+            pretty = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("wig build: unknown option '{s}'\n", .{arg});
         } else if (path == null) {
@@ -147,7 +151,7 @@ fn parsePathAndClean(args: *std.process.ArgIterator) PathAndClean {
             std.debug.print("wig build: unexpected extra argument '{s}'\n", .{arg});
         }
     }
-    return .{ .path = path orelse ".", .clean = clean };
+    return .{ .path = path orelse ".", .clean = clean, .pretty = pretty };
 }
 
 const ValidateArgs = struct {

@@ -26,7 +26,7 @@ pub fn buildIndex(
 
         for (pages) |page| {
             if (page.is_section) continue;
-            const terms = getTerms(page.frontmatter, field) orelse continue;
+            const terms = getTerms(page.raw_frontmatter, field) orelse continue;
 
             for (terms) |term_val| {
                 const raw_term = switch (term_val) {
@@ -48,8 +48,8 @@ pub fn buildIndex(
                 try page_map.put(a, "url", .{ .string = page.absolute_url });
                 try page_map.put(a, "source", .{ .string = page.source_path });
 
-                if (page.frontmatter == .map) {
-                    var fm_it = page.frontmatter.map.iterator();
+                if (page.raw_frontmatter == .map) {
+                    var fm_it = page.raw_frontmatter.map.iterator();
                     while (fm_it.next()) |entry| {
                         try page_map.put(a, entry.key_ptr.*, entry.value_ptr.*);
                     }
@@ -156,7 +156,7 @@ test "buildIndex: single taxonomy with tagged pages" {
             .absolute_url = "https://example.com/posts/first/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = try makeFmMap(a, &tags1),
+            .raw_frontmatter = try makeFmMap(a, &tags1),
             .collection_key = "pages.posts",
         },
         .{
@@ -166,7 +166,7 @@ test "buildIndex: single taxonomy with tagged pages" {
             .absolute_url = "https://example.com/posts/second/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = try makeFmMap(a, &tags2),
+            .raw_frontmatter = try makeFmMap(a, &tags2),
             .collection_key = "pages.posts",
         },
     };
@@ -203,7 +203,7 @@ test "buildIndex: string-as-single-element list" {
             .absolute_url = "https://example.com/page/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm_map },
+            .raw_frontmatter = .{ .map = fm_map },
             .collection_key = "pages",
         },
     };
@@ -233,7 +233,7 @@ test "buildIndex: page with no tags skipped" {
             .absolute_url = "https://example.com/page/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm_map },
+            .raw_frontmatter = .{ .map = fm_map },
             .collection_key = "pages",
         },
     };
@@ -266,7 +266,7 @@ test "buildIndex: multiple taxonomies" {
             .absolute_url = "https://example.com/page/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm_map },
+            .raw_frontmatter = .{ .map = fm_map },
             .collection_key = "pages",
         },
     };
@@ -296,7 +296,7 @@ test "buildIndex: sections excluded from taxonomy" {
             .absolute_url = "https://example.com/posts/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = try makeFmMap(a, &tags),
+            .raw_frontmatter = try makeFmMap(a, &tags),
             .collection_key = "pages.posts",
             .is_section = true,
         },
@@ -325,7 +325,7 @@ test "buildIndex: slugification normalises terms" {
             .absolute_url = "https://example.com/a/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = try makeFmMap(a, &tags1),
+            .raw_frontmatter = try makeFmMap(a, &tags1),
             .collection_key = "pages",
         },
         .{
@@ -335,7 +335,7 @@ test "buildIndex: slugification normalises terms" {
             .absolute_url = "https://example.com/b/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = try makeFmMap(a, &tags2),
+            .raw_frontmatter = try makeFmMap(a, &tags2),
             .collection_key = "pages",
         },
     };

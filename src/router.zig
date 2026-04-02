@@ -32,8 +32,14 @@ pub const RouteGroup = struct {
         };
     }
 
+    pub fn deinit(self: *RouteGroup) void {
+        for (self.routes.items) |r| self.allocator.free(@constCast(r.path));
+        self.routes.deinit(self.allocator);
+    }
+
     pub fn add(self: *RouteGroup, method: []const u8, sub_path: []const u8, h: handler_mod.HandlerFn) !void {
         const full = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.prefix, sub_path });
+        errdefer self.allocator.free(full);
         try self.routes.append(self.allocator, .{ .method = method, .path = full, .handler = h });
     }
 

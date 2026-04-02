@@ -1,6 +1,10 @@
 test:
   name: Multi-level data cascade override.
-  comment: Tests data.document overrides at multiple _index.dj levels.
+  comment: >
+    Tests data.document overrides at multiple _index.dj levels.
+    The cascade flows: data/document.yaml → directory _index.dj → page frontmatter.
+    A section's _index.dj data cascades to children in that directory, but not to
+    the _index.dj itself (self-exclusion).
   action:
     wig: build
   fixtures: []

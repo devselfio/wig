@@ -74,14 +74,99 @@ input:
           D.
 output:
   files:
-    index.html: true
+    index.html: |
+      <p>Home.</p>
     tags:
-      index.html: true
+      index.html: |
+        <h1>Tags</h1>
+        <ul>
+          
+            <li><a href="/tags/tech/">tech</a> (3)</li>
+          
+            <li><a href="/tags/music/">music</a> (2)</li>
+          
+            <li><a href="/tags/zig/">zig</a> (1)</li>
+          
+        </ul>
       tech:
-        index.html: true
+        index.html: |
+          <h1>tech</h1>
+          <p>Path tags: tech</p>
+          <ul>
+            
+              <li><a href="/blog/c/">Doc C</a></li>
+            
+              <li><a href="/blog/d/">Doc D</a></li>
+            
+              <li><a href="/blog/a/">Doc A</a></li>
+            
+          </ul>
+          <p>Add tag:</p>
+          <ul>
+            
+              <li><a href="/tags/tech/">tech</a></li>
+            
+              <li><a href="/tags/music/">music</a></li>
+            
+              <li><a href="/tags/zig/">zig</a></li>
+            
+          </ul>
         music:
-          index.html: true
+          index.html: |
+            <h1>tech/music</h1>
+            <p>Path tags: tech/music</p>
+            <ul>
+              
+                <li><a href="/blog/a/">Doc A</a></li>
+              
+            </ul>
+            <p>Add tag:</p>
+            <ul>
+              
+                <li><a href="/tags/tech/">tech</a></li>
+              
+                <li><a href="/tags/music/">music</a></li>
+              
+                <li><a href="/tags/zig/">zig</a></li>
+              
+            </ul>
       music:
-        index.html: true
+        index.html: |
+          <h1>music</h1>
+          <p>Path tags: music</p>
+          <ul>
+            
+              <li><a href="/blog/b/">Doc B</a></li>
+            
+              <li><a href="/blog/a/">Doc A</a></li>
+            
+          </ul>
+          <p>Add tag:</p>
+          <ul>
+            
+              <li><a href="/tags/tech/">tech</a></li>
+            
+              <li><a href="/tags/music/">music</a></li>
+            
+              <li><a href="/tags/zig/">zig</a></li>
+            
+          </ul>
       zig:
-        index.html: true
+        index.html: |
+          <h1>zig</h1>
+          <p>Path tags: zig</p>
+          <ul>
+            
+              <li><a href="/blog/d/">Doc D</a></li>
+            
+          </ul>
+          <p>Add tag:</p>
+          <ul>
+            
+              <li><a href="/tags/tech/">tech</a></li>
+            
+              <li><a href="/tags/music/">music</a></li>
+            
+              <li><a href="/tags/zig/">zig</a></li>
+            
+          </ul>

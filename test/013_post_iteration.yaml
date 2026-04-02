@@ -12,6 +12,7 @@ input:
       document.yaml: |
         style: default
         layout: base.html
+        slugify: true
     styles:
       default:
         style.yaml: |
@@ -108,12 +109,12 @@ output:
           <body>
             <p>Welcome to the blog.</p>
             <ul>
-            <li><a href="/posts/001_first/">First Post</a></li>
-            <li><a href="/posts/002_second/">Second Post</a></li>
+            <li><a href="/posts/001-first/">First Post</a></li>
+            <li><a href="/posts/002-second/">Second Post</a></li>
             </ul>
           </body>
         </html>
-      001_first:
+      001-first:
         index.html: |
           <!DOCTYPE html>
           <html lang="en">
@@ -128,7 +129,7 @@ output:
               </article>
             </body>
           </html>
-      002_second:
+      002-second:
         index.html: |
           <!DOCTYPE html>
           <html lang="en">

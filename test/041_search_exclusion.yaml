@@ -1,0 +1,61 @@
+test:
+  name: Search exclusion via document.search false
+  comment: Pages with search false in frontmatter are excluded from search.json.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: https://example.com
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        Home.
+      about.dj: |
+        ---
+        title: About
+        ---
+        About page.
+      hidden.dj: |
+        ---
+        title: Hidden
+        search: false
+        ---
+        This page should not appear in search.
+output:
+  files:
+    search.json: |
+      [
+        {
+          "url": "https://example.com/",
+          "title": "Home",
+          "content": "Home\n.",
+          "excerpt": "Home.",
+          "tags": [],
+          "date": null,
+          "section": null
+        },
+        {
+          "url": "https://example.com/about/",
+          "title": "About",
+          "content": "About page.",
+          "excerpt": "About page.",
+          "tags": [],
+          "date": null,
+          "section": null
+        }
+      ]

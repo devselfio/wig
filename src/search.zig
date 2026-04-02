@@ -7,16 +7,6 @@ const fs = std.fs;
 pub const SearchEntry = struct {
     url: []const u8,
     title: []const u8,
-    description: []const u8,
-    body: []const u8,
-    tags: []const []const u8,
-    date: []const u8,
-};
-
-/// Spec format: url, title, content, excerpt, tags, date, section.
-pub const SpecSearchEntry = struct {
-    url: []const u8,
-    title: []const u8,
     content: []const u8,
     excerpt: []const u8,
     tags: []const []const u8,
@@ -25,7 +15,7 @@ pub const SpecSearchEntry = struct {
 };
 
 /// Generates `search.json` in spec format (multi-line, 4-space field indent).
-pub fn generateSearchJson(a: Allocator, entries: []const SpecSearchEntry, output_dir: fs.Dir) !void {
+pub fn generateSearchJson(a: Allocator, entries: []const SearchEntry, output_dir: fs.Dir) !void {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
 
@@ -63,44 +53,6 @@ fn writeJsonObjectFieldLine(buf: *std.ArrayListUnmanaged(u8), a: Allocator, inde
     try buf.appendSlice(a, "\": ");
     try writeJsonString(buf, a, val);
     try buf.appendSlice(a, ",\n");
-}
-
-/// Generates `search-index.json` from rendered page content.
-pub fn generate(a: Allocator, entries: []const SearchEntry, output_dir: fs.Dir) !void {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    defer buf.deinit(a);
-
-    try buf.appendSlice(a, "[\n");
-    for (entries, 0..) |entry, i| {
-        if (i > 0) try buf.appendSlice(a, ",\n");
-        try buf.appendSlice(a, "  {");
-        var first = true;
-        try writeJsonField(&buf, a, "url", entry.url, &first);
-        try writeJsonField(&buf, a, "title", entry.title, &first);
-        try writeJsonField(&buf, a, "description", entry.description, &first);
-        try writeJsonField(&buf, a, "body", entry.body, &first);
-        try writeJsonField(&buf, a, "date", entry.date, &first);
-        try buf.appendSlice(a, ", \"tags\": [");
-        for (entry.tags, 0..) |tag, j| {
-            if (j > 0) try buf.appendSlice(a, ", ");
-            try writeJsonString(&buf, a, tag);
-        }
-        try buf.appendSlice(a, "]}");
-    }
-    try buf.appendSlice(a, "\n]\n");
-
-    var f = try output_dir.createFile("search-index.json", .{});
-    defer f.close();
-    try f.writeAll(buf.items);
-}
-
-fn writeJsonField(buf: *std.ArrayListUnmanaged(u8), a: Allocator, key: []const u8, val: []const u8, first: *bool) !void {
-    if (!first.*) try buf.appendSlice(a, ", ");
-    first.* = false;
-    try buf.append(a, '"');
-    try buf.appendSlice(a, key);
-    try buf.appendSlice(a, "\": ");
-    try writeJsonString(buf, a, val);
 }
 
 fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), a: Allocator, s: []const u8) !void {
@@ -162,54 +114,3 @@ test "stripHtml: empty input" {
     try testing.expectEqualStrings("", r);
 }
 
-test "generate: produces valid JSON" {
-    const a = testing.allocator;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const tags = [_][]const u8{ "zig", "web" };
-    const entries = [_]SearchEntry{
-        .{
-            .url = "https://example.com/hello/",
-            .title = "Hello",
-            .description = "A test post",
-            .body = "Body text here.",
-            .tags = &tags,
-            .date = "2026-03-01",
-        },
-    };
-
-    try generate(a, &entries, tmp.dir);
-
-    const content = try tmp.dir.readFileAlloc(a, "search-index.json", 64 * 1024);
-    defer a.free(content);
-
-    try testing.expect(std.mem.indexOf(u8, content, "\"Hello\"") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"zig\"") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"web\"") != null);
-}
-
-test "generate: escapes special characters" {
-    const a = testing.allocator;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const entries = [_]SearchEntry{
-        .{
-            .url = "https://example.com/",
-            .title = "He said \"hello\"",
-            .description = "line1\nline2",
-            .body = "a\\b",
-            .tags = &.{},
-            .date = "",
-        },
-    };
-
-    try generate(a, &entries, tmp.dir);
-
-    const content = try tmp.dir.readFileAlloc(a, "search-index.json", 64 * 1024);
-    defer a.free(content);
-
-    try testing.expect(std.mem.indexOf(u8, content, "\\\"hello\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\\n") != null);
-}

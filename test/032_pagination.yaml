@@ -21,14 +21,14 @@ input:
               <t-slot />
             list.html: |
               <t-for item in paginate.items>
-                <p><t-var name="item.document.title" /></p>
+              <p><t-var name="item.document.title" /></p>
               </t-for>
-              <t-if name="paginate.previous">
-                <a t-var:href="paginate.previous.url">Prev</a>
+              <t-if var="paginate.previous">
+              <a t-var:href="paginate.previous.url">Prev</a>
               </t-if>
               Page <t-var name="paginate.page" /> of <t-var name="paginate.total_pages" />
-              <t-if name="paginate.next">
-                <a t-var:href="paginate.next.url">Next</a>
+              <t-if var="paginate.next">
+              <a t-var:href="paginate.next.url">Next</a>
               </t-if>
     pages:
       _index.dj: |
@@ -64,9 +64,26 @@ input:
           C.
 output:
   files:
-    index.html: true
+    index.html: |
+      <p>Home.</p>
     posts:
-      index.html: true
+      index.html: |
+        
+        <p>Post C</p>
+        
+        <p>Post B</p>
+        
+        
+        Page 1 of 2
+        
+        <a href="/posts/page/2/">Next</a>
       page:
         "2":
-          index.html: true
+          index.html: |
+            
+            <p>Post A</p>
+            
+            
+            <a href="/posts/">Prev</a>
+            
+            Page 2 of 2

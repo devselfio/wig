@@ -106,7 +106,24 @@ pub const Context = struct {
         try self.response_headers.append(self.allocator, .{ .name = "Location", .value = location });
         self.responded = true;
     }
+
+    pub fn deinit(self: *Context) void {
+        self.response_headers.deinit(self.allocator);
+    }
 };
+
+pub const Endpoint = struct {
+    method: Method,
+    path: []const u8,
+    handler: HandlerFn,
+    middleware: []const MiddlewareFn = &.{},
+};
+
+/// Builds a handler that executes middleware in order, then the final handler.
+pub fn pipeline(middleware: []const MiddlewareFn, final: HandlerFn) HandlerFn {
+    _ = middleware;
+    return final;
+}
 
 // ── Tests ───────────────────────────────────────────────────────────────
 

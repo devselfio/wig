@@ -1,0 +1,29 @@
+test:
+  name: Invalid YAML frontmatter causes build failure
+  comment: Malformed YAML between --- delimiters should cause exit 1.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: [unclosed
+        ---
+        Content.
+output:
+  exit: 1

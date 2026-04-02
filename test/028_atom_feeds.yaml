@@ -81,17 +81,25 @@ output:
           <title>My Site - posts</title>
           <link href="https://example.com/" />
           <link href="https://example.com/feeds/posts.xml" rel="self" />
+          <id>https://example.com/feeds/posts.xml</id>
           <author><name>QuiteClose</name></author>
+          <updated>2026-03-15</updated>
           <entry>
             <title>Second Post</title>
             <link href="https://example.com/blog/second/" />
+            <id>https://example.com/blog/second/</id>
             <updated>2026-03-15</updated>
             <summary>A follow-up post.</summary>
+            <content type="html">&lt;p&gt;Second post content.&lt;/p&gt;
+        </content>
           </entry>
           <entry>
             <title>First Post</title>
             <link href="https://example.com/blog/first/" />
+            <id>https://example.com/blog/first/</id>
             <updated>2026-03-10</updated>
             <summary>The first post ever.</summary>
+            <content type="html">&lt;p&gt;First post content.&lt;/p&gt;
+        </content>
           </entry>
         </feed>

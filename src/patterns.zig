@@ -96,7 +96,7 @@ pub fn generatePages(a: Allocator, docs: []const PatternDoc, style_name: []const
             .absolute_url = url_path,
             .content_body = doc.description,
             .extension = ".css",
-            .frontmatter = .{ .string = doc.name },
+            .raw_frontmatter = .{ .string = doc.name },
             .collection_key = try std.fmt.allocPrint(a, "patterns.{s}", .{style_name}),
         });
     }

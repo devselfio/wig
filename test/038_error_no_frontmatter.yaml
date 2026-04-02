@@ -1,0 +1,30 @@
+test:
+  name: Page without frontmatter delimiters causes build failure
+  comment: Content files must start with --- frontmatter delimiters.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      about.dj: |
+        No frontmatter here, just content.
+output:
+  exit: 1

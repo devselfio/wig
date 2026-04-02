@@ -46,10 +46,13 @@ pub const App = struct {
         return router_mod.RouteGroup.init(self.allocator, prefix);
     }
 
-    /// Adds all routes from a RouteGroup into this App.
+    /// Adds all routes from a RouteGroup into this App, duping path strings
+    /// so the App owns its copies independently of the group's lifetime.
     pub fn mount(self: *App, route_group: *const router_mod.RouteGroup) !void {
         for (route_group.routes.items) |route| {
-            try self.routes.append(self.allocator, route);
+            const path_copy = try self.allocator.dupe(u8, route.path);
+            errdefer self.allocator.free(path_copy);
+            try self.routes.append(self.allocator, .{ .method = route.method, .path = path_copy, .handler = route.handler });
         }
     }
 

@@ -1,13 +1,14 @@
 # Wig
 
-A library-first static site generator in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, color scheme management, and multi-style site architecture.
+A library-first static site generator and web framework in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, color scheme management, and multi-style site architecture. The same templates and data model serve both SSG output (files) and HTTP responses (HTMX fragments from a Zig backend).
 
 **Roadmap (workspace root):** [`WIG_ROADMAP.md`](../WIG_ROADMAP.md) — releases, dimension score targets vs peer deep-dives, intentional trade-offs, replay cadence.
 
 ## Who this is for
 
 - **Site authors** — Content, frontmatter, data cascade, and Toupee templates: [Rendering pipeline](#rendering-pipeline), [Frontmatter](#frontmatter), [Data cascade](#data-cascade), [Template syntax](#template-syntax), [Page collection](#page-collection).
-- **Zig embedders** — Library API and validation: [Library-first](#library-first), [Two-phase Site struct](#two-phase-site-struct), [Key types](#key-types), [Validation](#validation).
+- **Zig app developers** — Hybrid SSG + web-framework architecture: [SSG + web framework](#ssg--web-framework-hybrid-architecture), [Key types](#key-types), [Validation](#validation).
+- **Zig embedders** — Library API: [Library-first](#library-first-design), [Two-phase Site struct](#two-phase-site-struct), [Key types](#key-types).
 - **Wig contributors** — Source layout and tests: [Project structure](#project-structure), [Testing](#testing).
 
 ## Contents
@@ -50,25 +51,35 @@ wig/
   build.zig         # library module (wig) + CLI executable
   build.zig.zon     # declares toupee, comb, zjot dependencies
   src/
-    root.zig        # public API: Site struct, re-exports dependency types
+    root.zig        # public API: Site struct, BuildResult, orchestration (buildPhase_*)
     main.zig        # wig CLI entry point
     config.zig      # site config + style manifest loading
+    page_meta.zig   # PageMeta, CascadeData, PaginateConfig structs; parsePageMeta, toTemplateValue
+    build_context.zig # BuildContext struct, Hooks (pre/post scan/render/build)
+    diagnostics.zig # Diagnostic, Collector (structured error/warning accumulation)
+    collections.zig # buildPageValue, buildCollections, buildParentMap, buildChildrenMap
+    cascade.zig     # cascade resolution: resolveLayout, resolveStyle, applyCascadeToContext
+    template_loader.zig # StyleLoader + loadTemplates (shared by buildAll and validate)
+    tag_pages.zig   # taxonomy tag page rendering (/tags/, /tags/{slug}/, /tags/{a}/{b}/)
     tokens.zig      # fluid typography + spacing computation (CUBE CSS)
     colours.zig     # color scheme resolution (palette indirection; data key `colors` or legacy `colours`)
     context.zig     # Comb.Value/std.json.Value -> Toupee.Value translation
+    comb_utils.zig  # safe typed extraction from comb.Value (getString, getBool, getList, etc.)
+    slug.zig        # URL slugification (slugifyStem, isSpecialStem, slugifyTerm)
+    xml.zig         # XML escaping (appendXmlEscaped)
     frontmatter.zig # shared YAML frontmatter detection + stripping
     bundles.zig     # asset bundles (CSS + JS): render, concat, hash
-    scanner.zig     # walk pages/, collections, sections, render gating
+    scanner.zig     # walk pages/, collections (ScanResult.init), sections, render gating
     taxonomies.zig  # reverse index from page tags/categories
-    pages.zig       # page rendering: content parsing, shortcodes, layout
+    pages.zig       # page rendering: unified renderPage, content parsing, shortcodes, layout
     toc.zig         # heading extraction from HTML for table of contents
-    search.zig      # search index generation (JSON)
+    search.zig      # search index generation (search.json)
     feeds.zig       # Atom feed + sitemap generation
     patterns.zig    # CSS doc comment parsing, pattern library pages
     app.zig         # web framework: App, route declaration, middleware
-    router.zig      # route matching, path parameters, groups
-    handler.zig     # request Context, Response, handler signatures
-    session.zig     # cookie-based sessions, MemoryStore
+    router.zig      # route matching, path parameters, RouteGroup (with deinit)
+    handler.zig     # request Context (with deinit), Endpoint, pipeline()
+    session.zig     # cookie-based sessions, MemoryStore (returns pointers, handles overwrites)
     scaffold.zig    # wig init (copies skel/site), add style, add block, install
     html.zig        # shared HTML utilities (stripTags)
     test_runner.zig # spec test runner (`NNN_*.yaml` full-site builds)
@@ -81,17 +92,58 @@ wig/
     site/           # default project tree copied by `wig init` (`_core` + `default`, data, pages, assets)
 ```
 
+### Typed PageMeta architecture
+
+The pipeline uses **typed representations until the template boundary**. All well-known frontmatter fields are parsed into a `PageMeta` struct at scan time; only `raw_frontmatter` (as `toupee.Value`) crosses into template rendering.
+
+```
+comb.Value (YAML parse) → parsePageMeta → PageMeta (typed, compile-time safe)
+                                        → raw_frontmatter (toupee.Value, for template context)
+```
+
+`PageEntry` carries both: `meta: PageMeta` for pipeline logic (cascade, search, feeds, tag pages) and `raw_frontmatter: toupee.Value` for the `page.*` / `document.*` template namespace. This eliminates ~25 instances of runtime map-drilling boilerplate.
+
 ## Architecture
 
-### Library-first, CLI-first SSG
+### Library-first design
 
-Wig is a Zig library (`Site`, `Site.buildAll`, …) and ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `_core`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
+Wig is a Zig library (`Site`, `Site.buildAll`, …) that also ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `_core`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
 
-### SSG and optional web framework
+### SSG + web framework (hybrid architecture)
 
-**Static site generation** is the primary, fully specified path: `Site.init`, `Site.buildAll`, the **`wig build`** command, and YAML specs in `test/NNN_*.yaml` (decimal id prefix).
+Wig is **both** an SSG and a **library for Zig web applications**. The same templates, data model, styles, and CUBE CSS methodology serve two output targets:
 
-**Optional web framework** pieces (`app.zig`, `router.zig`, `handler.zig`, `session.zig`, and helpers such as `devServer`) exist for users who want HTTP routing, handlers, and sessions on top of a built site. This layer is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite (which only drives full static builds), and APIs may change. Proper specification, coverage, and likely **spec-runner extensions** (e.g. HTTP-level or app-lifecycle tests) are follow-on work.
+1. **SSG path** (`wig build`): Scans `pages/`, renders through Toupee, writes HTML files to `zig-out/site/`. Deploy to GitHub Pages, Netlify, or any static host. This is the primary, fully specified path with YAML specs in `test/NNN_*.yaml`.
+
+2. **Web-framework path** (Zig app in `src/`): A Zig application imports Wig as a library, handles HTTP requests, builds a Toupee context from request data, and renders templates into response bodies. HTMX snippets can be returned as rendered fragments (no `<t-extends>` wrapper). The static site and the dynamic backend coexist: static pages on GitHub Pages can poll the backend for interactive content.
+
+**Typical hybrid project layout:**
+
+```
+my-project/
+  assets/          # static files (images, fonts, robots.txt)
+  data/            # YAML data (site.yaml, document.yaml, colors/)
+  src/
+    main.zig       # Zig app: imports wig, handles routes, renders responses
+  styles/          # CUBE CSS: _core/ + default/ (templates, css, patterns)
+  pages/           # Djot/HTML content for SSG path
+  build.zig        # builds both: wig SSG output + src/main.zig binary
+  build.zig.zon    # depends on wig (which brings toupee, comb, zjot)
+```
+
+**How the two paths share everything:**
+- **Templates** — `src/main.zig` loads the same Toupee `Engine` with the same templates from `styles/`. A route handler calls `engine.renderToString("blocks/game-grid.html", ctx)` to produce an HTMX fragment.
+- **Data** — `data/site.yaml`, color schemes, tokens are available to both paths. The SSG injects them via `buildAll`; the app loads them via Wig's config API.
+- **Styles** — CSS bundles, CUBE layers, fluid tokens are built by `wig build` and served as static assets by both GitHub Pages and the app server.
+
+**Web-framework layer** (`app.zig`, `router.zig`, `handler.zig`, `session.zig`) is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite, and APIs may change. The four technical requirements for v0.3 are:
+
+1. **Render-to-string** — render a Toupee template with a context, return the HTML string.
+2. **Request context → template context** — map HTTP request data into `toupee.Value`.
+3. **Route → handler → template** — Sinatra-level simplicity: `app.route("/game", handler)`.
+4. **Fragment rendering** — render a template without `<t-extends>`, returning just the HTML fragment (essential for HTMX `hx-get` responses).
+
+**Deployment model:** Static site on GitHub Pages (or similar). Dynamic backend as a containerised Zig binary. Static pages use HTMX attributes (`hx-get`, `hx-swap`) to request fragments from the backend. The backend serves fragments only — it does not need to serve the full site.
 
 ### Two-phase Site struct
 
@@ -103,7 +155,7 @@ Wig is a Zig library (`Site`, `Site.buildAll`, …) and ships a **`wig` executab
 - **`Site.allocator`** — The allocator passed to `init`. Owns long-lived state: config loaded after `buildAll()`, the **Toupee `Engine`** (template storage and internal arenas), and anything freed in `Site.deinit()`. Use it for work that must survive across builds or for HTTP handlers that outlive a single `buildAll()`.
 - **`build_arena`** — After each successful `buildAll()`, an arena allocator holds most **per-build** data: scan results, the shared template name→source map, the main Toupee `Context` for rendering, and transient strings. The next `buildAll()` destroys and recreates this arena; **do not** retain pointers into it past the build or across a second `buildAll()` on the same `Site`.
 - **Why the engine uses `Site.allocator`** — `Engine.init` / `addTemplate` use the main allocator so template memory is **not** tied to `build_arena`, avoiding use-after-free when the arena is reset on rebuild.
-- **Optional HTTP layer** — `devServer` does not take `*Site`; use handler `Context.allocator` for per-response buffers. If a handler needs template rendering against post-build state, keep a `*Site` (or engine pointer) in user code—do not couple that into `devServer`’s signature.
+- **Web-framework / HTTP layer** — `devServer` does not take `*Site`; use handler `Context.allocator` for per-response buffers. For hybrid apps where handlers render Toupee templates: keep a `*Site` (or engine pointer) in the app's `src/main.zig` so handlers can call render-to-string—do not couple that into `devServer`’s signature.
 
 ### Output paths (`output_paths.zig`)
 
@@ -118,13 +170,14 @@ The library re-exports `wig.output_paths`. Use it for any code that must agree w
 ```zig
 const wig = @import("wig");
 
-// Static build
+// Static build — buildAll returns BuildResult with page count and diagnostics
 var site = try wig.Site.init(allocator, .{ .root = ".", .draft = draft });
-try site.buildAll(.{ .clean = clean });
+const result = try site.buildAll(.{ .clean = clean, .pretty = false });
+std.debug.print("Built {d} pages\n", .{result.page_count});
 
 // Dev server (HTTP layer is separate from `Site`; pass the built output directory)
 var site = try wig.Site.init(allocator, .{ .root = ".", .draft = true });
-try site.buildAll(.{ .clean = false });
+_ = try site.buildAll(.{ .clean = false });
 var site_out = try site.openBuiltOutputDir();
 defer site_out.close();
 var app = try wig.devServer(allocator, site_out);
@@ -193,10 +246,27 @@ Toupee uses `<t-*>` HTML elements. Key tags:
 - `<t-var name="...">default</t-var>` -- variable output (HTML-escaped)
 - `<t-raw name="..." />` -- unescaped output (for CSS values)
 - `<t-for item in collection>` -- iteration
-- `<t-if var="...">` -- conditional (checks key **existence**, not truthiness)
+- `<t-if var="...">` -- conditional (default: checks key **existence**; see comparisons below)
 - `<t-let name="..." value="...">` -- variable capture
 
-**Conditional note:** `<t-if var="x">` checks whether `x` exists in context, not its value. A key set to `false` still passes. For boolean flags like `site.draft`, use the absent-key convention: only put the key when true.
+**Conditional sources:** `<t-if>` supports three source attributes: `var` (context variable), `attr` (template attribute), `slot` (slot existence). Exactly one is required.
+
+**Conditional comparisons:** By default, `<t-if var="x">` checks whether `x` exists in context. Add a comparison attribute for richer tests:
+
+| Attribute | Meaning |
+|-----------|---------|
+| *(none)* | Key exists (default) |
+| `not-exists` | Key does not exist |
+| `truthy` | Value is truthy (non-empty string, `true`, non-zero number, non-empty list/map) |
+| `not-truthy` | Value is falsy (empty string, `false`, zero, empty list/map, nil, or missing) |
+| `equals="v"` | String-equal to `v` |
+| `not-equals="v"` | Not string-equal to `v` |
+| `contains="v"` | String contains `v` |
+| `starts-with="v"` | String starts with `v` |
+| `ends-with="v"` | String ends with `v` |
+| `matches="v"` | Matches pattern `v` |
+
+**Existence vs truthiness:** `<t-if var="x">` passes when `x` is present regardless of value (a key set to `false` still passes). Use `<t-if var="x" truthy>` when you need to check the value itself.
 
 ### Frontmatter
 
@@ -209,7 +279,7 @@ YAML only, delimited by `---`. Required for all pages in `pages/`.
 
 Normalization only wraps the parse result as `{ document: <root mapping> }` for the internal pipeline. An empty fence (`---` then `---`) yields an empty `document` map. A sole root key `document:` **must** map to an object; a scalar (e.g. `document: foo`) is invalid.
 
-**Well-known root keys** (each lives under `document` after load): `title`, `layout`, `style`, `date`, `tags`, `description`, `thumbnail`, `draft`, `debug`, `data` (cascade payload), `paginate`, etc. — merged into `document.*` in the rendering context except where noted below.
+**Well-known root keys** (each lives under `document` after load): `title`, `layout`, `style`, `date`, `tags`, `description`, `thumbnail`, `draft`, `debug`, `slugify`, `search`, `data` (cascade payload), `paginate`, etc. — merged into `document.*` in the rendering context except where noted below.
 
 `document.data` — cascading data for child pages. Wig processes this at build time and **strips it from the template context**. It is a build instruction, not template data.
 
@@ -249,6 +319,8 @@ Files in `styles/` with frontmatter are template-rendered; without are plain tex
 
 **Only `_index.dj` / `_index.html`** is the section index convention. A file named `index.dj` is treated as a normal page and gets clean URL wrapping (`index/index.html`).
 
+**URL slugification:** When `slugify: true` is set in the data cascade (default via `data/document.yaml`), page filename stems are slugified: underscores become hyphens and letters are lowercased. For example, `my_post.dj` -> `/my-post/`. Special stems (`_index`, `index`, `_NNN` error pages) are never slugified. Individual pages can override with `slugify: false` in frontmatter.
+
 ### Data cascade
 
 Sources merged in priority order (highest priority last -- later sources override earlier):
@@ -264,6 +336,8 @@ Sources merged in priority order (highest priority last -- later sources overrid
 
 **Directory-level data overrides:** Root key `data:` in `_index.dj` frontmatter (`document.data` after load) can override any data key. For example, `data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
 
+**Self-exclusion:** A section's `_index.dj` data cascade applies to children in that directory, not to the `_index.dj` itself. The section index page inherits from its parent's cascade, not its own `data:` block. See `test/011_data_cascade_override.yaml`.
+
 ### Page collection
 
 The `pages` context key is a nested map mirroring the `pages/` directory tree (`pages.*` in templates and data). Each page's metadata lives under a reserved `document` key:
@@ -273,7 +347,7 @@ The `pages` context key is a nested map mirroring the `pages/` directory tree (`
 - `pages/blog/_index.dj` -> `pages.blog.document` (section index metadata)
 - `pages/blog/post_one.dj` -> `pages.blog.post_one.document` (child page metadata)
 
-Metadata keys include `path` (URL path), `title`, `date`, and all other keys copied from page YAML into that page’s `document` map. Example: `pages.blog.post_one.document.path` -> `/blog/post-one/`.
+Metadata keys include `path` (URL path), `title`, `date`, and all other keys copied from page YAML into that page’s `document` map. Example: `pages.blog.post_one.document.path` -> `/blog/post-one/` (with default slugification enabled, underscores become hyphens in URLs; the collection key retains the original stem).
 
 **`document` is a reserved key.** A page or directory named `document` is an error.
 
@@ -295,7 +369,7 @@ Wig also injects computed values:
 - `document.url` -- absolute URL (e.g. `https://example.com/about/`), built from `site.url` + `document.path`
 - `document.style` -- full style manifest map (parsed from `style.yaml`). Access fields via `document.style.name`, `document.style.version`, etc.
 - `document.parent` -- map with the parent page's document data (`path`, `title`, etc.). Nil for the root page.
-- `document.children` -- list of **sibling** content pages in the same `pages/` directory as this section's `_index` (non-`_index` files only). Each item uses the **same page map shape** as the current page in context (`path`, `url`, `source`, nested `document`, etc.). Empty for leaf pages and for sections with no siblings.
+- `document.children` -- list of **child** content pages in the same `pages/` directory as this section's `_index` (non-`_index` files only). Each item uses the **same page map shape** as the current page in context (`path`, `url`, `source`, nested `document`, etc.). Empty for leaf pages and for sections with no children.
 - `document.ancestors` -- list of ancestor page document maps, from parent to root (nearest first). Empty list for the root page.
 - `document.excerpt` -- from `description:` in frontmatter, or falls back to the first paragraph of content (text-only).
 - `document.thumbnail` -- from `thumbnail:` in frontmatter. Asset path (e.g. `/images/hero.jpg`).
@@ -453,7 +527,7 @@ Pages opt into feeds via frontmatter:
 feeds: [posts, tech]
 ```
 
-Output: `feeds/{name}.xml` as valid Atom XML. Entries sorted by `document.date` (newest first). Each entry includes title, URL, date, and excerpt (from `document.excerpt`).
+Output: `feeds/{name}.xml` as valid Atom XML (RFC 4287 compliant). The feed includes required `<id>` and `<updated>` elements. Entries sorted by `document.date` (newest first). Each entry includes `<id>` (absolute URL), title, URL, date, excerpt (from `document.excerpt`), and `<content type="html">` (rendered page body).
 
 ### Sitemap
 
@@ -480,6 +554,8 @@ Wig generates `search.json` with one entry per page:
 ```
 
 Fields: `url`, `title`, `content` (text-only), `excerpt`, `tags` (list or empty), `date` (or null), `section` (parent directory name or null).
+
+**Excluding pages:** Set `search: false` in page frontmatter to exclude a page from `search.json`. The page is still built and published; it simply does not appear in the search index. See `test/041_search_exclusion.yaml`.
 
 ### Static assets
 
@@ -541,6 +617,7 @@ Always under `<site_root>/zig-out/site/` (see `wig.output_paths`). Production bu
 - Heading IDs: zjot puts IDs on `<section>` elements (case-preserving), not headings. `toc.zig` extracts accordingly.
 - `wig build` outputs HTML with content placed at slot depth but no internal re-indentation.
 - `wig build --pretty` applies full HTML-aware re-indentation to output.
+- `makePath(...) catch {}` is intentional throughout the build pipeline. Directory creation is best-effort; the immediately-following `createFile` call surfaces the real error if the path is invalid.
 
 ## Testing
 
@@ -607,4 +684,4 @@ Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and
 - **Spec file names:** `{id}_{slug}.yaml` where `id` is **at least two** decimal digits (convention: **three**, zero-padded, e.g. `034_blog_e2e.yaml`) so the suite can grow to **999** specs before renaming. Discovery sorts by **numeric** id (not plain strings, so `100_` orders after `099_`). **`WIG_TEST`** filters by numeric id: `34`, `034`, and `034` all match spec `034_…`.
 - **TestRunnerConfig** (`test_runner.zig`): Configurable `output_dir` and `workspace_dir` (defaults match `output_paths.default_site_output_rel` and `default_test_workspace_rel`). Pass to `runSpecTests(..., config)`.
 - **OutputVerifier** (`output_verifier.zig`): Verifies output directory against spec; HTML normalization, glob matching (`*` only), stack/arena for comparisons.
-- **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; future loaders (e.g. zip fixtures) can swap in.
+- **SpecLoader** (`test_runner.zig`): Abstraction for loading specs. `defaultSpecLoader` reads YAML from test_dir; kept for future loaders.

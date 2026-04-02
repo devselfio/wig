@@ -1,11 +1,13 @@
 const std = @import("std");
 const scanner_mod = @import("scanner.zig");
 const config_mod = @import("config.zig");
+const page_meta_mod = @import("page_meta.zig");
 
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
 
 /// Generates an Atom feed XML for a named feed from a collection of pages.
+/// `rendered_content` maps page source paths to their rendered HTML content bodies.
 pub fn generateAtom(
     a: Allocator,
     feed_config: config_mod.FeedConfig,
@@ -14,6 +16,7 @@ pub fn generateAtom(
     site_title: []const u8,
     site_author: []const u8,
     output_dir: fs.Dir,
+    rendered_content: ?std.StringArrayHashMapUnmanaged([]const u8),
 ) !void {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(a);
@@ -33,11 +36,16 @@ pub fn generateAtom(
 
     const feed_path = try std.fmt.allocPrint(a, "feeds/{s}.xml", .{feed_config.name});
     defer a.free(feed_path);
+    const feed_self_url = try std.fmt.allocPrint(a, "{s}/{s}", .{ base, feed_path });
+    defer a.free(feed_self_url);
     try buf.appendSlice(a, "  <link href=\"");
-    try appendXmlEscaped(&buf, a, base);
-    try buf.appendSlice(a, "/");
-    try appendXmlEscaped(&buf, a, feed_path);
+    try appendXmlEscaped(&buf, a, feed_self_url);
     try buf.appendSlice(a, "\" rel=\"self\" />\n");
+
+    // RFC 4287 required: <id>
+    try buf.appendSlice(a, "  <id>");
+    try appendXmlEscaped(&buf, a, feed_self_url);
+    try buf.appendSlice(a, "</id>\n");
 
     try buf.appendSlice(a, "  <author><name>");
     try appendXmlEscaped(&buf, a, if (site_author.len > 0) site_author else site_title);
@@ -51,16 +59,26 @@ pub fn generateAtom(
     }
     std.mem.sort(*const scanner_mod.PageEntry, feed_pages.items, {}, struct {
         fn lessThan(_: void, lhs: *const scanner_mod.PageEntry, rhs: *const scanner_mod.PageEntry) bool {
-            const l_date = getDocStr(lhs.frontmatter, "date") orelse "";
-            const r_date = getDocStr(rhs.frontmatter, "date") orelse "";
-            return std.mem.order(u8, r_date, l_date) == .lt; // newest first
+            const l_date = lhs.meta.date orelse "";
+            const r_date = rhs.meta.date orelse "";
+            return std.mem.order(u8, r_date, l_date) == .lt;
         }
     }.lessThan);
+
+    if (feed_pages.items.len > 0) {
+        const newest = feed_pages.items[0];
+        const updated = newest.meta.date orelse "";
+        if (updated.len > 0) {
+            try buf.appendSlice(a, "  <updated>");
+            try appendXmlEscaped(&buf, a, updated);
+            try buf.appendSlice(a, "</updated>\n");
+        }
+    }
 
     for (feed_pages.items) |page| {
         try buf.appendSlice(a, "  <entry>\n");
 
-        const title = getDocStr(page.frontmatter, "title") orelse page.source_path;
+        const title = page.meta.title orelse page.source_path;
         try buf.appendSlice(a, "    <title>");
         try appendXmlEscaped(&buf, a, title);
         try buf.appendSlice(a, "</title>\n");
@@ -69,16 +87,29 @@ pub fn generateAtom(
         try appendXmlEscaped(&buf, a, page.absolute_url);
         try buf.appendSlice(a, "\" />\n");
 
-        if (getDocStr(page.frontmatter, "date")) |date| {
+        try buf.appendSlice(a, "    <id>");
+        try appendXmlEscaped(&buf, a, page.absolute_url);
+        try buf.appendSlice(a, "</id>\n");
+
+        if (page.meta.date) |date| {
             try buf.appendSlice(a, "    <updated>");
             try appendXmlEscaped(&buf, a, date);
             try buf.appendSlice(a, "</updated>\n");
         }
 
-        if (getDocStr(page.frontmatter, "description")) |summary| {
+        if (page.meta.description) |summary| {
             try buf.appendSlice(a, "    <summary>");
             try appendXmlEscaped(&buf, a, summary);
             try buf.appendSlice(a, "</summary>\n");
+        }
+
+        // RFC 4287 recommended: <content type="html">
+        if (rendered_content) |rc| {
+            if (rc.get(page.source_path)) |html| {
+                try buf.appendSlice(a, "    <content type=\"html\">");
+                try appendXmlEscaped(&buf, a, html);
+                try buf.appendSlice(a, "</content>\n");
+            }
         }
 
         try buf.appendSlice(a, "  </entry>\n");
@@ -121,7 +152,7 @@ pub fn generateSitemap(
         try buf.appendSlice(a, "  <url>\n    <loc>");
         try appendXmlEscaped(&buf, a, page.absolute_url);
         try buf.appendSlice(a, "</loc>");
-        if (getDocStr(page.frontmatter, "date")) |date| {
+        if (page.meta.date) |date| {
             try buf.appendSlice(a, "\n    <lastmod>");
             try appendXmlEscaped(&buf, a, date);
             try buf.appendSlice(a, "</lastmod>");
@@ -140,30 +171,10 @@ fn matchesFeed(page: scanner_mod.PageEntry, feed_config: config_mod.FeedConfig) 
     if (feed_config.collection_path.len > 0) {
         return std.mem.eql(u8, page.collection_key, feed_config.collection_path);
     }
-    // Opt-in: document.feeds contains feed name
-    if (page.frontmatter != .map) return false;
-    const doc = page.frontmatter.map.get("document") orelse return false;
-    if (doc != .map) return false;
-    const feeds_val = doc.map.get("feeds") orelse return false;
-    if (feeds_val != .list) return false;
-    for (feeds_val.list) |item| {
-        if (item == .string and std.mem.eql(u8, item.string, feed_config.name)) return true;
+    for (page.meta.feeds) |feed_name| {
+        if (std.mem.eql(u8, feed_name, feed_config.name)) return true;
     }
     return false;
-}
-
-fn getDocStr(fm: @import("toupee").Value, key: []const u8) ?[]const u8 {
-    if (fm != .map) return null;
-    if (fm.map.get("document")) |doc| {
-        if (doc == .map) {
-            const val = doc.map.get(key) orelse return null;
-            if (val != .string) return null;
-            return val.string;
-        }
-    }
-    const val = fm.map.get(key) orelse return null;
-    if (val != .string) return null;
-    return val.string;
 }
 
 fn appendXmlEscaped(buf: *std.ArrayListUnmanaged(u8), a: Allocator, text: []const u8) !void {
@@ -204,8 +215,9 @@ test "generateAtom: produces valid Atom XML" {
             .absolute_url = "https://example.com/posts/first/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm },
+            .raw_frontmatter = .{ .map = fm },
             .collection_key = "pages.posts",
+            .meta = .{ .title = "First Post", .date = "2026-03-01" },
         },
     };
 
@@ -215,12 +227,13 @@ test "generateAtom: produces valid Atom XML" {
         .title = "Blog Feed",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", "My Site", tmp.dir);
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", "My Site", tmp.dir, null);
 
     const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "<feed xmlns=") != null);
     try testing.expect(std.mem.indexOf(u8, content, "First Post") != null);
     try testing.expect(std.mem.indexOf(u8, content, "<updated>2026-03-01</updated>") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "<id>") != null);
 }
 
 test "generateAtom: filters by collection" {
@@ -244,8 +257,9 @@ test "generateAtom: filters by collection" {
             .absolute_url = "https://example.com/posts/p/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm1 },
+            .raw_frontmatter = .{ .map = fm1 },
             .collection_key = "pages.posts",
+            .meta = .{ .title = "Post" },
         },
         .{
             .source_path = "tutorials/t.dj",
@@ -254,8 +268,9 @@ test "generateAtom: filters by collection" {
             .absolute_url = "https://example.com/tutorials/t/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm2 },
+            .raw_frontmatter = .{ .map = fm2 },
             .collection_key = "pages.tutorials",
+            .meta = .{ .title = "Tutorial" },
         },
     };
 
@@ -265,7 +280,7 @@ test "generateAtom: filters by collection" {
         .title = "Blog",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", "Site", tmp.dir);
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", "Site", tmp.dir, null);
 
     const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
     try testing.expect(std.mem.indexOf(u8, content, "Post") != null);
@@ -291,7 +306,7 @@ test "generateSitemap: produces valid XML" {
             .absolute_url = "https://example.com/about/",
             .content_body = "",
             .extension = ".dj",
-            .frontmatter = .{ .map = fm },
+            .raw_frontmatter = .{ .map = fm },
             .collection_key = "pages",
         },
     };

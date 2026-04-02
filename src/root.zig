@@ -28,6 +28,11 @@ pub const scaffold = @import("scaffold.zig");
 pub const html_utils = @import("html.zig");
 pub const test_runner = @import("test_runner.zig");
 pub const output_paths = @import("output_paths.zig");
+pub const template_loader = @import("template_loader.zig");
+pub const tag_pages = @import("tag_pages.zig");
+pub const collections = @import("collections.zig");
+pub const diagnostics_mod = @import("diagnostics.zig");
+pub const build_context_mod = @import("build_context.zig");
 
 pub const Diagnostic = struct {
     kind: Kind = .err,
@@ -52,305 +57,9 @@ pub const WigError = error{
     TemplateConflict,
 };
 
-/// Resolves template names relative to a style during rendering.
-/// Explicit paths: `layouts/X.html`, `blocks/X.html` resolve within the current style.
-/// Cross-style: `style:path` (e.g. `_core:layouts/base.html`) resolves from another style.
-/// Short names (e.g. `page.html`) try layouts then blocks.
-pub const StyleLoader = struct {
-    templates: *const std.StringArrayHashMapUnmanaged([]const u8),
-    style_name: []const u8,
-
-    pub fn loader(self: *const StyleLoader) toupee.Loader {
-        return .{
-            .ptr = @ptrCast(self),
-            .getSourceFn = getSource,
-        };
-    }
-
-    fn getSource(ptr: *const anyopaque, a: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
-        const self: *const StyleLoader = @ptrCast(@alignCast(ptr));
-
-        // Cross-style: style:path (e.g. _core:layouts/base.html)
-        if (std.mem.indexOf(u8, name, ":")) |colon_pos| {
-            const target_style = name[0..colon_pos];
-            const path = name[colon_pos + 1 ..];
-            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ target_style, path });
-            defer a.free(full);
-            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
-            return null;
-        }
-
-        // Try as-is first (full path like default/templates/layouts/page.html)
-        if (self.templates.get(name)) |src| return try a.dupe(u8, src);
-
-        // Paths with slash: layouts/X or blocks/X → style/templates/layouts/X or style/templates/blocks/X
-        if (std.mem.indexOf(u8, name, "/") != null) {
-            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}", .{ self.style_name, name });
-            defer a.free(full);
-            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
-            return null;
-        }
-
-        // Short names: try layouts then blocks
-        for ([_][]const u8{ "layouts/", "blocks/" }) |subdir| {
-            const full = try std.fmt.allocPrint(a, "{s}/templates/{s}{s}", .{ self.style_name, subdir, name });
-            defer a.free(full);
-            if (self.templates.get(full)) |src| return try a.dupe(u8, src);
-        }
-
-        return null;
-    }
-};
+pub const StyleLoader = template_loader.StyleLoader;
 
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
-
-/// Page map shape matching `taxonomies.buildIndex` entries (path, url, source, merged frontmatter).
-fn tagPageValueFromEntry(a: Allocator, page: *const scanner.PageEntry) !toupee.Value {
-    var page_map = ValueMap{};
-    try page_map.put(a, "path", .{ .string = page.url_path });
-    try page_map.put(a, "url", .{ .string = page.absolute_url });
-    try page_map.put(a, "source", .{ .string = page.source_path });
-    if (page.frontmatter == .map) {
-        var fm_it = page.frontmatter.map.iterator();
-        while (fm_it.next()) |entry| {
-            try page_map.put(a, entry.key_ptr.*, entry.value_ptr.*);
-        }
-    }
-    return .{ .map = page_map };
-}
-
-fn wrapTagListDocumentItem(a: Allocator, page_val: toupee.Value) !toupee.Value {
-    if (page_val != .map) return error.InvalidTagPageValue;
-    const pm = page_val.map;
-    const ppath = pm.get("path") orelse return error.MissingTagPagePath;
-    if (ppath != .string) return error.MissingTagPagePath;
-    const ptitle = pages.getDocTitle(page_val) orelse "";
-    var inner = ValueMap{};
-    try inner.put(a, "path", ppath);
-    try inner.put(a, "title", .{ .string = try a.dupe(u8, ptitle) });
-    var outer = ValueMap{};
-    try outer.put(a, "document", .{ .map = inner });
-    return .{ .map = outer };
-}
-
-fn pageHasBothTagSlugs(fm: toupee.Value, a_slug: []const u8, b_slug: []const u8, ba: Allocator) !bool {
-    const terms = taxonomies.getTerms(fm, "tags") orelse return false;
-    var has_a = false;
-    var has_b = false;
-    for (terms) |tv| {
-        const raw = switch (tv) {
-            .string => |s| s,
-            else => continue,
-        };
-        const sl = try taxonomies.slugify(ba, raw);
-        if (std.mem.eql(u8, sl, a_slug)) has_a = true;
-        if (std.mem.eql(u8, sl, b_slug)) has_b = true;
-    }
-    return has_a and has_b;
-}
-
-/// Renders `/tags/` index, `/tags/{slug}/`, and `/tags/{a}/{b}/` intersection pages when `tags` is listed in site taxonomies.
-fn renderTaxonomyTagPages(
-    ba: Allocator,
-    site_cfg: config.SiteConfig,
-    style_name: []const u8,
-    scan_result: *const scanner.ScanResult,
-    engine: *toupee.Engine,
-    base_ctx: *toupee.Context,
-    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
-    output_dir: fs.Dir,
-) !void {
-    var want_tags = false;
-    for (site_cfg.taxonomies) |t| {
-        if (std.mem.eql(u8, t, "tags")) {
-            want_tags = true;
-            break;
-        }
-    }
-    if (!want_tags) return;
-
-    const tax_val = base_ctx.resolve("taxonomies") orelse return;
-    if (tax_val != .map) return;
-    const tags_root = tax_val.map.get("tags") orelse return;
-    if (tags_root != .map) return;
-
-    const tmpl_index_key = try std.fmt.allocPrint(ba, "{s}/templates/layouts/tag-index.html", .{style_name});
-    const tmpl_list_key = try std.fmt.allocPrint(ba, "{s}/templates/layouts/tag-list.html", .{style_name});
-    const tmpl_index = template_map.get(tmpl_index_key) orelse return;
-    const tmpl_list = template_map.get(tmpl_list_key) orelse return;
-
-    var sl: StyleLoader = .{ .templates = template_map, .style_name = style_name };
-
-    const TagInfo = struct {
-        slug: []const u8,
-        name: []const u8,
-        pages: []const toupee.Value,
-    };
-
-    var tag_infos: std.ArrayListUnmanaged(TagInfo) = .{};
-    var tit = tags_root.map.iterator();
-    while (tit.next()) |e| {
-        if (e.value_ptr.* != .map) continue;
-        const tm = e.value_ptr.*.map;
-        const nm = tm.get("name") orelse continue;
-        if (nm != .string) continue;
-        const pg = tm.get("pages") orelse continue;
-        if (pg != .list) continue;
-        try tag_infos.append(ba, .{
-            .slug = e.key_ptr.*,
-            .name = nm.string,
-            .pages = pg.list,
-        });
-    }
-
-    std.mem.sort(TagInfo, tag_infos.items, {}, struct {
-        fn lt(_: void, x: TagInfo, y: TagInfo) bool {
-            if (x.pages.len != y.pages.len) return x.pages.len > y.pages.len;
-            return std.mem.order(u8, x.slug, y.slug) == .lt;
-        }
-    }.lt);
-
-    const list_vals = try ba.alloc(toupee.Value, tag_infos.items.len);
-    for (tag_infos.items, list_vals) |info, *out| {
-        var m = ValueMap{};
-        const path_str = try std.fmt.allocPrint(ba, "/tags/{s}/", .{info.slug});
-        try m.put(ba, "path", .{ .string = path_str });
-        try m.put(ba, "name", .{ .string = info.name });
-        try m.put(ba, "count", .{ .integer = @intCast(info.pages.len) });
-        out.* = .{ .map = m };
-    }
-
-    // --- /tags/index.html ---
-    {
-        var ctx = try toupee.Context.initFrom(ba, base_ctx);
-        defer ctx.deinit();
-        var wrap = ValueMap{};
-        try wrap.put(ba, "tags", .{ .list = list_vals });
-        try ctx.put("tag", .{ .map = wrap });
-        const html_out = try engine.render(ba, tmpl_index, &ctx, sl.loader(), .{});
-        defer ba.free(html_out);
-        output_dir.makePath("tags") catch {};
-        var f = try output_dir.createFile("tags/index.html", .{});
-        defer f.close();
-        try f.writeAll(html_out);
-    }
-
-    // --- /tags/{slug}/index.html ---
-    for (tag_infos.items) |info| {
-        var ctx = try toupee.Context.initFrom(ba, base_ctx);
-        defer ctx.deinit();
-
-        var doc_map = ValueMap{};
-        try doc_map.put(ba, "title", .{ .string = info.name });
-        var tag_wrap = ValueMap{};
-        try tag_wrap.put(ba, "document", .{ .map = doc_map });
-        const path_tags_str = try std.fmt.allocPrint(ba, "{s}", .{info.slug});
-        try tag_wrap.put(ba, "path_tags", .{ .string = path_tags_str });
-
-        const doc_items = try ba.alloc(toupee.Value, info.pages.len);
-        var doc_n: usize = 0;
-        for (info.pages) |pv| {
-            if (pv != .map) continue;
-            const pm = pv.map;
-            if (pm.get("path")) |pp| {
-                if (pp != .string) continue;
-            } else continue;
-            doc_items[doc_n] = try wrapTagListDocumentItem(ba, pv);
-            doc_n += 1;
-        }
-        try tag_wrap.put(ba, "documents", .{ .list = doc_items[0..doc_n] });
-        try tag_wrap.put(ba, "tags", .{ .list = list_vals });
-        try ctx.put("tag", .{ .map = tag_wrap });
-
-        const html_out = try engine.render(ba, tmpl_list, &ctx, sl.loader(), .{});
-        defer ba.free(html_out);
-        const dir = try std.fmt.allocPrint(ba, "tags/{s}", .{info.slug});
-        defer ba.free(dir);
-        output_dir.makePath(dir) catch {};
-        const file_path = try std.fmt.allocPrint(ba, "{s}/index.html", .{dir});
-        defer ba.free(file_path);
-        var f = try output_dir.createFile(file_path, .{});
-        defer f.close();
-        try f.writeAll(html_out);
-    }
-
-    // --- /tags/{a}/{b}/index.html for co-occurring tags (slugs sorted descending in path) ---
-    var pair_seen = std.StringArrayHashMapUnmanaged(void){};
-    defer pair_seen.deinit(ba);
-
-    for (scan_result.pages) |*page| {
-        if (page.is_section) continue;
-        const terms = taxonomies.getTerms(page.frontmatter, "tags") orelse continue;
-        var slug_buf: std.ArrayListUnmanaged([]const u8) = .{};
-        defer slug_buf.deinit(ba);
-        for (terms) |t| {
-            const raw = switch (t) {
-                .string => |s| s,
-                else => continue,
-            };
-            try slug_buf.append(ba, try taxonomies.slugify(ba, raw));
-        }
-        if (slug_buf.items.len < 2) continue;
-        std.mem.sort([]const u8, slug_buf.items, {}, struct {
-            fn gt(_: void, x: []const u8, y: []const u8) bool {
-                return std.mem.order(u8, x, y) == .gt;
-            }
-        }.gt);
-        for (0..slug_buf.items.len) |i| {
-            for (i + 1..slug_buf.items.len) |j| {
-                const a_slug = slug_buf.items[i];
-                const b_slug = slug_buf.items[j];
-                const key = try std.fmt.allocPrint(ba, "{s}/{s}", .{ a_slug, b_slug });
-                _ = try pair_seen.getOrPut(ba, key);
-            }
-        }
-    }
-
-    var pit = pair_seen.iterator();
-    while (pit.next()) |kv| {
-        const key = kv.key_ptr.*;
-        const mid = std.mem.indexOfScalar(u8, key, '/') orelse continue;
-        if (mid == 0 or mid + 1 >= key.len) continue;
-        const a_slug = key[0..mid];
-        const b_slug = key[mid + 1 ..];
-
-        var match_pages: std.ArrayListUnmanaged(toupee.Value) = .{};
-        for (scan_result.pages) |*sp| {
-            if (sp.is_section) continue;
-            if (!try pageHasBothTagSlugs(sp.frontmatter, a_slug, b_slug, ba)) continue;
-            try match_pages.append(ba, try tagPageValueFromEntry(ba, sp));
-        }
-        if (match_pages.items.len == 0) continue;
-
-        const path_tags_join = try std.fmt.allocPrint(ba, "{s}/{s}", .{ a_slug, b_slug });
-        var doc_map2 = ValueMap{};
-        try doc_map2.put(ba, "title", .{ .string = path_tags_join });
-        var tag_wrap2 = ValueMap{};
-        try tag_wrap2.put(ba, "document", .{ .map = doc_map2 });
-        try tag_wrap2.put(ba, "path_tags", .{ .string = path_tags_join });
-
-        const doc_items2 = try ba.alloc(toupee.Value, match_pages.items.len);
-        for (match_pages.items, doc_items2) |mpv, *dout| {
-            dout.* = try wrapTagListDocumentItem(ba, mpv);
-        }
-        try tag_wrap2.put(ba, "documents", .{ .list = doc_items2 });
-        try tag_wrap2.put(ba, "tags", .{ .list = list_vals });
-
-        var ctx2 = try toupee.Context.initFrom(ba, base_ctx);
-        defer ctx2.deinit();
-        try ctx2.put("tag", .{ .map = tag_wrap2 });
-        const html2 = try engine.render(ba, tmpl_list, &ctx2, sl.loader(), .{});
-        defer ba.free(html2);
-        const dir2 = try std.fmt.allocPrint(ba, "tags/{s}/{s}", .{ a_slug, b_slug });
-        defer ba.free(dir2);
-        output_dir.makePath(dir2) catch {};
-        const fp2 = try std.fmt.allocPrint(ba, "{s}/index.html", .{dir2});
-        defer ba.free(fp2);
-        var f2 = try output_dir.createFile(fp2, .{});
-        defer f2.close();
-        try f2.writeAll(html2);
-    }
-}
 
 fn buildPhase_styleTokensSiteData(
     ba: Allocator,
@@ -475,6 +184,7 @@ fn buildPhase_scanAndTaxonomies(
     site_cfg: *const config.SiteConfig,
     site: *Site,
     style_ctx: *toupee.Context,
+    data_result: *const config.DataResult,
 ) !scanner.ScanResult {
     const pages_path = try fs.path.join(a, &.{ abs_root, "pages" });
     defer a.free(pages_path);
@@ -487,13 +197,16 @@ fn buildPhase_scanAndTaxonomies(
         return error.BuildFailed;
     defer pages_dir.close();
 
-    var scan_result = try scanner.scan(
+    const default_slugify = extractDefaultSlugify(data_result);
+
+    var scan_result = try scanner.scanWithOptions(
         ba,
         pages_dir,
         site_cfg.url,
         site.options.draft,
         site.options.debug,
         registered_exts.items,
+        default_slugify,
     );
 
     const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
@@ -506,56 +219,7 @@ fn buildPhase_scanAndTaxonomies(
     return scan_result;
 }
 
-fn buildPhase_loadTemplates(
-    ba: Allocator,
-    a: Allocator,
-    abs_root: []const u8,
-    style_cfgs: []config.StyleConfig,
-    engine: *toupee.Engine,
-    template_map: *std.StringArrayHashMapUnmanaged([]const u8),
-) !void {
-    const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
-    defer a.free(styles_path);
-
-    if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |d| {
-        var styles_dir2 = d;
-        defer styles_dir2.close();
-
-        for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
-            const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
-            if (styles_dir2.openDir(core_subdir, .{ .iterate = true })) |cd| {
-                var core_dir = cd;
-                defer core_dir.close();
-                var cit = core_dir.iterate();
-                while (try cit.next()) |entry| {
-                    if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                    const tmpl_name = try std.fmt.allocPrint(ba, "_core/{s}/{s}", .{ subdir, entry.name });
-                    const content = try core_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                    try engine.addTemplate(tmpl_name, content);
-                    try template_map.put(ba, tmpl_name, content);
-                }
-            } else |_| {}
-        }
-
-        for (style_cfgs) |style_cfg| {
-            for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
-                const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
-                if (styles_dir2.openDir(style_subdir, .{ .iterate = true })) |sd3| {
-                    var tmpl_dir = sd3;
-                    defer tmpl_dir.close();
-                    var tit = tmpl_dir.iterate();
-                    while (try tit.next()) |entry| {
-                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                        const tmpl_name = try std.fmt.allocPrint(ba, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name });
-                        const content = try tmpl_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                        try engine.addTemplate(tmpl_name, content);
-                        try template_map.put(ba, tmpl_name, content);
-                    }
-                } else |_| {}
-            }
-        }
-    } else |_| {}
-}
+const buildPhase_loadTemplates = template_loader.loadTemplates;
 
 fn buildPhase_generatedArtifacts(
     ba: Allocator,
@@ -568,12 +232,13 @@ fn buildPhase_generatedArtifacts(
     output_dir: fs.Dir,
     render_results: []const pages.RenderResult,
 ) !void {
-    var search_entries = std.ArrayListUnmanaged(search.SpecSearchEntry){};
+    var search_entries = std.ArrayListUnmanaged(search.SearchEntry){};
     for (scan_result.pages, render_results) |*page, result| {
-        if (page.is_draft) continue;
+        if (page.meta.draft) continue;
+        if (!page.meta.search) continue;
         const raw_plain = try search.stripHtml(ba, result.search_content);
         const trimmed = std.mem.trim(u8, raw_plain, " \t\n\r");
-        const title = pages.getDocTitle(page.frontmatter) orelse "";
+        const title = page.meta.title orelse "";
         const content_plain: []const u8 = if (title.len > 0 and trimmed.len > title.len and std.mem.startsWith(u8, trimmed, title)) cp: {
             const after = trimmed[title.len..];
             if (after.len > 0 and after[0] != ' ' and after[0] != '\t' and after[0] != '\n' and after[0] != '\r') {
@@ -582,33 +247,9 @@ fn buildPhase_generatedArtifacts(
             }
             break :cp try ba.dupe(u8, trimmed);
         } else try ba.dupe(u8, trimmed);
-        const excerpt = pages.extractExcerptPublic(ba, page.frontmatter, result.search_content) orelse content_plain;
-        var tags_list: []const []const u8 = &.{};
-        if (page.frontmatter == .map) {
-            if (page.frontmatter.map.get("document")) |doc| {
-                if (doc == .map) {
-                    if (doc.map.get("tags")) |tags_val| {
-                        if (tags_val == .list) {
-                            const tag_strs = try ba.alloc([]const u8, tags_val.list.len);
-                            for (tags_val.list, tag_strs) |t, *out| {
-                                out.* = if (t == .string) t.string else "";
-                            }
-                            tags_list = tag_strs;
-                        }
-                    }
-                }
-            }
-        }
-        const date_str = if (page.frontmatter == .map) blk: {
-            if (page.frontmatter.map.get("document")) |doc| {
-                if (doc == .map) {
-                    if (doc.map.get("date")) |d| {
-                        if (d == .string) break :blk d.string;
-                    }
-                }
-            }
-            break :blk null;
-        } else null;
+        const excerpt = pages.extractExcerptPublic(ba, page.raw_frontmatter, result.search_content) orelse content_plain;
+        const tags_list = page.meta.tags;
+        const date_str = page.meta.date;
         const section = sectionFromUrl(ba, page.url_path) catch null;
         try search_entries.append(ba, .{
             .url = page.absolute_url,
@@ -621,20 +262,26 @@ fn buildPhase_generatedArtifacts(
         });
     }
     const entries_slice = search_entries.items;
-    std.mem.sort(search.SpecSearchEntry, entries_slice, {}, struct {
-        fn lessThan(_: void, lhs: search.SpecSearchEntry, rhs: search.SpecSearchEntry) bool {
+    std.mem.sort(search.SearchEntry, entries_slice, {}, struct {
+        fn lessThan(_: void, lhs: search.SearchEntry, rhs: search.SearchEntry) bool {
             return std.mem.order(u8, lhs.url, rhs.url) == .lt;
         }
     }.lessThan);
     try search.generateSearchJson(ba, entries_slice, output_dir);
 
+    var rendered_map = std.StringArrayHashMapUnmanaged([]const u8){};
+    for (scan_result.pages, render_results) |*page, result| {
+        if (page.meta.draft) continue;
+        try rendered_map.put(ba, page.source_path, result.search_content);
+    }
+
     for (site_cfg.feeds) |feed_cfg| {
-        try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir);
+        try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir, rendered_map);
     }
 
     try feeds.generateSitemap(ba, scan_result.pages, output_dir);
 
-    try renderTaxonomyTagPages(
+    try tag_pages.render(
         ba,
         site_cfg,
         if (style_cfgs.len > 0) style_cfgs[0].name else "default",
@@ -648,6 +295,9 @@ fn buildPhase_generatedArtifacts(
 
 pub const ContentParser = pages.ContentParser;
 pub const ContentParserEntry = pages.ContentParserEntry;
+pub const BuildContext = build_context_mod.BuildContext;
+pub const Hook = build_context_mod.Hook;
+pub const Hooks = build_context_mod.Hooks;
 
 pub fn zjotParser(a: Allocator, source: []const u8) anyerror![]const u8 {
     return zjot.toHtml(a, source);
@@ -660,10 +310,18 @@ pub const SiteOptions = struct {
     content_parsers: []const ContentParserEntry = &.{
         .{ .extension = ".dj", .parse = zjotParser },
     },
+    extensions: []const []const u8 = &.{},
 };
 
 pub const BuildOptions = struct {
     clean: bool = false,
+    pretty: bool = false,
+    hooks: build_context_mod.Hooks = .{},
+};
+
+pub const BuildResult = struct {
+    page_count: usize = 0,
+    diagnostics: diagnostics_mod.Collector = .{},
 };
 
 pub const ValidateOptions = struct {
@@ -722,7 +380,7 @@ pub const Site = struct {
         return try fs.openDirAbsolute(site_path, .{});
     }
 
-    pub fn buildAll(self: *Site, options: BuildOptions) !void {
+    pub fn buildAll(self: *Site, options: BuildOptions) !BuildResult {
         const a = self.allocator;
         const abs_root = try self.root_dir.realpathAlloc(a, ".");
         defer a.free(abs_root);
@@ -731,6 +389,8 @@ pub const Site = struct {
         var build_arena = std.heap.ArenaAllocator.init(a);
         errdefer build_arena.deinit();
         const ba = build_arena.allocator();
+
+        var diags = diagnostics_mod.Collector{};
 
         // --- Phase: load config ---
         var site_cfg = try config.loadSiteConfig(a, abs_root);
@@ -753,19 +413,44 @@ pub const Site = struct {
         // --- Phase: pattern YAML manifests under styles/{name}/patterns/ ---
         try pattern_manifests.loadIntoContext(ba, abs_root, style_cfgs, &style_ctx);
 
-        // --- Phase: scan pages, taxonomies, `pages` context ---
-        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx);
-
         // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
         var template_map = std.StringArrayHashMapUnmanaged([]const u8){};
         try buildPhase_loadTemplates(ba, a, abs_root, style_cfgs, &engine, &template_map);
 
-        // --- Phase: render HTML pages ---
         var transform_reg = toupee.transform.Registry{};
         try transform_reg.registerBuiltins(ba);
         defer transform_reg.deinit(ba);
 
+        var ctx = build_context_mod.BuildContext{
+            .allocator = a,
+            .arena = ba,
+            .abs_root = abs_root,
+            .site_cfg = &site_cfg,
+            .style_cfgs = style_cfgs,
+            .engine = &engine,
+            .template_map = &template_map,
+            .style_ctx = &style_ctx,
+            .content_parsers = self.options.content_parsers,
+            .transform_registry = &transform_reg,
+            .diagnostics = &diags,
+            .hooks = options.hooks,
+        };
+
+        // --- Hook: pre_scan ---
+        for (ctx.hooks.pre_scan) |hook| try hook(&ctx);
+
+        // --- Phase: scan pages, taxonomies, `pages` context ---
+        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx, &data_result);
+        ctx.scan_result = &scan_result;
+
+        // --- Hook: post_scan ---
+        for (ctx.hooks.post_scan) |hook| try hook(&ctx);
+
+        // --- Hook: pre_render ---
+        for (ctx.hooks.pre_render) |hook| try hook(&ctx);
+
+        // --- Phase: render HTML pages ---
         const render_results = try pages.renderAll(
             ba,
             &scan_result,
@@ -776,6 +461,9 @@ pub const Site = struct {
             &transform_reg,
             output_dir,
         );
+
+        // --- Hook: post_render ---
+        for (ctx.hooks.post_render) |hook| try hook(&ctx);
 
         // --- Phase: search, feeds, sitemap, tag pages ---
         try buildPhase_generatedArtifacts(
@@ -793,6 +481,9 @@ pub const Site = struct {
         // --- Phase: copy static assets ---
         try copyAssets(a, self.root_dir, output_dir);
 
+        // --- Hook: post_build ---
+        for (ctx.hooks.post_build) |hook| try hook(&ctx);
+
         // Store build state
         if (self.site_config) |*c| c.deinit();
         self.site_config = site_cfg;
@@ -805,6 +496,11 @@ pub const Site = struct {
         self.style_configs = style_cfgs;
         self.engine = engine;
         self.build_arena = build_arena;
+
+        return .{
+            .page_count = scan_result.pages.len,
+            .diagnostics = diags,
+        };
     }
 
     /// Validates the site without rendering. Checks config, manifests,
@@ -844,56 +540,16 @@ pub const Site = struct {
             try diags.append(a, .{ .kind = .warning, .message = "No styles found (no style.yaml in styles/)" });
         }
 
-        const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
-        defer a.free(styles_path);
-
         var engine = toupee.Engine.init(a) catch {
             try diags.append(a, .{ .kind = .err, .message = "Failed to initialise template engine" });
             return try diags.toOwnedSlice(a);
         };
         defer engine.deinit();
 
-        // Load templates for validation (same logic as buildAll)
-        if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
-            var sdir = sd;
-            defer sdir.close();
-            for ([_][]const u8{ "templates", "includes" }) |subdir| {
-                const core_subdir_str = std.fmt.allocPrint(a, "_core/{s}", .{subdir}) catch continue;
-                defer a.free(core_subdir_str);
-                if (sdir.openDir(core_subdir_str, .{ .iterate = true })) |cd| {
-                    var core_dir = cd;
-                    defer core_dir.close();
-                    var cit = core_dir.iterate();
-                    while (cit.next() catch null) |entry| {
-                        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                        const tmpl_name = std.fmt.allocPrint(a, "_core/{s}/{s}", .{ subdir, entry.name }) catch continue;
-                        defer a.free(tmpl_name);
-                        const content = core_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024) catch continue;
-                        defer a.free(content);
-                        engine.addTemplate(tmpl_name, content) catch {};
-                    }
-                } else |_| {}
-            }
-            for (style_cfgs) |style_cfg| {
-                for ([_][]const u8{ "templates", "includes" }) |subdir| {
-                    const ssd = std.fmt.allocPrint(a, "{s}/{s}", .{ style_cfg.name, subdir }) catch continue;
-                    defer a.free(ssd);
-                    if (sdir.openDir(ssd, .{ .iterate = true })) |sd2| {
-                        var tmpl_dir = sd2;
-                        defer tmpl_dir.close();
-                        var tit = tmpl_dir.iterate();
-                        while (tit.next() catch null) |entry| {
-                            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                            const tmpl_name = std.fmt.allocPrint(a, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name }) catch continue;
-                            defer a.free(tmpl_name);
-                            const content = tmpl_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024) catch continue;
-                            defer a.free(content);
-                            engine.addTemplate(tmpl_name, content) catch {};
-                        }
-                    } else |_| {}
-                }
-            }
-        } else |_| {}
+        var validate_template_map: std.StringArrayHashMapUnmanaged([]const u8) = .{};
+        template_loader.loadTemplates(a, a, abs_root, style_cfgs, &engine, &validate_template_map) catch {
+            try diags.append(a, .{ .kind = .warning, .message = "Could not load templates; template validation may be incomplete" });
+        };
 
         var resolver: toupee.Resolver = .{};
         const toupee_diags = engine.validate(a, resolver.loader()) catch
@@ -918,6 +574,18 @@ pub const Site = struct {
         return try diags.toOwnedSlice(a);
     }
 };
+
+/// Extracts the default `slugify` value from `data/document.yaml` in the data cascade.
+fn extractDefaultSlugify(data_result: *const config.DataResult) bool {
+    if (data_result.value != .map) return false;
+    const doc = data_result.value.map.get("document") orelse return false;
+    if (doc != .map) return false;
+    const val = doc.map.get("slugify") orelse return false;
+    return switch (val) {
+        .boolean => |b| b,
+        else => false,
+    };
+}
 
 /// Derives section from url_path: /blog/post/ -> "blog", / -> null.
 fn sectionFromUrl(a: Allocator, url_path: []const u8) !?[]const u8 {

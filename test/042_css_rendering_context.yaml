@@ -1,0 +1,51 @@
+test:
+  name: CSS templates can use site.* but not document.*
+  comment: >
+    CSS bundles are rendered in a global context that includes site and styles
+    but not per-page document data. site.url should resolve; document.title
+    should be empty.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: https://example.com
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          bundles:
+            css:
+              main:
+                - default/css/main.css
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        css:
+          main.css: |
+            ---
+            ---
+            /* url: <t-var name="site.url" /> */
+            <t-if var="document.title">/* has-doc: yes */</t-if>
+            <t-if var="document.title" not-exists>/* has-doc: no */</t-if>
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        Home.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    assets:
+      default:
+        css:
+          main.*.css: |
+            /* url: https://example.com */
+            /* has-doc: no */

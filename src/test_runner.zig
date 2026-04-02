@@ -45,6 +45,7 @@ fn loadSpecFromFile(a: Allocator, test_dir: fs.Dir, filename: []const u8) !Loade
     };
 }
 
+
 /// Default spec loader: reads YAML from test_dir and parses with Comb.
 pub const defaultSpecLoader = SpecLoader{
     .loadSpec = loadSpecFromFile,
@@ -237,7 +238,7 @@ pub fn runSpecTests(
     workspace_dir_out: ?*[]const u8,
 ) !TestResults {
     const cfg = config orelse TestRunnerConfig{};
-    const ld = loader orelse &defaultSpecLoader;
+    _ = loader;
     if (workspace_dir_out) |out| out.* = cfg.workspace_dir;
     var total = TestResults{};
     var names = try discoverSpecTests(a, test_dir);
@@ -273,7 +274,7 @@ pub fn runSpecTests(
         const dot_pos = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
         const test_name = filename[0..dot_pos];
 
-        const results = runOneSpecTest(a, test_dir, filename, &workspace, &report, cfg.output_dir, ld) catch |err| {
+        const results = runOneSpecTest(a, test_dir, filename, &workspace, &report, cfg.output_dir) catch |err| {
             std.debug.print("  {s}: ERROR ({})\n", .{ filename, err });
             total.failed += 1;
             continue;
@@ -297,30 +298,69 @@ pub fn runSpecTests(
     return total;
 }
 
-fn runOneSpecTest(a: Allocator, test_dir: fs.Dir, filename: []const u8, workspace: *TestWorkspace, report: *Report, output_dir_path: []const u8, loader: *const SpecLoader) !TestResults {
+fn runOneSpecTest(a: Allocator, test_dir: fs.Dir, filename: []const u8, workspace: *TestWorkspace, report: *Report, output_dir_path: []const u8) !TestResults {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const ba = arena.allocator();
 
     var reporter = Reporter.init(null, report, filename);
-    var loaded = loader.loadSpec(ba, test_dir, filename) catch {
+    const content = test_dir.readFileAlloc(ba, filename, 1024 * 1024) catch {
         reporter.failWithFailure(ba, .{ .kind = .yaml_parse_error });
         return error.ParseFailed;
     };
-    defer loaded.deinit();
 
-    const spec = try parseSpecTest(ba, loaded.value);
+    var parsed = comb.parseAll(ba, content, .{}) catch {
+        reporter.failWithFailure(ba, .{ .kind = .yaml_parse_error });
+        return error.ParseFailed;
+    };
+    defer parsed.deinit();
+
+    const documents = parsed.value;
+    if (documents.len == 0) {
+        reporter.failWithFailure(ba, .{ .kind = .yaml_parse_error });
+        return error.ParseFailed;
+    }
+
+    var total = TestResults{};
+    for (documents, 0..) |doc, doc_idx| {
+        const sub = try runOneSubSpec(ba, a, doc, doc_idx, filename, workspace, report, output_dir_path);
+        total.add(sub);
+    }
+    return total;
+}
+
+fn runOneSubSpec(ba: Allocator, parent_a: Allocator, doc: comb.Value, doc_idx: usize, filename: []const u8, workspace: *TestWorkspace, report: *Report, output_dir_path: []const u8) !TestResults {
+    var reporter = Reporter.init(null, report, filename);
+
+    const spec = parseSpecTest(ba, doc) catch {
+        reporter.failWithFailure(ba, .{ .kind = .yaml_parse_error });
+        return error.ParseFailed;
+    };
+
     const dot_pos = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
-    const test_name = filename[0..dot_pos];
+    const base_name = filename[0..dot_pos];
+    const test_name = if (doc_idx == 0)
+        base_name
+    else
+        try std.fmt.allocPrint(ba, "{s}_doc{d}", .{ base_name, doc_idx });
 
     const work_path = try workspace.createTestDir(test_name);
-    defer a.free(work_path);
+    defer parent_a.free(work_path);
     var work = try fs.cwd().openDir(work_path, .{});
     defer work.close();
 
     try setupWorkDir(ba, work, spec);
 
-    const result = try runBuild(ba, work, spec.output_exit == 1, &reporter, output_dir_path);
+    if (spec.action.command == .validate) {
+        const val_result = try runValidate(ba, work, spec.output_exit == 1, &reporter);
+        switch (val_result) {
+            .expected_failure => return TestResults{ .passed = 1 },
+            .failure => return error.BuildFailed,
+            .ok => return TestResults{ .passed = 1 },
+        }
+    }
+
+    const result = try runBuild(ba, work, spec.output_exit == 1, &reporter, output_dir_path, spec.action);
     switch (result) {
         .expected_failure => return TestResults{ .passed = 1 },
         .failure => return error.BuildFailed,
@@ -368,12 +408,35 @@ fn getNested(top: comb.Value, path: []const u8) ?comb.Value {
     return current;
 }
 
-/// Parsed spec test: input file tree, expected exit code, and optional output file expectations.
+/// Parsed action flags from `test.action.wig` (e.g. `"build --draft --pretty"` or `"validate"`).
+const ActionFlags = struct {
+    command: Command = .build,
+    draft: bool = false,
+    pretty: bool = false,
+
+    const Command = enum { build, validate };
+};
+
+/// Parsed spec test: input file tree, expected exit code, optional output file expectations, and action flags.
 const SpecTest = struct {
     input_files: comb.Value,
     output_exit: u8,
     output_files: ?comb.Value,
+    action: ActionFlags = .{},
 };
+
+fn parseActionFlags(top: comb.Value) ActionFlags {
+    const action_val = getNested(top, "test.action.wig") orelse return .{};
+    if (action_val != .string) return .{};
+    var flags = ActionFlags{};
+    var iter = std.mem.splitScalar(u8, action_val.string, ' ');
+    while (iter.next()) |token| {
+        if (std.mem.eql(u8, token, "validate")) flags.command = .validate;
+        if (std.mem.eql(u8, token, "--draft")) flags.draft = true;
+        if (std.mem.eql(u8, token, "--pretty")) flags.pretty = true;
+    }
+    return flags;
+}
 
 fn parseSpecTest(_: Allocator, top: comb.Value) !SpecTest {
     if (top != .object) return error.InvalidFormat;
@@ -393,6 +456,7 @@ fn parseSpecTest(_: Allocator, top: comb.Value) !SpecTest {
         .input_files = input_files,
         .output_exit = output_exit,
         .output_files = output_files,
+        .action = parseActionFlags(top),
     };
 }
 
@@ -414,17 +478,17 @@ const RunResult = union(enum) {
 };
 
 /// Runs Site.init + buildAll. Returns output dir on success.
-fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, output_dir_path: []const u8) !RunResult {
+fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, output_dir_path: []const u8, action: ActionFlags) !RunResult {
     const abs_root = try work.realpathAlloc(a, ".");
 
-    var site = root.Site.init(a, .{ .root = abs_root }) catch |err| {
+    var site = root.Site.init(a, .{ .root = abs_root, .draft = action.draft }) catch |err| {
         if (expect_fail) return .expected_failure;
         reporter.failWithFailure(a, .{ .kind = .site_init_failed, .err = err });
         return .failure;
     };
     defer site.deinit();
 
-    site.buildAll(.{ .clean = true }) catch |err| {
+    _ = site.buildAll(.{ .clean = true, .pretty = action.pretty }) catch |err| {
         if (expect_fail) return .expected_failure;
         reporter.failWithFailure(a, .{ .kind = .build_failed, .err = err });
         return .failure;
@@ -440,6 +504,40 @@ fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, 
         return .failure;
     };
     return .{ .output = dir };
+}
+
+const ValidateResult = enum { ok, expected_failure, failure };
+
+fn runValidate(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter) !ValidateResult {
+    const abs_root = try work.realpathAlloc(a, ".");
+
+    var site = root.Site.init(a, .{ .root = abs_root }) catch |err| {
+        if (expect_fail) return .expected_failure;
+        reporter.failWithFailure(a, .{ .kind = .site_init_failed, .err = err });
+        return .failure;
+    };
+    defer site.deinit();
+
+    const diags = site.validate(.{}) catch |err| {
+        if (expect_fail) return .expected_failure;
+        reporter.failWithFailure(a, .{ .kind = .build_failed, .err = err });
+        return .failure;
+    };
+
+    const has_errors = for (diags) |d| {
+        if (d.kind == .err) break true;
+    } else false;
+
+    if (has_errors and expect_fail) return .expected_failure;
+    if (has_errors and !expect_fail) {
+        reporter.failWithFailure(a, .{ .kind = .build_failed, .err = error.ValidationFailed });
+        return .failure;
+    }
+    if (!has_errors and expect_fail) {
+        reporter.failWithFailure(a, .{ .kind = .expected_fail_but_succeeded });
+        return .failure;
+    }
+    return .ok;
 }
 
 /// Writes file tree; keys are path segments as on disk (e.g. `templates` / `layouts` / `page.html`).

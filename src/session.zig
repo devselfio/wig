@@ -4,11 +4,11 @@ const Allocator = std.mem.Allocator;
 
 pub const SessionStore = struct {
     ptr: *const anyopaque,
-    load_fn: *const fn (*const anyopaque, []const u8) ?std.StringHashMap([]const u8),
+    load_fn: *const fn (*const anyopaque, []const u8) ?*std.StringHashMap([]const u8),
     save_fn: *const fn (*const anyopaque, []const u8, std.StringHashMap([]const u8)) anyerror!void,
     destroy_fn: *const fn (*const anyopaque, []const u8) void,
 
-    pub fn load(self: SessionStore, id: []const u8) ?std.StringHashMap([]const u8) {
+    pub fn load(self: SessionStore, id: []const u8) ?*std.StringHashMap([]const u8) {
         return self.load_fn(self.ptr, id);
     }
 
@@ -41,11 +41,12 @@ pub const MemoryStore = struct {
         self.sessions.deinit();
     }
 
-    pub fn loadSession(self: *const MemoryStore, id: []const u8) ?std.StringHashMap([]const u8) {
-        return self.sessions.get(id);
+    pub fn loadSession(self: *const MemoryStore, id: []const u8) ?*std.StringHashMap([]const u8) {
+        return @constCast(&self.sessions).getPtr(id);
     }
 
     pub fn saveSession(self: *MemoryStore, id: []const u8, data: std.StringHashMap([]const u8)) !void {
+        if (self.sessions.getPtr(id)) |old| old.deinit();
         try self.sessions.put(id, data);
     }
 
@@ -60,7 +61,7 @@ pub const MemoryStore = struct {
         return .{
             .ptr = @ptrCast(self),
             .load_fn = @ptrCast(&struct {
-                fn load(ptr: *const MemoryStore, id: []const u8) ?std.StringHashMap([]const u8) {
+                fn load(ptr: *const MemoryStore, id: []const u8) ?*std.StringHashMap([]const u8) {
                     return ptr.loadSession(id);
                 }
             }.load),
@@ -142,7 +143,7 @@ test "MemoryStore: save and load" {
 
     const loaded = ms.loadSession("sess1");
     try testing.expect(loaded != null);
-    try testing.expectEqualStrings("alice", loaded.?.get("user").?);
+    try testing.expectEqualStrings("alice", loaded.?.*.get("user").?);
 }
 
 test "MemoryStore: destroy removes session" {
