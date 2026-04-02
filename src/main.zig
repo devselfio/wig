@@ -24,16 +24,22 @@ pub fn main() !void {
         const opts = parseBuildArgs(&args);
         var site = try wig.Site.init(a, .{ .root = opts.path });
         defer site.deinit();
-        const result = site.buildAll(.{ .clean = opts.clean, .pretty = opts.pretty }) catch |err| {
+        const result = site.buildAll(.{
+            .clean = opts.clean,
+            .pretty = opts.pretty,
+            .strict_links = opts.strict_links,
+        }) catch |err| {
             std.debug.print("wig build: failed ({any})\n", .{err});
             return err;
         };
+        printBuildDiagnostics(result.diagnostics);
         std.debug.print("wig build: ok ({d} pages) → {s}/zig-out/site/\n", .{ result.page_count, opts.path });
-    } else if (std.mem.eql(u8, command, "validate")) {
-        const v = parseValidateArgs(&args);
+        if (result.diagnostics.hasErrors()) std.process.exit(1);
+    } else if (std.mem.eql(u8, command, "check")) {
+        const v = parseCheckArgs(&args);
         var site = try wig.Site.init(a, .{ .root = v.path });
         defer site.deinit();
-        const diags = try site.validate(.{ .external_links = v.external });
+        const diags = try site.check(.{ .external_links = v.external });
         defer site.allocator.free(diags);
         printDiagnostics(diags);
         if (hasErrors(diags)) std.process.exit(1);
@@ -99,6 +105,16 @@ fn printVersion() void {
     std.debug.print("wig {f}\n", .{options.version});
 }
 
+fn printBuildDiagnostics(diags: wig.diagnostics_mod.Collector) void {
+    for (diags.items.items) |d| {
+        const label: []const u8 = switch (d.kind) {
+            .err => "error",
+            .warning => "warning",
+        };
+        std.debug.print("{s}: {s}\n", .{ label, d.message });
+    }
+}
+
 fn printDiagnostics(diags: []const wig.Diagnostic) void {
     for (diags) |d| {
         const label: []const u8 = switch (d.kind) {
@@ -129,13 +145,14 @@ fn printUsage() void {
         \\
         \\Commands:
         \\  init [path]                  Scaffold a new Wig project
-        \\  build [path] [--clean] [--pretty]  Build static site to zig-out/site/
+        \\  build [path] [--clean] [--pretty] [--strict-links]
+        \\                               Build static site to zig-out/site/
         \\  install <name|url>           Install a style (not available in v0.1.0)
         \\  add style <name>             Create a new empty style
         \\  add block <style> <name>     Add a block pattern to a style
         \\  serve [path] [--port PORT] [--no-reload]
         \\                               Dev server with live reload
-        \\  validate [path] [--external] Validate without building
+        \\  check [path] [--external]    Validate config/templates without building
         \\
     , .{});
 }
@@ -144,18 +161,25 @@ const BuildArgs = struct {
     path: []const u8,
     clean: bool,
     pretty: bool,
+    strict_links: bool,
 };
 
-/// Parses optional `[path]`, `--clean`, and `--pretty` in any order after the subcommand.
+/// Parses optional `[path]`, `--clean`, `--pretty`, `--strict-links`,
+/// `--external-links` in any order after the subcommand.
 fn parseBuildArgs(args: *std.process.ArgIterator) BuildArgs {
     var path: ?[]const u8 = null;
     var clean = false;
     var pretty = false;
+    var strict_links = false;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--clean")) {
             clean = true;
         } else if (std.mem.eql(u8, arg, "--pretty")) {
             pretty = true;
+        } else if (std.mem.eql(u8, arg, "--strict-links")) {
+            strict_links = true;
+        } else if (std.mem.eql(u8, arg, "--external-links")) {
+            std.debug.print("wig build: --external-links is not yet implemented\n", .{});
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("wig build: unknown option '{s}'\n", .{arg});
         } else if (path == null) {
@@ -164,27 +188,27 @@ fn parseBuildArgs(args: *std.process.ArgIterator) BuildArgs {
             std.debug.print("wig build: unexpected extra argument '{s}'\n", .{arg});
         }
     }
-    return .{ .path = path orelse ".", .clean = clean, .pretty = pretty };
+    return .{ .path = path orelse ".", .clean = clean, .pretty = pretty, .strict_links = strict_links };
 }
 
-const ValidateArgs = struct {
+const CheckArgs = struct {
     path: []const u8,
     external: bool,
 };
 
-/// Parses optional `[path]` and `--external` in any order after `validate`.
-fn parseValidateArgs(args: *std.process.ArgIterator) ValidateArgs {
+/// Parses optional `[path]` and `--external` in any order after `check`.
+fn parseCheckArgs(args: *std.process.ArgIterator) CheckArgs {
     var path: ?[]const u8 = null;
     var external = false;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--external")) {
             external = true;
         } else if (arg.len > 0 and arg[0] == '-') {
-            std.debug.print("wig validate: unknown option '{s}'\n", .{arg});
+            std.debug.print("wig check: unknown option '{s}'\n", .{arg});
         } else if (path == null) {
             path = arg;
         } else {
-            std.debug.print("wig validate: unexpected extra argument '{s}'\n", .{arg});
+            std.debug.print("wig check: unexpected extra argument '{s}'\n", .{arg});
         }
     }
     return .{ .path = path orelse ".", .external = external };

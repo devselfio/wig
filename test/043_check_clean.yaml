@@ -1,8 +1,8 @@
 test:
-  name: Validate a clean site with no errors
-  comment: A valid site passes validation with exit 0.
+  name: Check a clean site with no errors
+  comment: A valid site passes check with exit 0.
   action:
-    wig: validate
+    wig: check
 input:
   files:
     data:

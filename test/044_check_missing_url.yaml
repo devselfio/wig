@@ -1,8 +1,8 @@
 test:
-  name: Validate detects missing site URL
-  comment: A site.yaml without the required url field should produce a validation error.
+  name: Check detects missing site URL
+  comment: A site.yaml without the required url field should produce a check error.
   action:
-    wig: validate
+    wig: check
 input:
   files:
     data:

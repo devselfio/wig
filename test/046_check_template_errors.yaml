@@ -1,0 +1,36 @@
+test:
+  name: Check detects missing template include
+  comment: >
+    A template that includes a nonexistent template should produce a check error
+    whose message names the missing template. This exercises the diagnostic string
+    lifetime — the message must survive engine teardown.
+  action:
+    wig: check
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-include template="nonexistent.html" />
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        Hello.
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "missing include 'nonexistent.html'"

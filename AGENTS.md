@@ -2,12 +2,10 @@
 
 A library-first static site generator and web framework in Zig. Wig promotes CUBE CSS methodology and provides tools for fluid design tokens, color scheme management, and multi-style site architecture. The same templates and data model serve both SSG output (files) and HTTP responses (HTMX fragments from a Zig backend).
 
-**Roadmap (workspace root):** [`WIG_ROADMAP.md`](../WIG_ROADMAP.md) — releases, dimension score targets vs peer deep-dives, intentional trade-offs, replay cadence.
-
 ## Who this is for
 
 - **Site authors** — Content, frontmatter, data cascade, and Toupee templates: [Rendering pipeline](#rendering-pipeline), [Frontmatter](#frontmatter), [Data cascade](#data-cascade), [Template syntax](#template-syntax), [Page collection](#page-collection).
-- **Zig app developers** — Hybrid SSG + web-framework architecture: [SSG + web framework](#ssg--web-framework-hybrid-architecture), [Key types](#key-types), [Validation](#validation).
+- **Zig app developers** — Hybrid SSG + web-framework architecture: [SSG + web framework](#ssg--web-framework-hybrid-architecture), [Key types](#key-types), [Check](#check-configtemplate-validation), [Link checking](#link-checking).
 - **Zig embedders** — Library API: [Library-first](#library-first-design), [Two-phase Site struct](#two-phase-site-struct), [Key types](#key-types).
 - **Wig contributors** — Source layout and tests: [Project structure](#project-structure), [Testing](#testing).
 
@@ -40,11 +38,11 @@ zig build test     # run all tests (unit + spec tests)
 zig build run      # run the wig CLI
 ```
 
-**Binary workflow:** `wig init [path]` then `wig build [path] [--clean]` writes the static site to `<site-root>/zig-out/site/` (same layout as the spec runner). No project `build.zig` is required for SSG.
+**Binary workflow:** `wig init [path]` then `wig build [path] [--clean] [--strict-links]` writes the static site to `<site-root>/zig-out/site/` (same layout as the spec runner). Internal links are checked post-build; `--strict-links` makes broken links errors. No project `build.zig` is required for SSG.
 
 **Dev server:** `wig serve [path] [--port PORT] [--no-reload]` builds the site, serves it over HTTP, watches for source file changes, rebuilds on change, and live-reloads connected browsers via WebSocket. Default port is 8080.
 
-**Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build validate` wrappers; that is separate from the stock CLI.
+**Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build check` wrappers; that is separate from the stock CLI.
 
 ## Project structure
 
@@ -61,7 +59,7 @@ wig/
     diagnostics.zig # Diagnostic, Collector (structured error/warning accumulation)
     collections.zig # buildPageValue, buildCollections, buildParentMap, buildChildrenMap
     cascade.zig     # cascade resolution: resolveLayout, resolveStyle, applyCascadeToContext
-    template_loader.zig # StyleLoader + loadTemplates (shared by buildAll and validate)
+    template_loader.zig # StyleLoader + loadTemplates (shared by buildAll and check)
     tag_pages.zig   # taxonomy tag page rendering (/tags/, /tags/{slug}/, /tags/{a}/{b}/)
     tokens.zig      # fluid typography + spacing computation (CUBE CSS)
     colours.zig     # color scheme resolution (palette indirection; data key `colors` or legacy `colours`)
@@ -88,6 +86,7 @@ wig/
     test_report.zig # report types, Reporter, Failure, unified diff formatting
     output_verifier.zig # output verification: HTML normalization, glob matching
     output_paths.zig  # canonical zig-out/site paths (build + dev server)
+    link_checker.zig # post-build internal link + fragment checking
     serve.zig       # dev server: DevServer struct, HTTP thread, rebuild loop, WS broadcast
     watcher.zig     # file system watcher (polling); detects source changes for dev server
     mime.zig        # extension-to-content-type lookup (used by dev server)
@@ -143,7 +142,7 @@ my-project/
 - **Data** — `data/site.yaml`, color schemes, tokens are available to both paths. The SSG injects them via `buildAll`; the app loads them via Wig's config API.
 - **Styles** — CSS bundles, CUBE layers, fluid tokens are built by `wig build` and served as static assets by both GitHub Pages and the app server.
 
-**Web-framework layer** (`app.zig`, `router.zig`, `handler.zig`, `session.zig`) is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite, and APIs may change. The four technical requirements for v0.3 are:
+**Web-framework layer** (`app.zig`, `router.zig`, `handler.zig`, `session.zig`) is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite, and APIs may change. The four technical requirements are:
 
 1. **Render-to-string** — render a Toupee template with a context, return the HTML string.
 2. **Request context → template context** — map HTTP request data into `toupee.Value`.
@@ -215,14 +214,28 @@ pub const ContentParser = *const fn (std.mem.Allocator, []const u8) anyerror![]c
 pub const ContentParserEntry = struct { extension: []const u8, parse: ContentParser };
 ```
 
-### Validation
+### Check (config/template validation)
 
-`Site.validate()` performs a dry run (no rendering). It returns **`![]const Diagnostic`** (errors/warnings as a slice allocated with the site’s allocator — **caller must `free` the slice** when non-empty). Options:
+`Site.check()` performs a dry run (no rendering). It returns **`![]const Diagnostic`** (errors/warnings as a slice allocated with the site’s allocator — **caller must `free` the slice** when non-empty). Options:
 
 ```zig
-const diags = try site.validate(.{ .external_links = true });
+const diags = try site.check(.{ .external_links = true });
 defer site.allocator.free(diags);
 // inspect diags for .kind (.err / .warning) and .message
+```
+
+### Link checking
+
+Internal links are checked automatically during `buildAll()` as a post-render phase. The link checker walks all `.html` files in the output tree, extracts `href` and `src` attributes, and verifies that internal targets exist (both file paths and `#fragment` anchors).
+
+- **Warnings by default** — broken links produce warnings in `BuildResult.diagnostics`. The build still succeeds (exit 0).
+- **`--strict-links`** — promotes link warnings to errors, causing the build to fail (exit 1). Use in CI pipelines that require zero broken links.
+- **`--external-links`** — accepted on the CLI but not yet implemented; external HTTP checking is planned for a future release.
+- **Source attribution** — diagnostics include the originating source file path (e.g. `blog/post.dj`) by mapping output files back to source pages.
+
+```zig
+const result = try site.buildAll(.{ .strict_links = true });
+// result.diagnostics contains link-checking errors/warnings
 ```
 
 ### Toupee API (template engine)
@@ -656,7 +669,7 @@ Every module has inline `test` blocks covering its public API. Run with `zig bui
 
 Full-site tests in `wig/test/NNN_*.yaml` are the **primary integration tests** and **living documentation**. They run via `runSpecTests` in `test_runner.zig` and `zig build test`.
 
-**Runner status (parity):** Today the runner **always** runs `Site.init` + `buildAll(.{ .clean = true })` and checks `output.files` (and `output.exit` for expected failures). The **`test.action`** block in YAML is **reserved for future behaviour selection** (e.g. `validate` only, `build` then HTTP expectations, incremental second pass). New features should **declare** the intended `action` shape in specs **and** extend `test_runner.zig` in the same change (or follow-up) so the schema stays truthful.
+**Runner status (parity):** The runner supports `action: wig: build` (with `--draft`, `--pretty`, `--strict-links` flags), `action: wig: check` (config/template validation), `output.files` assertions, `output.exit` (expected failures), and `output.diagnostics` (diagnostic kind + substring matching). Multi-document YAML (via `---` separators) runs each document as an independent sub-test. New features should **declare** the intended `action` shape in specs **and** extend `test_runner.zig` in the same change (or follow-up) so the schema stays truthful.
 
 Spec format (illustrative — extend `action` / `output` as capabilities grow):
 
@@ -677,6 +690,9 @@ output:
   files:
     index.html: |
       expected content
+  diagnostics:   # optional; assert specific build diagnostics
+    - kind: warning
+      contains: "broken link"
 ```
 
 Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.

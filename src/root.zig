@@ -36,6 +36,7 @@ pub const build_context_mod = @import("build_context.zig");
 pub const mime = @import("mime.zig");
 pub const watcher_mod = @import("watcher.zig");
 pub const serve_mod = @import("serve.zig");
+pub const link_checker = @import("link_checker.zig");
 
 pub const Diagnostic = struct {
     kind: Kind = .err,
@@ -319,6 +320,7 @@ pub const SiteOptions = struct {
 pub const BuildOptions = struct {
     clean: bool = false,
     pretty: bool = false,
+    strict_links: bool = false,
     hooks: build_context_mod.Hooks = .{},
 };
 
@@ -327,7 +329,7 @@ pub const BuildResult = struct {
     diagnostics: diagnostics_mod.Collector = .{},
 };
 
-pub const ValidateOptions = struct {
+pub const CheckOptions = struct {
     external_links: bool = false,
 };
 
@@ -484,6 +486,34 @@ pub const Site = struct {
         // --- Phase: copy static assets ---
         try copyAssets(a, self.root_dir, output_dir);
 
+        // --- Phase: link checking ---
+        {
+            var source_map = std.StringArrayHashMapUnmanaged([]const u8){};
+            for (scan_result.pages) |page| {
+                try source_map.put(ba, page.output_file, page.source_path);
+            }
+            const link_issues = try link_checker.checkSite(ba, output_dir, source_map);
+            for (link_issues) |issue| {
+                const kind_str: []const u8 = switch (issue.kind) {
+                    .broken_path => "broken link",
+                    .broken_fragment => "broken fragment",
+                };
+                if (issue.source_path) |sp| {
+                    if (options.strict_links) {
+                        try diags.errFmt(ba, "{s}: {s} -> {s} (source: {s})", .{ kind_str, issue.output_path, issue.target_url, sp });
+                    } else {
+                        try diags.warnFmt(ba, "{s}: {s} -> {s} (source: {s})", .{ kind_str, issue.output_path, issue.target_url, sp });
+                    }
+                } else {
+                    if (options.strict_links) {
+                        try diags.errFmt(ba, "{s}: {s} -> {s}", .{ kind_str, issue.output_path, issue.target_url });
+                    } else {
+                        try diags.warnFmt(ba, "{s}: {s} -> {s}", .{ kind_str, issue.output_path, issue.target_url });
+                    }
+                }
+            }
+        }
+
         // --- Hook: post_build ---
         for (ctx.hooks.post_build) |hook| try hook(&ctx);
 
@@ -506,11 +536,10 @@ pub const Site = struct {
         };
     }
 
-    /// Validates the site without rendering. Checks config, manifests,
-    /// frontmatter, and template resolution. The `--external` CLI flag is
-    /// accepted; full external URL checking is planned for v0.2+ (v0.1 emits a
-    /// warning when the flag is set).
-    pub fn validate(self: *Site, options: ValidateOptions) ![]const Diagnostic {
+    /// Checks site config, style manifests, and template resolution without
+    /// rendering. The `--external` CLI flag is accepted; full external URL
+    /// checking is planned for a future release (currently emits a warning).
+    pub fn check(self: *Site, options: CheckOptions) ![]const Diagnostic {
         const a = self.allocator;
 
         var diags: std.ArrayListUnmanaged(Diagnostic) = .{};
@@ -562,8 +591,8 @@ pub const Site = struct {
         for (toupee_diags) |d| {
             try diags.append(a, .{
                 .kind = .err,
-                .message = d.message,
-                .template_name = d.template,
+                .message = try a.dupe(u8, d.message),
+                .template_name = try a.dupe(u8, d.template),
             });
         }
 
@@ -664,6 +693,7 @@ test {
     _ = test_runner;
     _ = mime;
     _ = watcher_mod;
+    _ = link_checker;
 }
 
 test "E2E: data pipeline loads config, computes tokens, renders template" {

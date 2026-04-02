@@ -45,6 +45,11 @@ pub const Collector = struct {
         try self.warn(a, msg);
     }
 
+    pub fn errFmt(self: *Collector, a: Allocator, comptime fmt: []const u8, args: anytype) !void {
+        const msg = try std.fmt.allocPrint(a, fmt, args);
+        try self.err(a, msg);
+    }
+
     pub fn hasErrors(self: *const Collector) bool {
         for (self.items.items) |item| {
             if (item.kind == .err) return true;

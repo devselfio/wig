@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .toupee = .{
-            .url = "git+https://github.com/QuiteClose/toupee.git?ref=v0.3.0#8a13550a180678fa9bbac1ce381f16716621ec0e",
-            .hash = "toupee-0.3.0-5-xKvFMfBwDwHC2ylvkKCSkAqkT36Ky7vn9il30tXIQN",
+            .url = "git+https://github.com/QuiteClose/toupee.git#9647932a0af09fd9933ea3cb763ec960a9c996e9",
+            .hash = "toupee-0.3.1-5-xKvEEnBwBDRvIwvK_ytYFlKZp7Vv3sVn8l4tthz0iY",
         },
         .comb = .{
             .url = "git+https://github.com/QuiteClose/comb.git#v1.0.0",

@@ -1,0 +1,140 @@
+test:
+  name: Valid internal links produce no warnings
+  comment: A site with working internal links builds cleanly.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        [About](/about/)
+      about.dj: |
+        ---
+        title: About
+        ---
+        [Home](/)
+output:
+  exit: 0
+---
+test:
+  name: Broken internal link produces warning
+  comment: A link to a non-existent page produces a link-check warning.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        [Missing](/nonexistent/)
+output:
+  exit: 0
+  diagnostics:
+    - kind: warning
+      contains: "broken link"
+---
+test:
+  name: Broken fragment produces warning
+  comment: A link to an existing page with a non-existent anchor ID produces a fragment warning.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        [About section](/about/#no-such-section)
+      about.dj: |
+        ---
+        title: About
+        ---
+        # About page
+
+        Some content.
+output:
+  exit: 0
+  diagnostics:
+    - kind: warning
+      contains: "broken fragment"
+---
+test:
+  name: Strict mode promotes link warnings to errors
+  comment: With --strict-links, broken links become errors and exit 1.
+  action:
+    wig: build --strict-links
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Home
+        ---
+        [Missing](/nonexistent/)
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "broken link"

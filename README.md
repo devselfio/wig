@@ -1,11 +1,11 @@
 # Wig
 
-**Wig** is a static site generator in Zig: Djot/HTML content, YAML config and data, Toupee (`<t-*>`) templates, and **YAML-driven integration tests** for full-site behaviour.
+**Wig** is a static site generator and web-framework library in Zig: Djot/HTML content, YAML config and data, Toupee (`<t-*>`) templates, and **YAML-driven integration tests** for full-site behaviour.
 
 ## Quick start
 
 ```bash
-zig build -p . install   # build the CLI; see wig/AGENTS.md for the usual dev workflow
+zig build -p . install   # build the CLI
 wig init mysite
 cd mysite
 wig build
@@ -13,40 +13,41 @@ wig build
 
 Output is written to **`zig-out/site/`** under the project root.
 
-## Preview (no in-tree server in v0.1)
-
-There is **no** `wig serve` in **v0.1.0**. After a successful build, preview the site with any static file server, for example:
+## Dev server
 
 ```bash
-cd zig-out/site && python3 -m http.server 8000
+wig serve [--port 8080] [--no-reload]
 ```
 
-In-repo HTTP preview (`devServer`, `listen`) is planned for **v0.3+** per [`WIG_ROADMAP.md`](../WIG_ROADMAP.md). The HTTP stack in the library is intentionally ahead of the CLI for static preview.
+Builds the site, serves it over HTTP, watches for source file changes, rebuilds on change, and live-reloads connected browsers via WebSocket.
 
 ## Commands
 
 | Command | Purpose |
 |--------|---------|
 | `wig init [path]` | Scaffold a project from `skel/site` |
-| `wig build [path] [--clean]` | Full static build → `zig-out/site/` |
-| `wig validate [path] [--external]` | Validate config and templates without rendering |
-| `wig -V`, `wig --version` | Print semver |
+| `wig build [path] [--clean] [--pretty] [--strict-links]` | Full static build with post-build link checking |
+| `wig serve [path] [--port PORT] [--no-reload]` | Dev server with watch and live reload |
+| `wig check [path] [--external]` | Validate config and templates without building |
+| `wig -V`, `wig --version` | Print version |
 
-**Not in v0.1.0:** `wig install` and `wig styles` exit with code **2** and a short message. See [`CHANGELOG.md`](CHANGELOG.md).
+**Not yet available:** `wig install` and `wig styles` exit with code **2** and a short message.
 
-## Validation
+## Link checking
 
-`wig validate` currently checks:
+Internal links are checked automatically during every build. The link checker walks the output HTML, extracts `href` and `src` attributes, and verifies that internal paths and `#fragment` anchors resolve.
 
-- Site config (`data/site.yaml`) and style manifests
-- Toupee template load + **`Engine.validate`** (template graph / diagnostics)
+- **Warnings by default** -- broken links are reported but do not fail the build.
+- **`--strict-links`** -- promotes warnings to errors (exit 1). Useful for CI.
+- **`--external-links`** -- accepted but not yet implemented; external HTTP checking is planned.
 
-It does **not** yet perform a full external link graph or HTTP checks. The **`--external`** flag is accepted and emits a **warning** that URL checking is planned for **v0.2+** (see [`CHANGELOG.md`](CHANGELOG.md)).
+## Check (config validation)
+
+`wig check` validates site config (`data/site.yaml`), style manifests, and Toupee template resolution without running a full build. It catches missing config, bad template references, and structural issues early.
 
 ## Contributing
 
-- **CONTRIBUTING.md** is planned for **v1.0.0**. Until then, use **[`AGENTS.md`](AGENTS.md)** — especially **§Testing** (YAML specs under `test/`, `zig build test`, and how to add a spec).
-- Product roadmap: [`WIG_ROADMAP.md`](../WIG_ROADMAP.md).
+See **[`AGENTS.md`](AGENTS.md)** for architecture, conventions, and testing (YAML specs under `test/`, `zig build test`).
 
 ## Dependencies
 

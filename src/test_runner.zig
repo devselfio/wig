@@ -351,26 +351,62 @@ fn runOneSubSpec(ba: Allocator, parent_a: Allocator, doc: comb.Value, doc_idx: u
 
     try setupWorkDir(ba, work, spec);
 
-    if (spec.action.command == .validate) {
-        const val_result = try runValidate(ba, work, spec.output_exit == 1, &reporter);
-        switch (val_result) {
-            .expected_failure => return TestResults{ .passed = 1 },
+    if (spec.action.command == .check) {
+        const check_result = try runCheck(ba, work, spec.output_exit == 1, &reporter);
+        switch (check_result) {
             .failure => return error.BuildFailed,
-            .ok => return TestResults{ .passed = 1 },
+            .expected_failure, .ok => |diags| {
+                var results = TestResults{};
+                var verify_reporter = Reporter.init(&results, report, filename);
+                if (spec.output_diagnostics) |expected_diags| {
+                    try verifyCheckDiagnostics(ba, diags, expected_diags, &verify_reporter);
+                }
+                if (results.failed == 0) results.passed += 1;
+                return results;
+            },
         }
     }
 
-    const result = try runBuild(ba, work, spec.output_exit == 1, &reporter, output_dir_path, spec.action);
+    const expect_fail = spec.output_exit == 1;
+    const result = try runBuild(ba, work, expect_fail, &reporter, output_dir_path, spec.action);
     switch (result) {
         .expected_failure => return TestResults{ .passed = 1 },
         .failure => return error.BuildFailed,
-        .output => |output_dir| {
-            var mut_dir = output_dir;
+        .output => |out| {
+            var mut_dir = out.dir;
             defer mut_dir.close();
+            const has_diag_errors = out.diagnostics.hasErrors();
+
+            if (has_diag_errors and expect_fail) {
+                var results = TestResults{};
+                var verify_reporter = Reporter.init(&results, report, filename);
+                if (spec.output_diagnostics) |expected_diags| {
+                    try verifyDiagnostics(ba, out.diagnostics, expected_diags, &verify_reporter);
+                }
+                if (results.failed == 0) results.passed += 1;
+                return results;
+            }
+
+            if (has_diag_errors and !expect_fail) {
+                reporter.failWithFailure(ba, .{ .kind = .build_failed, .err = error.BuildFailed });
+                return error.BuildFailed;
+            }
+
+            if (!has_diag_errors and expect_fail) {
+                reporter.failWithFailure(ba, .{ .kind = .expected_fail_but_succeeded });
+                return error.BuildFailed;
+            }
+
             var results = TestResults{};
             var verify_reporter = Reporter.init(&results, report, filename);
             if (spec.output_files) |files| {
                 try output_verifier.verify(ba, mut_dir, "", files, &verify_reporter);
+            }
+            if (spec.output_diagnostics) |expected_diags| {
+                try verifyDiagnostics(ba, out.diagnostics, expected_diags, &verify_reporter);
+            }
+            if (results.passed == 0 and results.failed == 0) {
+                results.passed = 1;
             }
             return results;
         },
@@ -408,20 +444,23 @@ fn getNested(top: comb.Value, path: []const u8) ?comb.Value {
     return current;
 }
 
-/// Parsed action flags from `test.action.wig` (e.g. `"build --draft --pretty"` or `"validate"`).
+/// Parsed action flags from `test.action.wig` (e.g. `"build --draft --pretty"` or `"check"`).
 const ActionFlags = struct {
     command: Command = .build,
     draft: bool = false,
     pretty: bool = false,
+    strict_links: bool = false,
 
-    const Command = enum { build, validate };
+    const Command = enum { build, check };
 };
 
-/// Parsed spec test: input file tree, expected exit code, optional output file expectations, and action flags.
+/// Parsed spec test: input file tree, expected exit code, optional output file
+/// expectations, optional diagnostic assertions, and action flags.
 const SpecTest = struct {
     input_files: comb.Value,
     output_exit: u8,
     output_files: ?comb.Value,
+    output_diagnostics: ?comb.Value = null,
     action: ActionFlags = .{},
 };
 
@@ -431,9 +470,10 @@ fn parseActionFlags(top: comb.Value) ActionFlags {
     var flags = ActionFlags{};
     var iter = std.mem.splitScalar(u8, action_val.string, ' ');
     while (iter.next()) |token| {
-        if (std.mem.eql(u8, token, "validate")) flags.command = .validate;
+        if (std.mem.eql(u8, token, "check")) flags.command = .check;
         if (std.mem.eql(u8, token, "--draft")) flags.draft = true;
         if (std.mem.eql(u8, token, "--pretty")) flags.pretty = true;
+        if (std.mem.eql(u8, token, "--strict-links")) flags.strict_links = true;
     }
     return flags;
 }
@@ -452,10 +492,16 @@ fn parseSpecTest(_: Allocator, top: comb.Value) !SpecTest {
         output_files = getKey(output_obj, "files");
     }
 
+    var output_diagnostics: ?comb.Value = null;
+    if (getKey(top, "output")) |output_obj| {
+        output_diagnostics = getKey(output_obj, "diagnostics");
+    }
+
     return .{
         .input_files = input_files,
         .output_exit = output_exit,
         .output_files = output_files,
+        .output_diagnostics = output_diagnostics,
         .action = parseActionFlags(top),
     };
 }
@@ -470,9 +516,11 @@ fn setupWorkDir(a: Allocator, work: fs.Dir, spec: SpecTest) !void {
     }
 }
 
-/// Result of runBuild: output dir on success, or expected_failure/failure.
+const diagnostics_mod = @import("diagnostics.zig");
+
+/// Result of runBuild: output dir + diagnostics on success, or expected_failure/failure.
 const RunResult = union(enum) {
-    output: fs.Dir,
+    output: struct { dir: fs.Dir, diagnostics: diagnostics_mod.Collector },
     expected_failure,
     failure,
 };
@@ -488,38 +536,38 @@ fn runBuild(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter, 
     };
     defer site.deinit();
 
-    _ = site.buildAll(.{ .clean = true, .pretty = action.pretty }) catch |err| {
+    const build_result = site.buildAll(.{ .clean = true, .pretty = action.pretty, .strict_links = action.strict_links }) catch |err| {
         if (expect_fail) return .expected_failure;
         reporter.failWithFailure(a, .{ .kind = .build_failed, .err = err });
         return .failure;
     };
 
-    if (expect_fail) {
-        reporter.failWithFailure(a, .{ .kind = .expected_fail_but_succeeded });
-        return .failure;
-    }
-
     const dir = work.openDir(output_dir_path, .{ .iterate = true }) catch {
+        if (expect_fail) return .expected_failure;
         reporter.failWithFailure(a, .{ .kind = .output_dir_missing });
         return .failure;
     };
-    return .{ .output = dir };
+    return .{ .output = .{ .dir = dir, .diagnostics = build_result.diagnostics } };
 }
 
-const ValidateResult = enum { ok, expected_failure, failure };
+const CheckResult = union(enum) {
+    ok: []const root.Diagnostic,
+    expected_failure: []const root.Diagnostic,
+    failure,
+};
 
-fn runValidate(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter) !ValidateResult {
+fn runCheck(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporter) !CheckResult {
     const abs_root = try work.realpathAlloc(a, ".");
 
     var site = root.Site.init(a, .{ .root = abs_root }) catch |err| {
-        if (expect_fail) return .expected_failure;
+        if (expect_fail) return .{ .expected_failure = &.{} };
         reporter.failWithFailure(a, .{ .kind = .site_init_failed, .err = err });
         return .failure;
     };
     defer site.deinit();
 
-    const diags = site.validate(.{}) catch |err| {
-        if (expect_fail) return .expected_failure;
+    const diags = site.check(.{}) catch |err| {
+        if (expect_fail) return .{ .expected_failure = &.{} };
         reporter.failWithFailure(a, .{ .kind = .build_failed, .err = err });
         return .failure;
     };
@@ -528,7 +576,7 @@ fn runValidate(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporte
         if (d.kind == .err) break true;
     } else false;
 
-    if (has_errors and expect_fail) return .expected_failure;
+    if (has_errors and expect_fail) return .{ .expected_failure = diags };
     if (has_errors and !expect_fail) {
         reporter.failWithFailure(a, .{ .kind = .build_failed, .err = error.ValidationFailed });
         return .failure;
@@ -537,7 +585,66 @@ fn runValidate(a: Allocator, work: fs.Dir, expect_fail: bool, reporter: *Reporte
         reporter.failWithFailure(a, .{ .kind = .expected_fail_but_succeeded });
         return .failure;
     }
-    return .ok;
+    return .{ .ok = diags };
+}
+
+/// Verifies that expected diagnostics match actual build diagnostics.
+/// Each expected entry must have `kind` (warning/error) and `contains` (substring match).
+fn verifyDiagnostics(a: Allocator, actual: diagnostics_mod.Collector, expected: comb.Value, reporter: *Reporter) !void {
+    if (expected != .array) return;
+
+    for (expected.array) |entry| {
+        if (entry != .object) continue;
+        const kind_val = getKey(entry, "kind") orelse continue;
+        const contains_val = getKey(entry, "contains") orelse continue;
+        if (kind_val != .string or contains_val != .string) continue;
+
+        const expected_kind: diagnostics_mod.Diagnostic.Kind = if (std.mem.eql(u8, kind_val.string, "warning"))
+            .warning
+        else if (std.mem.eql(u8, kind_val.string, "error"))
+            .err
+        else
+            continue;
+
+        const found = for (actual.items.items) |d| {
+            if (d.kind == expected_kind and std.mem.indexOf(u8, d.message, contains_val.string) != null)
+                break true;
+        } else false;
+
+        if (!found) {
+            const msg = std.fmt.allocPrint(a, "expected diagnostic ({s}) containing \"{s}\" not found", .{ kind_val.string, contains_val.string }) catch "diagnostic assertion failed";
+            reporter.failWithFailure(a, .{ .kind = .content_mismatch, .path = "diagnostics", .expected = msg, .actual = "no matching diagnostic" });
+        }
+    }
+}
+
+/// Verifies expected diagnostics against check-command diagnostics ([]const root.Diagnostic).
+fn verifyCheckDiagnostics(a: Allocator, actual: []const root.Diagnostic, expected: comb.Value, reporter: *Reporter) !void {
+    if (expected != .array) return;
+
+    for (expected.array) |entry| {
+        if (entry != .object) continue;
+        const kind_val = getKey(entry, "kind") orelse continue;
+        const contains_val = getKey(entry, "contains") orelse continue;
+        if (kind_val != .string or contains_val != .string) continue;
+
+        const expected_kind: root.Diagnostic.Kind = if (std.mem.eql(u8, kind_val.string, "warning"))
+            .warning
+        else if (std.mem.eql(u8, kind_val.string, "error"))
+            .err
+        else
+            continue;
+
+        const found = for (actual) |d| {
+            if (d.kind == expected_kind and std.mem.indexOf(u8, d.message, contains_val.string) != null)
+                break true;
+        } else false;
+
+        if (!found) {
+            const msg = std.fmt.allocPrint(a, "expected diagnostic ({s}) containing \"{s}\" not found", .{ kind_val.string, contains_val.string }) catch "diagnostic assertion failed";
+            reporter.failWithFailure(a, .{ .kind = .content_mismatch, .path = "diagnostics", .expected = msg, .actual = "no matching diagnostic" });
+        }
+    }
 }
 
 /// Writes file tree; keys are path segments as on disk (e.g. `templates` / `layouts` / `page.html`).
