@@ -33,6 +33,9 @@ pub const tag_pages = @import("tag_pages.zig");
 pub const collections = @import("collections.zig");
 pub const diagnostics_mod = @import("diagnostics.zig");
 pub const build_context_mod = @import("build_context.zig");
+pub const mime = @import("mime.zig");
+pub const watcher_mod = @import("watcher.zig");
+pub const serve_mod = @import("serve.zig");
 
 pub const Diagnostic = struct {
     kind: Kind = .err,
@@ -633,30 +636,9 @@ fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
     }
 }
 
-/// Creates a pre-wired dev server `App` for local preview.
-///
-/// **Build vs HTTP:** This does not take `*Site`. Pass the **open site output directory**
-/// (`zig-out/site` under the project root), e.g. from `Site.openBuiltOutputDir()` after
-/// `buildAll()`. The caller keeps ownership of `site_output_dir` and must `close()` it
-/// when finished (typically after the server shuts down).
-///
-/// The returned App will serve static files from that directory once the HTTP stack is
-/// wired (v0.3+). Custom routes can be added on the returned `App`.
-///
-/// File watching and SSE live reload are future additions.
-/// Call `app.listen(port)` to start serving (currently stubbed).
-pub fn devServer(a: Allocator, site_output_dir: fs.Dir) !app.App {
-    _ = site_output_dir;
-    var application = app.App.init(a);
-
-    try application.get("/", struct {
-        fn handle(ctx: *handler.Context) anyerror!void {
-            try ctx.respond("Wig dev server running.", "text/plain");
-        }
-    }.handle);
-
-    return application;
-}
+/// Dev server entry point. Use `serve_mod.DevServer.run()` directly
+/// or invoke via `wig serve` on the CLI.
+pub const DevServer = serve_mod.DevServer;
 
 test {
     _ = output_paths;
@@ -680,6 +662,8 @@ test {
     _ = scaffold;
     _ = html_utils;
     _ = test_runner;
+    _ = mime;
+    _ = watcher_mod;
 }
 
 test "E2E: data pipeline loads config, computes tokens, renders template" {

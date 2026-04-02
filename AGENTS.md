@@ -42,6 +42,8 @@ zig build run      # run the wig CLI
 
 **Binary workflow:** `wig init [path]` then `wig build [path] [--clean]` writes the static site to `<site-root>/zig-out/site/` (same layout as the spec runner). No project `build.zig` is required for SSG.
 
+**Dev server:** `wig serve [path] [--port PORT] [--no-reload]` builds the site, serves it over HTTP, watches for source file changes, rebuilds on change, and live-reloads connected browsers via WebSocket. Default port is 8080.
+
 **Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build validate` wrappers; that is separate from the stock CLI.
 
 ## Project structure
@@ -85,7 +87,12 @@ wig/
     test_runner.zig # spec test runner (`NNN_*.yaml` full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
     output_verifier.zig # output verification: HTML normalization, glob matching
-    output_paths.zig  # canonical zig-out/site paths (build + future static server)
+    output_paths.zig  # canonical zig-out/site paths (build + dev server)
+    serve.zig       # dev server: DevServer struct, HTTP thread, rebuild loop, WS broadcast
+    watcher.zig     # file system watcher (polling); detects source changes for dev server
+    mime.zig        # extension-to-content-type lookup (used by dev server)
+    serve/
+      reload.js     # embedded WebSocket reload client (~20 lines); injected into HTML
   test/
     NNN_*.yaml      # spec tests (3-digit id prefix; primary integration tests)
   skel/
@@ -155,7 +162,8 @@ my-project/
 - **`Site.allocator`** — The allocator passed to `init`. Owns long-lived state: config loaded after `buildAll()`, the **Toupee `Engine`** (template storage and internal arenas), and anything freed in `Site.deinit()`. Use it for work that must survive across builds or for HTTP handlers that outlive a single `buildAll()`.
 - **`build_arena`** — After each successful `buildAll()`, an arena allocator holds most **per-build** data: scan results, the shared template name→source map, the main Toupee `Context` for rendering, and transient strings. The next `buildAll()` destroys and recreates this arena; **do not** retain pointers into it past the build or across a second `buildAll()` on the same `Site`.
 - **Why the engine uses `Site.allocator`** — `Engine.init` / `addTemplate` use the main allocator so template memory is **not** tied to `build_arena`, avoiding use-after-free when the arena is reset on rebuild.
-- **Web-framework / HTTP layer** — `devServer` does not take `*Site`; use handler `Context.allocator` for per-response buffers. For hybrid apps where handlers render Toupee templates: keep a `*Site` (or engine pointer) in the app's `src/main.zig` so handlers can call render-to-string—do not couple that into `devServer`’s signature.
+- **Dev server** (`serve.zig`) — `DevServer.run` takes `*Site` and manages the build-serve-watch-reload cycle. The server reads built output from `zig-out/site/` under a shared `RwLock` (readers serve files; writer rebuilds). Per-request allocations use `Site.allocator`.
+- **Web-framework / HTTP layer** — For hybrid apps where handlers render Toupee templates: keep a `*Site` (or engine pointer) in the app’s `src/main.zig` so handlers can call render-to-string.
 
 ### Output paths (`output_paths.zig`)
 
@@ -175,13 +183,9 @@ var site = try wig.Site.init(allocator, .{ .root = ".", .draft = draft });
 const result = try site.buildAll(.{ .clean = clean, .pretty = false });
 std.debug.print("Built {d} pages\n", .{result.page_count});
 
-// Dev server (HTTP layer is separate from `Site`; pass the built output directory)
-var site = try wig.Site.init(allocator, .{ .root = ".", .draft = true });
-_ = try site.buildAll(.{ .clean = false });
-var site_out = try site.openBuiltOutputDir();
-defer site_out.close();
-var app = try wig.devServer(allocator, site_out);
-try app.listen(8080);
+// Dev server (builds, serves, watches, and live-reloads)
+var site = try wig.Site.init(allocator, .{ .root = "." });
+try wig.DevServer.run(allocator, &site, .{ .port = 8080, .live_reload = true });
 ```
 
 ### Rendering pipeline
