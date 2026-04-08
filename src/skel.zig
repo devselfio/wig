@@ -50,8 +50,13 @@ pub fn pack(a: std.mem.Allocator, wig_root: []const u8, term: []const u8) !void 
     const skel_rel = try std.fmt.allocPrint(a, "skel/{s}", .{term});
     defer a.free(skel_rel);
 
+    var env = try std.process.getEnvMap(a);
+    defer env.deinit();
+    try env.put("COPYFILE_DISABLE", "1");
+
     var child = std.process.Child.init(&.{ "tar", "-cf", out_rel, "-C", skel_rel, "." }, a);
     child.cwd = wig_root;
+    child.env_map = &env;
 
     const term_res = try child.spawnAndWait();
     switch (term_res) {
