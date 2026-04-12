@@ -17,12 +17,12 @@ input:
           bundles:
             css:
               nested/demo:
-                - default/css/nested.css
+                - css/nested.css
               surface:
-                - default/css/surface.css
+                - css/surface.css
             js:
               app:
-                - default/js/app.js
+                - js/app.js
         templates:
           layouts:
             page.html: |
@@ -31,13 +31,14 @@ input:
               <script t-var:src="assets.default.js.app.path"></script>
               <p><t-var name="document.style.patterns.blocks.widget.name" /></p>
               <t-slot />
-        patterns:
-          blocks:
-            widget.yaml: |
-              name: Widget
-              description: A block pattern.
-              example: "<div class=\"widget\" />"
-              variants: []
+        data:
+          patterns:
+            blocks:
+              widget.yaml: |
+                name: Widget
+                description: A block pattern.
+                example: "<div class=\"widget\" />"
+                variants: []
         css:
           nested.css: |
             .nested { display: block; }

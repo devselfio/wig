@@ -36,7 +36,7 @@ input:
           bundles:
             css:
               tokens:
-                - default/css/tokens.css
+                - css/tokens.css
         templates:
           layouts:
             page.html: |

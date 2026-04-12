@@ -11,6 +11,7 @@ pub const PaginateConfig = struct {
     size: usize,
     path: []const u8 = "page",
     alias: []const u8 = "posts",
+    slug: ?[]const u8 = null,
 };
 
 pub const DocumentOverrides = struct {
@@ -105,6 +106,7 @@ pub fn parsePageMeta(a: Allocator, canonical_fm: comb.Value) !PageMeta {
                 .size = @intCast(size_val),
                 .path = cu.getString(pag, "path") orelse "page",
                 .alias = cu.getString(pag, "alias") orelse "posts",
+                .slug = cu.getString(pag, "slug"),
             };
         }
     }
@@ -164,6 +166,7 @@ pub fn toTemplateValue(a: Allocator, meta: PageMeta) !toupee.Value {
         try pag_map.put(a, "size", .{ .integer = @intCast(p.size) });
         try pag_map.put(a, "path", .{ .string = p.path });
         try pag_map.put(a, "alias", .{ .string = p.alias });
+        if (p.slug) |s| try pag_map.put(a, "slug", .{ .string = s });
         try doc.put(a, "paginate", .{ .map = pag_map });
     }
 

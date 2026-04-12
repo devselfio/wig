@@ -21,7 +21,7 @@ input:
           bundles:
             css:
               main:
-                - default/css/main.css
+                - css/main.css
         templates:
           layouts:
             page.html: |

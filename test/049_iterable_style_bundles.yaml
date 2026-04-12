@@ -1,0 +1,62 @@
+test:
+  name: Iterable document.style.bundles.css in templates
+  comment: >
+    document.style.bundles.css is a list of resolved bundle entries.
+    Templates iterate with t-for; entries appear in style.yaml declaration order.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: child
+        layout: page.html
+    styles:
+      parent:
+        style.yaml: |
+          name: parent
+          bundles:
+            css:
+              parent:
+                - css/reset.css
+        css:
+          reset.css: |
+            * { margin: 0; }
+      child:
+        style.yaml: |
+          name: child
+          depends: [parent]
+          bundles:
+            css:
+              parent: parent:parent
+              child:
+                - css/surface.css
+        templates:
+          layouts:
+            page.html: |
+              <t-for stylesheet in document.style.bundles.css>
+              <link rel="stylesheet" t-var:href="stylesheet.path" />
+              </t-for>
+              <t-slot />
+        css:
+          surface.css: |
+            body { color: #333; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: true
+    assets:
+      parent:
+        css:
+          parent.*.css: |
+            * { margin: 0; }
+      child:
+        css:
+          child.*.css: |
+            body { color: #333; }

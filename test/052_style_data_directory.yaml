@@ -1,0 +1,66 @@
+test:
+  name: Style-scoped data directory loaded into styles.{name}.* namespace
+  comment: >
+    Files under styles/{name}/data/ extend the style namespace. Nested
+    directories create nested keys. Data files must not overwrite engine-managed
+    keys (bundles, depends). Pattern YAML with nested sub-maps gets synthetic
+    `items` lists for t-for iteration.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          bundles:
+            css:
+              main:
+                - css/main.css
+        css:
+          main.css: |
+            body { margin: 0; }
+        data:
+          meta.yaml: |
+            version: "2.0"
+            license: MIT
+          patterns:
+            blocks:
+              button.yaml: |
+                name: Button
+                description: A clickable button
+              tag.yaml: |
+                name: Tag
+                description: A label tag
+          bundles.yaml: |
+            should: be ignored
+        templates:
+          layouts:
+            page.html: |
+              <version><t-var name="document.style.meta.version" /></version>
+              <license><t-var name="document.style.meta.license" /></license>
+              <button><t-var name="document.style.patterns.blocks.button.name" /></button>
+              <items><t-for p in document.style.patterns.blocks.items><t-var name="p.name" />,</t-for></items>
+              <ignored><t-var name="document.style.should">not overwritten</t-var></ignored>
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <version>2.0</version>
+      <license>MIT</license>
+      <button>Button</button>
+      <items>Tag,Button,</items>
+      <ignored>not overwritten</ignored>
+      <p>Hello.</p>

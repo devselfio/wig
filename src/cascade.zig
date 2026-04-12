@@ -39,8 +39,8 @@ pub fn resolveLayout(
         return entry.meta.layout orelse
             base_ctx.resolveString("document.layout");
     }
-    return getFromCascade("layout", entry, scan_result) orelse
-        entry.meta.layout orelse
+    return entry.meta.layout orelse
+        getFromCascade("layout", entry, scan_result) orelse
         base_ctx.resolveString("document.layout");
 }
 

@@ -133,7 +133,7 @@ fn walkDir(
     {
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            if (entry.kind != .file) continue;
+            if (!isRegularFile(dir, entry)) continue;
             if (isHidden(entry.name)) continue;
             const ext = fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
@@ -154,7 +154,7 @@ fn walkDir(
     {
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            if (entry.kind != .file) continue;
+            if (!isRegularFile(dir, entry)) continue;
             if (isHidden(entry.name)) continue;
             const ext = fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
@@ -182,7 +182,7 @@ fn walkDir(
     {
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            if (entry.kind != .directory) continue;
+            if (entry.kind != .directory and entry.kind != .sym_link) continue;
             if (isHidden(entry.name)) continue;
 
             const sub_prefix = if (rel_prefix.len > 0)
@@ -196,6 +196,20 @@ fn walkDir(
             try walkDir(a, sub_dir, sub_prefix, base_url, site_draft, site_debug, registered_extensions, entries, output_paths, gated_dirs, default_slugify);
         }
     }
+}
+
+/// Returns true when the entry represents a regular file, following symlinks.
+/// A symlink to a directory returns false (handled by pass 3 instead).
+fn isRegularFile(dir: fs.Dir, entry: fs.Dir.Entry) bool {
+    return switch (entry.kind) {
+        .file => true,
+        .sym_link => {
+            var d = dir.openDir(entry.name, .{}) catch return true;
+            d.close();
+            return false;
+        },
+        else => false,
+    };
 }
 
 fn parsePageFile(
@@ -872,4 +886,85 @@ test "dotPath: empty string" {
     const r = try dotPath(a, "");
     defer a.free(r);
     try testing.expectEqualStrings("", r);
+}
+
+test "scan: symlinked file is scanned" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("pages");
+    try tmp.dir.makePath("shared");
+
+    // Create a real file outside pages/.
+    var f = try tmp.dir.createFile("shared/about.dj", .{});
+    try f.writeAll("---\ntitle: About\n---\nabout content");
+    f.close();
+
+    // Create a section index.
+    var idx = try tmp.dir.createFile("pages/_index.dj", .{});
+    try idx.writeAll("---\n---\nroot");
+    idx.close();
+
+    // Symlink the file into pages/.
+    try tmp.dir.symLink("../shared/about.dj", "pages/about.dj", .{});
+
+    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
+    defer pages_dir.close();
+
+    const exts = [_][]const u8{".dj"};
+    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    defer result.deinit();
+
+    // Should find both the section index and the symlinked about page.
+    try testing.expectEqual(@as(usize, 2), result.pages.len);
+
+    var found_about = false;
+    for (result.pages) |page| {
+        if (std.mem.eql(u8, page.url_path, "/about/")) found_about = true;
+    }
+    try testing.expect(found_about);
+}
+
+test "scan: symlinked directory is scanned" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("pages");
+    try tmp.dir.makePath("shared/demo");
+
+    // Create files inside the shared directory.
+    var f1 = try tmp.dir.createFile("shared/demo/_index.dj", .{});
+    try f1.writeAll("---\ntitle: Demo\n---\ndemo index");
+    f1.close();
+
+    var f2 = try tmp.dir.createFile("shared/demo/page.dj", .{});
+    try f2.writeAll("---\ntitle: Page\n---\npage content");
+    f2.close();
+
+    // Create a section index in pages/.
+    var idx = try tmp.dir.createFile("pages/_index.dj", .{});
+    try idx.writeAll("---\n---\nroot");
+    idx.close();
+
+    // Symlink the directory into pages/.
+    try tmp.dir.symLink("../shared/demo", "pages/preview", .{ .is_directory = true });
+
+    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
+    defer pages_dir.close();
+
+    const exts = [_][]const u8{".dj"};
+    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    defer result.deinit();
+
+    // Should find: root _index, preview/_index (demo), and preview/page.
+    try testing.expectEqual(@as(usize, 3), result.pages.len);
+
+    var found_preview_index = false;
+    var found_preview_page = false;
+    for (result.pages) |page| {
+        if (std.mem.eql(u8, page.url_path, "/preview/")) found_preview_index = true;
+        if (std.mem.eql(u8, page.url_path, "/preview/page/")) found_preview_page = true;
+    }
+    try testing.expect(found_preview_index);
+    try testing.expect(found_preview_page);
 }

@@ -10,6 +10,11 @@ const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
 /// Loads `styles/{style}/patterns/{category}/*.yaml` and merges into `style_ctx` at
 /// `styles.{style}.patterns` as a nested map: `{category}.{stem}` → manifest value.
+///
+/// Each category map also receives an `items` key containing a list of all
+/// patterns in that category (each augmented with an `id` field from the stem).
+/// This enables `t-for` iteration via Toupee's map-with-items fallback while
+/// preserving direct access by stem name.
 pub fn loadIntoContext(
     ba: Allocator,
     abs_root: []const u8,
@@ -61,9 +66,67 @@ pub fn loadIntoContext(
             }
         }
 
+        // Build `items` list per category for t-for iteration.
+        var map_it = patterns_map.iterator();
+        while (map_it.next()) |cat_entry| {
+            switch (cat_entry.value_ptr.*) {
+                .map => |*inner| {
+                    var items = std.ArrayListUnmanaged(toupee.Value){};
+                    var stem_it = inner.iterator();
+                    while (stem_it.next()) |stem_entry| {
+                        var item_map = switch (stem_entry.value_ptr.*) {
+                            .map => |m| try cloneMap(ba, m),
+                            else => ValueMap{},
+                        };
+                        try item_map.put(ba, "id", .{ .string = stem_entry.key_ptr.* });
+                        try items.append(ba, .{ .map = item_map });
+                    }
+                    try inner.put(ba, "items", .{ .list = try ba.dupe(toupee.Value, items.items) });
+                },
+                else => {},
+            }
+        }
+
         if (patterns_map.count() == 0) continue;
+
+        // Build flat `all` list combining every category's items with a `category` field.
+        var all = std.ArrayListUnmanaged(toupee.Value){};
+        var all_it = patterns_map.iterator();
+        while (all_it.next()) |cat_entry| {
+            switch (cat_entry.value_ptr.*) {
+                .map => |inner| {
+                    const cat_items = inner.get("items") orelse continue;
+                    switch (cat_items) {
+                        .list => |list| {
+                            for (list) |item| {
+                                switch (item) {
+                                    .map => |m| {
+                                        var augmented = try cloneMap(ba, m);
+                                        try augmented.put(ba, "category", .{ .string = cat_entry.key_ptr.* });
+                                        try all.append(ba, .{ .map = augmented });
+                                    },
+                                    else => try all.append(ba, item),
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+        }
+        try patterns_map.put(ba, "all", .{ .list = try ba.dupe(toupee.Value, all.items) });
 
         const path = try std.fmt.allocPrint(ba, "styles.{s}.patterns", .{sc.name});
         try style_ctx.putAt(path, .{ .map = patterns_map });
     }
+}
+
+fn cloneMap(a: Allocator, src: ValueMap) !ValueMap {
+    var dst: ValueMap = .{};
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        try dst.put(a, entry.key_ptr.*, entry.value_ptr.*);
+    }
+    return dst;
 }

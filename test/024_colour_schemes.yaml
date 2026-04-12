@@ -52,7 +52,7 @@ input:
           bundles:
             css:
               colors:
-                - default/css/colors.css
+                - css/colors.css
         templates:
           layouts:
             page.html: |

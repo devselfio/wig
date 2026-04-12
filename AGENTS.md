@@ -70,7 +70,7 @@ wig/
     frontmatter.zig # shared YAML frontmatter detection + stripping
     bundles.zig     # asset bundles (CSS + JS): render, concat, hash
     scanner.zig     # walk pages/, collections (ScanResult.init), sections, render gating
-    taxonomies.zig  # reverse index from page tags/categories
+    taxonomies.zig  # reverse index from page tags/categories (context key: `tags`)
     pages.zig       # page rendering: unified renderPage, content parsing, shortcodes, layout
     toc.zig         # heading extraction from HTML for table of contents
     search.zig      # search index generation (search.json)
@@ -95,7 +95,7 @@ wig/
   test/
     NNN_*.yaml      # spec tests (3-digit id prefix; primary integration tests)
   skel/
-    site/           # default project tree copied by `wig init` (`_core` + `default`, data, pages, assets)
+    site/           # default project tree copied by `wig init` (`cube` + `default`, data, pages, assets)
 ```
 
 ### Typed PageMeta architecture
@@ -107,13 +107,13 @@ comb.Value (YAML parse) → parsePageMeta → PageMeta (typed, compile-time safe
                                         → raw_frontmatter (toupee.Value, for template context)
 ```
 
-`PageEntry` carries both: `meta: PageMeta` for pipeline logic (cascade, search, feeds, tag pages) and `raw_frontmatter: toupee.Value` for the `page.*` / `document.*` template namespace. This eliminates ~25 instances of runtime map-drilling boilerplate.
+`PageEntry` carries both: `meta: PageMeta` for pipeline logic (cascade, search, feeds, tag pages) and `raw_frontmatter: toupee.Value` for the `document.*` template namespace. This eliminates ~25 instances of runtime map-drilling boilerplate.
 
 ## Architecture
 
 ### Library-first design
 
-Wig is a Zig library (`Site`, `Site.buildAll`, …) that also ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `_core`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
+Wig is a Zig library (`Site`, `Site.buildAll`, …) that also ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `cube`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
 
 ### SSG + web framework (hybrid architecture)
 
@@ -131,7 +131,7 @@ my-project/
   data/            # YAML data (site.yaml, document.yaml, colors/)
   src/
     main.zig       # Zig app: imports wig, handles routes, renders responses
-  styles/          # CUBE CSS: _core/ + default/ (templates, css, patterns)
+  styles/          # CUBE CSS: cube/ + default/ (templates, css, data/)
   pages/           # Djot/HTML content for SSG path
   build.zig        # builds both: wig SSG output + src/main.zig binary
   build.zig.zon    # depends on wig (which brings toupee, comb, zjot)
@@ -245,9 +245,9 @@ Context creation and data insertion:
 ```zig
 var ctx = toupee.Context.init(allocator);
 defer ctx.deinit();
-ctx.put("title", .{ .string = "Hello" });        // top-level key
-ctx.putAt("page.title", .{ .string = "About" });  // dot-path, creates intermediate maps
-ctx.putAt("page.url", .{ .string = "/about/" });
+ctx.put("title", .{ .string = "Hello" });            // top-level key
+ctx.putAt("document.title", .{ .string = "About" }); // dot-path, creates intermediate maps
+ctx.putAt("document.url", .{ .string = "/about/" });
 ```
 
 Engine for cached templates: Wig's StyleLoader loads from `templates/layouts/` and `templates/blocks/`. Template names use explicit paths: `layouts/page.html`, `blocks/card.html`.
@@ -338,18 +338,42 @@ Files in `styles/` with frontmatter are template-rendered; without are plain tex
 
 **URL slugification:** When `slugify: true` is set in the data cascade (default via `data/document.yaml`), page filename stems are slugified: underscores become hyphens and letters are lowercased. For example, `my_post.dj` -> `/my-post/`. Special stems (`_index`, `index`, `_NNN` error pages) are never slugified. Individual pages can override with `slugify: false` in frontmatter.
 
+### Template context model
+
+Wig's template context has three tiers:
+
+**Site scope** (top-level keys):
+- `site` -- from `data/site.yaml`
+- `assets` -- hashed asset paths (engine-computed)
+- `pages` -- page collection (engine-computed)
+- `tags` -- tag indexes (engine-computed)
+- `styles` -- full style tree (engine-computed)
+- *Any other key* -- from files in `data/` (e.g. `data/colors/solarized.yaml` -> `colors.solarized`)
+
+**Style scope** (`styles.{name}.*`):
+- `depends` -- dependency list (from `style.yaml`)
+- `tokens` -- design tokens (from `style.yaml`, extended with `tokens.computed`)
+- `bundles` -- iterable bundle lists (engine-computed)
+- *Any other key* -- from `style.yaml` or from files in `styles/{name}/data/`
+
+**Page scope** (per-page):
+- `document` -- frontmatter cascade + engine-computed values (path, url, layout, style, parent, ancestors, children, toc, excerpt)
+- `paginate` -- pagination chunks (when active)
+
+**Reserved site-level keys** (data files must not shadow): `pages`, `styles`, `tags`, `assets`, `paginate`.
+
+**Reserved style-level keys** (style data files must not shadow): `bundles`, `depends`, `tokens`.
+
 ### Data cascade
 
 Sources merged in priority order (highest priority last -- later sources override earlier):
 
 1. Global data files (`data/` -> top-level keys by filename, e.g. `data/site.yaml` -> `site.*`, `data/document.yaml` -> `document.*`)
 2. Render flags (`site.draft`, `site.debug`)
-3. Style manifest data (`styles.{name}.*`)
-4. Page collection (`pages.*`) and taxonomies (`taxonomies.tags`)
+3. Style manifest data (`styles.{name}.*`) and style data directories (`styles/{name}/data/`)
+4. Page collection (`pages.*`) and tag indexes (`tags.*`)
 5. Directory-level cascading data (`document.data`, from root key `data:` in `_index.dj` frontmatter, applied to child pages)
 6. The current page's frontmatter fields (highest priority -- overrides all inherited `document.*` values)
-
-**Reserved top-level keys:** `pages`, `styles`, `taxonomies` are system-provided. Data files must not shadow these names.
 
 **Directory-level data overrides:** Root key `data:` in `_index.dj` frontmatter (`document.data` after load) can override any data key. For example, `data: site: author: GuestAuthor` overrides `site.author` for all pages in that directory and its children. Children and grandchildren inherit the override; pages outside the directory see the global value. Wig strips `document.data` from the template context after processing.
 
@@ -374,11 +398,13 @@ Metadata keys include `path` (URL path), `title`, `date`, and all other keys cop
 
 ### Current page (`document.*`)
 
+The `document.*` namespace is the sole per-page context. There is no `page.*` namespace.
+
 When rendering a page, `document.*` is populated by merging (in priority order):
 
 1. `data/document.yaml` -- global document defaults
 2. Directory-level `data.document:` from ancestor `_index.dj` files
-3. The page's own frontmatter as `document.*` (highest priority)
+3. The page's own frontmatter keys promoted to `document.*` (highest priority; engine-computed keys like `path`, `url`, `toc`, `excerpt`, `style`, `layout`, `parent`, `ancestors`, `children` are not overwritten by frontmatter)
 
 Wig also injects computed values:
 
@@ -417,18 +443,18 @@ styles/default/
     fonts/*.css
     globals/*.css
     utilities/*.css
-  patterns/
-    blocks/
-      *.yaml         # optional — merged into styles.{name}.patterns (see Pattern library)
-      *.html         # HTML examples for pattern library / docs
-    compositions/*.html
-    utilities/*.html
+  data/              # style-scoped data (accessible at styles.{name}.*)
+    patterns/        # pattern library manifests
+      blocks/
+        *.yaml       # merged into styles.{name}.patterns.blocks.{stem}
+      compositions/*.yaml
+      utilities/*.yaml
 ```
 
 - `templates/layouts/` -- page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
 - `templates/blocks/` -- CUBE blocks (components). Use `<t-include template="blocks/card.html" />`. Each block has CSS in `css/blocks/` and HTML in `templates/blocks/`.
 - `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
-- `patterns/` -- pattern library material. **`patterns/{category}/*.yaml`** manifests are merged into template context (see **Pattern library**). HTML files under `patterns/**` can illustrate blocks; CSS doc-comment parsing in `patterns.zig` is separate and may feed future pattern index pages — it is not the same code path as YAML manifest merge.
+- `data/` -- style-scoped data. YAML/JSON files under `styles/{name}/data/` are loaded into `styles.{name}.*`. Nested directories create nested keys. Data files must not shadow engine-managed keys (`bundles`, `depends`, `tokens`). Pattern YAML files live here under `data/patterns/` (see **Pattern library**).
 
 ### Template resolution
 
@@ -454,9 +480,9 @@ Resolves to `{style}/templates/layouts/page.html`. No `layouts/` prefix needed i
 | Form | Meaning |
 |------|---------|
 | `blocks/paragraph.html` | Current style's blocks |
-| `_core:blocks/paragraph.html` | `_core` style's blocks |
+| `cube:blocks/paragraph.html` | `cube` style's blocks |
 
-Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved. Cross-style references use **`style:path` only** (there is no `_core/layouts/...` slash alias).
+Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved. Cross-style references use **`style:path` only** (there is no `cube/layouts/...` slash alias).
 
 ### Bundles
 
@@ -522,11 +548,13 @@ CSS files with frontmatter are rendered through Toupee but do **not** have the `
 
 ### Pattern library
 
-**YAML manifests (authoring for templates):** Each style may include **`patterns/{category}/{stem}.yaml`** files. After Comb parse, they are merged into context at **`styles.{style}.patterns.{category}.{stem}`** (nested maps: category → stem → fields). In page layouts, the active style is available as **`document.style`**, so a block manifest is reachable as **`document.style.patterns.blocks.{stem}.name`** (and other fields you define: `description`, `example`, `variants`, …). The skeleton includes **[`skel/site/styles/default/patterns/blocks/example.yaml`](skel/site/styles/default/patterns/blocks/example.yaml)** as a minimal example.
+**YAML manifests (authoring for templates):** Each style may include **`data/patterns/{category}/{stem}.yaml`** files under its style data directory. These are loaded by the general style data directory mechanism (see **Style directory structure**) into context at **`styles.{style}.patterns.{category}.{stem}`** (nested maps: category → stem → fields). Each category sub-map also receives a synthetic **`items`** list for `t-for` iteration (each item is a clone of the pattern map with an added `id` field set to the stem).
 
-**HTML examples:** Optional **`patterns/{category}/*.html`** files can sit beside manifests for human-facing examples.
+In page layouts, the active style is available as **`document.style`**, so a block manifest is reachable as **`document.style.patterns.blocks.{stem}.name`** (and other fields you define: `description`, `example`, `variants`, …).
 
-**CSS doc comments vs YAML:** [`patterns.zig`](patterns.zig) can discover pattern-like metadata from **`css/blocks/*.css`** doc comments and (when that pipeline is fully wired) contribute **pattern library pages** — a different mechanism from **`pattern_manifests.zig`**, which only loads YAML into the Toupee context during **`buildAll`**. For structured data used in templates, **prefer YAML manifests**; treat CSS doc discovery as complementary documentation / future index generation, not a replacement for manifest merge.
+**Iteration:** Use `<t-for pattern in styles.{name}.patterns.blocks>` to iterate over patterns in a category. Toupee's `t-for` resolves the `items` list within the map automatically.
+
+**CSS doc comments:** [`patterns.zig`](patterns.zig) can discover pattern-like metadata from **`css/blocks/*.css`** doc comments — a complementary mechanism for documentation and future pattern index generation.
 
 ### Feeds
 
@@ -584,7 +612,7 @@ Files in `assets/` are copied verbatim to the output directory without rendering
 
 ### Tags
 
-Document frontmatter may include `document.tags: [music, tech, zig]`. With `taxonomies: [tags]` in site config, Wig auto-generates tag index pages (requires `layouts/tag-index.html` and `layouts/tag-list.html` in the style):
+Document frontmatter may include `document.tags: [music, tech, zig]`. With `taxonomies: [tags]` in site config (the `taxonomies` key in `site.yaml` lists the frontmatter field names to index; the resulting context key is `tags`), Wig auto-generates tag index pages (requires `layouts/tag-index.html` and `layouts/tag-list.html` in the style):
 
 - `/tags/` — index of all tags with counts (**ordered by page count descending**, then slug)
 - `/tags/{slug}/` — documents with that tag
@@ -695,7 +723,7 @@ output:
       contains: "broken link"
 ```
 
-Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.
+Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `data/patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.
 
 Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output` are the **ground truth** for behaviour. Prefer writing or extending a spec **when adding an author-facing feature** unless the feature is explicitly in the “YAML not a fit” bucket above.
 

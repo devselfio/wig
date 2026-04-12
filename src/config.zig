@@ -19,7 +19,7 @@ pub const SiteConfig = struct {
     url: []const u8,
     title: []const u8,
     author: []const u8,
-    taxonomies: []const []const u8,
+    tags: []const []const u8,
     feeds: []const FeedConfig,
     raw: comb.Value,
     _parsed: comb.Parsed(comb.Value),
@@ -27,7 +27,7 @@ pub const SiteConfig = struct {
     _allocator: Allocator,
 
     pub fn deinit(self: *SiteConfig) void {
-        if (self.taxonomies.len > 0) self._allocator.free(self.taxonomies);
+        if (self.tags.len > 0) self._allocator.free(self.tags);
         if (self.feeds.len > 0) self._allocator.free(self.feeds);
         self._parsed.deinit();
         self._allocator.free(self._source);
@@ -37,12 +37,14 @@ pub const SiteConfig = struct {
 /// Parsed style manifest from `styles/{name}/style.yaml`.
 pub const StyleConfig = struct {
     name: []const u8,
+    depends: []const []const u8,
     raw: comb.Value,
     _parsed: comb.Parsed(comb.Value),
     _source: []const u8,
     _allocator: Allocator,
 
     pub fn deinit(self: *StyleConfig) void {
+        if (self.depends.len > 0) self._allocator.free(self.depends);
         self._parsed.deinit();
         self._allocator.free(self._source);
         self._allocator.free(self.name);
@@ -53,7 +55,7 @@ const ExtractedConfig = struct {
     url: []const u8,
     title: []const u8,
     author: []const u8,
-    taxonomies: []const []const u8,
+    tags: []const []const u8,
     feeds: []const FeedConfig,
 };
 
@@ -108,7 +110,7 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
     const title = val.getStr("title") orelse "";
     const author = val.getStr("author") orelse "";
 
-    const taxonomies = if (val.getArray("taxonomies")) |arr| blk: {
+    const tags = if (val.getArray("taxonomies")) |arr| blk: {
         const items = try a.alloc([]const u8, arr.len);
         var count: usize = 0;
         for (arr) |item| {
@@ -169,7 +171,7 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
         .url = url,
         .title = title,
         .author = author,
-        .taxonomies = taxonomies,
+        .tags = tags,
         .feeds = feeds,
     };
 }
@@ -204,7 +206,7 @@ pub fn loadSiteConfig(a: Allocator, root: []const u8) !SiteConfig {
         .url = extracted.url,
         .title = extracted.title,
         .author = extracted.author,
-        .taxonomies = extracted.taxonomies,
+        .tags = extracted.tags,
         .feeds = extracted.feeds,
         .raw = parsed.value,
         ._parsed = parsed,
@@ -247,8 +249,24 @@ pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
         };
         errdefer parsed.deinit();
 
+        const depends = if (parsed.value.getArray("depends")) |arr| dep_blk: {
+            const items = try a.alloc([]const u8, arr.len);
+            var count: usize = 0;
+            for (arr) |item| {
+                switch (item) {
+                    .string => |s| {
+                        items[count] = s;
+                        count += 1;
+                    },
+                    else => {},
+                }
+            }
+            break :dep_blk items[0..count];
+        } else &[_][]const u8{};
+
         try configs.append(a, .{
             .name = try a.dupe(u8, entry.name),
+            .depends = depends,
             .raw = parsed.value,
             ._parsed = parsed,
             ._source = contents,
@@ -256,7 +274,48 @@ pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
         });
     }
 
+    for (configs.items) |cfg| {
+        for (cfg.depends) |dep| {
+            for (configs.items) |other| {
+                if (std.mem.eql(u8, dep, other.name)) break;
+            } else return error.MissingDependency;
+        }
+    }
+
     return try configs.toOwnedSlice(a);
+}
+
+/// Sorts style configs in-place so that dependencies come before dependents.
+/// Requires that all dependencies exist (validated by `loadStyleConfigs`).
+pub fn sortByDependencyOrder(cfgs: []StyleConfig) void {
+    var placed: usize = 0;
+    while (placed < cfgs.len) {
+        var progress = false;
+        var i = placed;
+        while (i < cfgs.len) {
+            if (allDepsPlaced(cfgs[0..placed], cfgs[i].depends)) {
+                if (i != placed) std.mem.swap(StyleConfig, &cfgs[i], &cfgs[placed]);
+                placed += 1;
+                progress = true;
+            }
+            i += 1;
+        }
+        if (!progress) break;
+    }
+}
+
+fn allDepsPlaced(placed: []const StyleConfig, deps: []const []const u8) bool {
+    for (deps) |dep| {
+        var found = false;
+        for (placed) |p| {
+            if (std.mem.eql(u8, p.name, dep)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
 }
 
 /// Loads all data files from `data/` into a nested Toupee value namespace.
@@ -361,6 +420,24 @@ fn scanDataDir(
     }
 }
 
+/// Loads all YAML/JSON files from a directory into a `ValueMap`, suitable for
+/// arena-allocated contexts (no `DataResult` wrapper needed). Subdirectories
+/// create nested maps. Returns an empty map if the directory does not exist.
+pub fn loadDataDir(a: Allocator, dir_path: []const u8) !ValueMap {
+    var namespace = ValueMap{};
+    var files: std.ArrayListUnmanaged(ParsedFile) = .empty;
+    var owned_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+
+    var data_dir = fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return namespace,
+        else => return err,
+    };
+    defer data_dir.close();
+
+    try scanDataDir(a, data_dir, &namespace, &files, &owned_keys, false);
+    return namespace;
+}
+
 fn isSiteConfigFile(name: []const u8) bool {
     return std.mem.eql(u8, name, "site.yaml") or
         std.mem.eql(u8, name, "site.json") or
@@ -393,14 +470,14 @@ test "extractConfig: valid YAML with all fields" {
     defer parsed.deinit();
 
     const cfg = try extractConfig(parsed.value, std.testing.allocator);
-    defer std.testing.allocator.free(cfg.taxonomies);
+    defer std.testing.allocator.free(cfg.tags);
     defer std.testing.allocator.free(cfg.feeds);
 
     try std.testing.expectEqualStrings("https://example.com", cfg.url);
     try std.testing.expectEqualStrings("My Site", cfg.title);
-    try std.testing.expectEqual(@as(usize, 2), cfg.taxonomies.len);
-    try std.testing.expectEqualStrings("tags", cfg.taxonomies[0]);
-    try std.testing.expectEqualStrings("categories", cfg.taxonomies[1]);
+    try std.testing.expectEqual(@as(usize, 2), cfg.tags.len);
+    try std.testing.expectEqualStrings("tags", cfg.tags[0]);
+    try std.testing.expectEqualStrings("categories", cfg.tags[1]);
     try std.testing.expectEqual(@as(usize, 1), cfg.feeds.len);
     try std.testing.expectEqualStrings("blog", cfg.feeds[0].name);
     try std.testing.expectEqualStrings("pages.posts", cfg.feeds[0].collection_path);
@@ -445,7 +522,7 @@ test "extractConfig: minimal config with only url" {
 
     try std.testing.expectEqualStrings("https://example.com", cfg.url);
     try std.testing.expectEqualStrings("", cfg.title);
-    try std.testing.expectEqual(@as(usize, 0), cfg.taxonomies.len);
+    try std.testing.expectEqual(@as(usize, 0), cfg.tags.len);
     try std.testing.expectEqual(@as(usize, 0), cfg.feeds.len);
 }
 
@@ -675,9 +752,140 @@ test "loadDataFiles: loads JSON files" {
     try std.testing.expectEqualStrings("Alice", authors.map.get("name").?.string);
 }
 
+test "loadStyleConfigs: parses depends field" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("styles/cube");
+    try tmp.dir.makePath("styles/highlights");
+
+    var cube_dir = try tmp.dir.openDir("styles/cube", .{});
+    defer cube_dir.close();
+    var cf = try cube_dir.createFile("style.yaml", .{});
+    try cf.writeAll("name: cube");
+    cf.close();
+
+    var hl_dir = try tmp.dir.openDir("styles/highlights", .{});
+    defer hl_dir.close();
+    var hf = try hl_dir.createFile("style.yaml", .{});
+    try hf.writeAll("name: highlights\ndepends:\n  - cube");
+    hf.close();
+
+    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(abs);
+
+    const configs = try loadStyleConfigs(std.testing.allocator, abs);
+    defer {
+        for (configs) |*c| @constCast(c).deinit();
+        std.testing.allocator.free(configs);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), configs.len);
+
+    var hl_cfg: ?StyleConfig = null;
+    var cube_cfg: ?StyleConfig = null;
+    for (configs) |c| {
+        if (std.mem.eql(u8, c.name, "highlights")) hl_cfg = c;
+        if (std.mem.eql(u8, c.name, "cube")) cube_cfg = c;
+    }
+
+    try std.testing.expect(hl_cfg != null);
+    try std.testing.expect(cube_cfg != null);
+    try std.testing.expectEqual(@as(usize, 1), hl_cfg.?.depends.len);
+    try std.testing.expectEqualStrings("cube", hl_cfg.?.depends[0]);
+    try std.testing.expectEqual(@as(usize, 0), cube_cfg.?.depends.len);
+}
+
+test "loadStyleConfigs: missing dependency returns error" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("styles/orphan");
+    var orphan_dir = try tmp.dir.openDir("styles/orphan", .{});
+    defer orphan_dir.close();
+    var f = try orphan_dir.createFile("style.yaml", .{});
+    try f.writeAll("name: orphan\ndepends:\n  - nonexistent");
+    f.close();
+
+    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(abs);
+
+    const result = loadStyleConfigs(std.testing.allocator, abs);
+    try std.testing.expectError(error.MissingDependency, result);
+}
+
 test "isSiteConfigFile: identifies site config files" {
     try std.testing.expect(isSiteConfigFile("site.yaml"));
     try std.testing.expect(isSiteConfigFile("site.json"));
     try std.testing.expect(isSiteConfigFile("site.yml"));
     try std.testing.expect(!isSiteConfigFile("authors.yaml"));
+}
+
+test "sortByDependencyOrder: no dependencies is a no-op" {
+    var cfgs = [_]StyleConfig{
+        stubStyle("alpha", &.{}),
+        stubStyle("beta", &.{}),
+    };
+    sortByDependencyOrder(&cfgs);
+    try std.testing.expectEqual(@as(usize, 2), cfgs.len);
+}
+
+test "sortByDependencyOrder: simple dependency placed first" {
+    var cfgs = [_]StyleConfig{
+        stubStyle("child", &.{"parent"}),
+        stubStyle("parent", &.{}),
+    };
+    sortByDependencyOrder(&cfgs);
+    try std.testing.expectEqualStrings("parent", cfgs[0].name);
+    try std.testing.expectEqualStrings("child", cfgs[1].name);
+}
+
+test "sortByDependencyOrder: three-level chain" {
+    var cfgs = [_]StyleConfig{
+        stubStyle("grandchild", &.{"child"}),
+        stubStyle("child", &.{"root"}),
+        stubStyle("root", &.{}),
+    };
+    sortByDependencyOrder(&cfgs);
+    try std.testing.expectEqualStrings("root", cfgs[0].name);
+    try std.testing.expectEqualStrings("child", cfgs[1].name);
+    try std.testing.expectEqualStrings("grandchild", cfgs[2].name);
+}
+
+test "sortByDependencyOrder: diamond dependency" {
+    var cfgs = [_]StyleConfig{
+        stubStyle("leaf", &.{ "left", "right" }),
+        stubStyle("left", &.{"base"}),
+        stubStyle("right", &.{"base"}),
+        stubStyle("base", &.{}),
+    };
+    sortByDependencyOrder(&cfgs);
+    try std.testing.expectEqualStrings("base", cfgs[0].name);
+    const leaf_idx = for (cfgs, 0..) |c, i| {
+        if (std.mem.eql(u8, c.name, "leaf")) break i;
+    } else unreachable;
+    try std.testing.expect(leaf_idx == 3);
+}
+
+test "sortByDependencyOrder: already sorted stays stable" {
+    var cfgs = [_]StyleConfig{
+        stubStyle("base", &.{}),
+        stubStyle("mid", &.{"base"}),
+        stubStyle("top", &.{"mid"}),
+    };
+    sortByDependencyOrder(&cfgs);
+    try std.testing.expectEqualStrings("base", cfgs[0].name);
+    try std.testing.expectEqualStrings("mid", cfgs[1].name);
+    try std.testing.expectEqualStrings("top", cfgs[2].name);
+}
+
+fn stubStyle(name: []const u8, deps: []const []const u8) StyleConfig {
+    return .{
+        .name = name,
+        .depends = deps,
+        .raw = .{ .null_val = {} },
+        ._parsed = undefined,
+        ._source = "",
+        ._allocator = std.testing.allocator,
+    };
 }

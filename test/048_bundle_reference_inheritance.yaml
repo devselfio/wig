@@ -1,0 +1,80 @@
+test:
+  name: Bundle style:bundle reference inherits resolved artifact
+  comment: >
+    A scalar style:bundle value references a dependency's already-built bundle.
+    The inheriting style gets the same artifact (path, hash, content).
+    Styles are processed in dependency order via topological sort.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: theme
+        layout: page.html
+    styles:
+      core:
+        style.yaml: |
+          name: core
+          bundles:
+            css:
+              core:
+                - css/reset.css
+        css:
+          reset.css: |
+            * { margin: 0; }
+      mid:
+        style.yaml: |
+          name: mid
+          depends: [core]
+          bundles:
+            css:
+              core: core:core
+              mid:
+                - css/colors.css
+        css:
+          colors.css: |
+            :root { --fg: #000; }
+      theme:
+        style.yaml: |
+          name: theme
+          depends: [core, mid]
+          bundles:
+            css:
+              core: core:core
+              mid: mid:mid
+              theme:
+                - css/surface.css
+        templates:
+          layouts:
+            page.html: |
+              <t-for stylesheet in document.style.bundles.css>
+              <link t-var:href="stylesheet.path" />
+              </t-for>
+              <t-slot />
+        css:
+          surface.css: |
+            body { font-family: serif; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: true
+    assets:
+      core:
+        css:
+          core.*.css: |
+            * { margin: 0; }
+      mid:
+        css:
+          mid.*.css: |
+            :root { --fg: #000; }
+      theme:
+        css:
+          theme.*.css: |
+            body { font-family: serif; }

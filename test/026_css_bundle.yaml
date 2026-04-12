@@ -17,8 +17,8 @@ input:
           bundles:
             css:
               main:
-                - default/reset.css
-                - default/styles.css
+                - reset.css
+                - styles.css
         templates:
           layouts:
             page.html: |

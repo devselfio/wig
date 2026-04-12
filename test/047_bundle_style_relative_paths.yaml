@@ -1,0 +1,62 @@
+test:
+  name: Bundle source paths resolve relative to style root
+  comment: >
+    Bare paths resolve relative to the current style's directory.
+    style:path prefixed paths resolve relative to the named style's directory.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: child
+        layout: page.html
+    styles:
+      base:
+        style.yaml: |
+          name: base
+          bundles:
+            css:
+              base:
+                - css/reset.css
+        css:
+          reset.css: |
+            * { margin: 0; }
+      child:
+        style.yaml: |
+          name: child
+          depends: [base]
+          bundles:
+            css:
+              base: base:base
+              child:
+                - base:css/reset.css
+                - css/surface.css
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        css:
+          surface.css: |
+            body { color: #333; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <p>Hello.</p>
+    assets:
+      base:
+        css:
+          base.*.css: |
+            * { margin: 0; }
+      child:
+        css:
+          child.*.css: |
+            * { margin: 0; }
+            body { color: #333; }

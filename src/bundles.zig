@@ -92,7 +92,7 @@ pub fn processBundle(
     defer out_file.close();
     try out_file.writeAll(content);
 
-    const web_path = try a.dupe(u8, out_path);
+    const web_path = try std.fmt.allocPrint(a, "/{s}", .{out_path});
 
     return .{
         .path = web_path,

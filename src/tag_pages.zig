@@ -67,7 +67,7 @@ pub fn render(
     output_dir: fs.Dir,
 ) !void {
     var want_tags = false;
-    for (site_cfg.taxonomies) |t| {
+    for (site_cfg.tags) |t| {
         if (std.mem.eql(u8, t, "tags")) {
             want_tags = true;
             break;
@@ -75,7 +75,7 @@ pub fn render(
     }
     if (!want_tags) return;
 
-    const tax_val = base_ctx.resolve("taxonomies") orelse return;
+    const tax_val = base_ctx.resolve("tags") orelse return;
     if (tax_val != .map) return;
     const tags_root = tax_val.map.get("tags") orelse return;
     if (tags_root != .map) return;

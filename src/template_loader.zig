@@ -7,7 +7,7 @@ const fs = std.fs;
 
 /// Resolves template names relative to a style during rendering.
 /// Explicit paths: `layouts/X.html`, `blocks/X.html` resolve within the current style.
-/// Cross-style: `style:path` (e.g. `_core:layouts/base.html`) resolves from another style.
+/// Cross-style: `style:path` (e.g. `cube:layouts/base.html`) resolves from another style.
 /// Short names (e.g. `page.html`) try layouts then blocks.
 pub const StyleLoader = struct {
     templates: *const std.StringArrayHashMapUnmanaged([]const u8),
@@ -67,22 +67,6 @@ pub fn loadTemplates(
     const styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch return;
     var dir = styles_dir;
     defer dir.close();
-
-    for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
-        const core_subdir = try std.fmt.allocPrint(ba, "_core/{s}", .{subdir});
-        if (dir.openDir(core_subdir, .{ .iterate = true })) |cd| {
-            var core_dir = cd;
-            defer core_dir.close();
-            var cit = core_dir.iterate();
-            while (try cit.next()) |entry| {
-                if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
-                const tmpl_name = try std.fmt.allocPrint(ba, "_core/{s}/{s}", .{ subdir, entry.name });
-                const content = try core_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
-                try engine.addTemplate(tmpl_name, content);
-                try template_map.put(ba, tmpl_name, content);
-            }
-        } else |_| {}
-    }
 
     for (style_cfgs) |style_cfg| {
         for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {

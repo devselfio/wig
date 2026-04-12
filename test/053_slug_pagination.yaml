@@ -1,0 +1,83 @@
+test:
+  name: Slug-based pagination
+  comment: paginate with slug field generates one page per item using the slug value as the URL segment.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+      colours.yaml: |
+        - id: red
+          name: Red
+          hex: "#ff0000"
+        - id: blue
+          name: Blue
+          hex: "#0000ff"
+        - id: green
+          name: Green
+          hex: "#00ff00"
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            colour.html: |
+              <h1><t-var name="colour.name" /></h1>
+              <p><t-var name="colour.hex" /></p>
+              <t-if var="paginate.previous">
+              <a t-var:href="paginate.previous.url">Prev</a>
+              </t-if>
+              <t-if var="paginate.next">
+              <a t-var:href="paginate.next.url">Next</a>
+              </t-if>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      colours:
+        _index.dj: |
+          ---
+          title: Colours
+          layout: colour.html
+          paginate:
+            collection: colours
+            size: 1
+            alias: colour
+            slug: id
+          ---
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    colours:
+      red:
+        index.html: |
+          <h1>Red</h1>
+          <p>#ff0000</p>
+          
+          
+          <a href="/colours/blue/">Next</a>
+      blue:
+        index.html: |
+          <h1>Blue</h1>
+          <p>#0000ff</p>
+          
+          <a href="/colours/red/">Prev</a>
+          
+          
+          <a href="/colours/green/">Next</a>
+      green:
+        index.html: |
+          <h1>Green</h1>
+          <p>#00ff00</p>
+          
+          <a href="/colours/blue/">Prev</a>

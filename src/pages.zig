@@ -28,7 +28,7 @@ pub const RenderResult = struct {
 ///   2. Shortcode rendering (Toupee pass on content HTML)
 ///   3. ToC extraction from rendered content
 ///   4. Excerpt extraction (first <p> or frontmatter description:)
-///   5. Context building (data cascade + page.* + toc + excerpt)
+///   5. Context building (data cascade + document.* + toc + excerpt)
 ///   6. Layout rendering through Toupee Engine (content as slot)
 ///
 /// When `pagination` is non-null the paginate context is injected (list layouts).
@@ -91,13 +91,16 @@ fn renderPage(
     // Phase 2: context building
     var ctx = try toupee.Context.initFrom(a, base_ctx);
     try detachPerPageDocumentMap(a, &ctx, base_ctx);
-    try ctx.putAt("page.path", .{ .string = entry.url_path });
-    try ctx.putAt("page.url", .{ .string = entry.absolute_url });
     try ctx.putAt("document.path", .{ .string = entry.url_path });
     try ctx.putAt("document.url", .{ .string = entry.absolute_url });
 
     if (pagination) |chunk| {
         try ctx.put("paginate", chunk.context);
+        if (entry.meta.paginate) |cfg| {
+            if (chunk.items.len == 1) {
+                try ctx.put(cfg.alias, chunk.items[0]);
+            }
+        }
     }
 
     try cascade.applyCascadeToContext(a, entry, scan_result, &ctx);
@@ -154,20 +157,22 @@ fn renderPage(
         try ctx.putAt("document.children", .{ .list = &[_]toupee.Value{} });
     }
 
-    try ctx.putAt("page.toc", toc_value);
     try ctx.putAt("document.toc", toc_value);
     if (excerpt) |e| {
-        try ctx.putAt("page.excerpt", .{ .string = e });
         try ctx.putAt("document.excerpt", .{ .string = e });
     } else {
         try ctx.putAt("document.excerpt", .{ .string = "" });
     }
 
+    // Engine-computed document keys that frontmatter must not overwrite.
+    const computed_keys = [_][]const u8{
+        "path", "url", "toc", "excerpt", "style", "layout",
+        "parent", "ancestors", "children",
+    };
+
     if (entry.raw_frontmatter == .map) {
         var fm_it = entry.raw_frontmatter.map.iterator();
         while (fm_it.next()) |fm_entry| {
-            const key = try std.fmt.allocPrint(a, "page.{s}", .{fm_entry.key_ptr.*});
-            try ctx.putAt(key, fm_entry.value_ptr.*);
             if (std.mem.eql(u8, fm_entry.key_ptr.*, "document") and fm_entry.value_ptr.* == .map) {
                 var doc_it = fm_entry.value_ptr.*.map.iterator();
                 while (doc_it.next()) |doc_entry| {
@@ -175,6 +180,18 @@ fn renderPage(
                     const val = doc_entry.value_ptr.*;
                     const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
                     try ctx.putAt(doc_key, val_copy);
+                }
+            } else {
+                var is_computed = false;
+                for (computed_keys) |ck| {
+                    if (std.mem.eql(u8, fm_entry.key_ptr.*, ck)) {
+                        is_computed = true;
+                        break;
+                    }
+                }
+                if (!is_computed) {
+                    const key = try std.fmt.allocPrint(a, "document.{s}", .{fm_entry.key_ptr.*});
+                    try ctx.putAt(key, fm_entry.value_ptr.*);
                 }
             }
         }
@@ -285,7 +302,10 @@ pub fn renderAll(
             };
 
             const base_path = page.url_path;
-            const chunks = try paginate(a, items, cfg.size, base_path, cfg.path);
+            const chunks = if (cfg.slug) |slug_field|
+                try paginateBySlug(a, items, base_path, slug_field)
+            else
+                try paginate(a, items, cfg.size, base_path, cfg.path);
             defer a.free(chunks);
 
             var first_result: ?RenderResult = null;
@@ -352,7 +372,6 @@ fn resolveInterpolations(
             try out.appendSlice(a, "");
             continue;
         };
-        defer a.free(str_val);
 
         if (pipe) |p| {
             var transform_part = std.mem.trim(u8, inner[p + 1 ..], " \t\n\r");
@@ -477,6 +496,99 @@ pub fn paginate(
 
         chunks[i] = .{
             .items = page_items,
+            .context = .{ .map = ctx_map },
+            .output_path = page_path,
+        };
+    }
+
+    return chunks;
+}
+
+/// Splits a collection into one chunk per item, using a named field from each
+/// item as the URL slug instead of a numeric page index.
+/// Each chunk contains exactly one item and its URL is `{base_path}{slug}/`.
+pub fn paginateBySlug(
+    a: Allocator,
+    items: []const toupee.Value,
+    base_path: []const u8,
+    slug_field: []const u8,
+) ![]PaginationChunk {
+    const total = if (items.len == 0) 1 else items.len;
+    const chunks = try a.alloc(PaginationChunk, total);
+
+    if (items.len == 0) {
+        var ctx_map = ValueMap{};
+        try ctx_map.put(a, "items", .{ .list = &[_]toupee.Value{} });
+        try ctx_map.put(a, "page", .{ .integer = 1 });
+        try ctx_map.put(a, "total_pages", .{ .integer = 1 });
+        chunks[0] = .{
+            .items = &[_]toupee.Value{},
+            .context = .{ .map = ctx_map },
+            .output_path = try a.dupe(u8, base_path),
+        };
+        return chunks;
+    }
+
+    for (items, 0..) |item, i| {
+        const slug = switch (item) {
+            .map => |m| blk: {
+                const v = m.get(slug_field) orelse break :blk slug_field;
+                break :blk switch (v) {
+                    .string => |s| s,
+                    else => slug_field,
+                };
+            },
+            else => slug_field,
+        };
+
+        const page_path = try std.fmt.allocPrint(a, "{s}{s}/", .{ base_path, slug });
+        const single = try a.alloc(toupee.Value, 1);
+        single[0] = item;
+
+        var ctx_map = ValueMap{};
+        try ctx_map.put(a, "items", .{ .list = single });
+        try ctx_map.put(a, "page", .{ .integer = @intCast(i + 1) });
+        try ctx_map.put(a, "total_pages", .{ .integer = @intCast(total) });
+        try ctx_map.put(a, "slug", .{ .string = slug });
+
+        if (i > 0) {
+            const prev_item = items[i - 1];
+            const prev_slug = switch (prev_item) {
+                .map => |m| blk: {
+                    const v = m.get(slug_field) orelse break :blk slug_field;
+                    break :blk switch (v) {
+                        .string => |s| s,
+                        else => slug_field,
+                    };
+                },
+                else => slug_field,
+            };
+            var prev = ValueMap{};
+            try prev.put(a, "url", .{ .string = try std.fmt.allocPrint(a, "{s}{s}/", .{ base_path, prev_slug }) });
+            try prev.put(a, "page", .{ .integer = @intCast(i) });
+            try ctx_map.put(a, "previous", .{ .map = prev });
+        }
+
+        if (i < total - 1) {
+            const next_item = items[i + 1];
+            const next_slug = switch (next_item) {
+                .map => |m| blk: {
+                    const v = m.get(slug_field) orelse break :blk slug_field;
+                    break :blk switch (v) {
+                        .string => |s| s,
+                        else => slug_field,
+                    };
+                },
+                else => slug_field,
+            };
+            var next = ValueMap{};
+            try next.put(a, "url", .{ .string = try std.fmt.allocPrint(a, "{s}{s}/", .{ base_path, next_slug }) });
+            try next.put(a, "page", .{ .integer = @intCast(i + 2) });
+            try ctx_map.put(a, "next", .{ .map = next });
+        }
+
+        chunks[i] = .{
+            .items = single,
             .context = .{ .map = ctx_map },
             .output_path = page_path,
         };

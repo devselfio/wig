@@ -1,5 +1,5 @@
 test:
-  name: Shared _core templates available across styles
+  name: Shared cube templates available across styles
   action:
     wig: build
 input:
@@ -11,7 +11,9 @@ input:
         style: default
         layout: page.html
     styles:
-      _core:
+      cube:
+        style.yaml: |
+          name: cube
         templates:
           layouts:
             base.html: |
@@ -19,10 +21,11 @@ input:
       default:
         style.yaml: |
           name: default
+          depends: [cube]
         templates:
           layouts:
             page.html: |
-              <t-extend template="_core:layouts/base.html">
+              <t-extend template="cube:layouts/base.html">
               <t-define name="body"><main><t-slot /></main></t-define>
               </t-extend>
     pages:

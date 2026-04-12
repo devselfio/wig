@@ -19,7 +19,6 @@ pub const toc_mod = @import("toc.zig");
 pub const search = @import("search.zig");
 pub const feeds = @import("feeds.zig");
 pub const patterns = @import("patterns.zig");
-const pattern_manifests = @import("pattern_manifests.zig");
 pub const app = @import("app.zig");
 pub const router = @import("router.zig");
 pub const handler = @import("handler.zig");
@@ -59,6 +58,7 @@ pub const WigError = error{
     BuildFailed,
     OutputDirNotClean,
     TemplateConflict,
+    InvalidBundleReference,
 };
 
 pub const StyleLoader = template_loader.StyleLoader;
@@ -67,6 +67,7 @@ const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
 fn buildPhase_styleTokensSiteData(
     ba: Allocator,
+    abs_root: []const u8,
     site_cfg: *const config.SiteConfig,
     style_cfgs: []config.StyleConfig,
     data_result: *config.DataResult,
@@ -87,6 +88,44 @@ fn buildPhase_styleTokensSiteData(
                 try std.fmt.allocPrint(ba, "styles.{s}.tokens.computed", .{style_cfg.name}),
                 token_result.value,
             );
+        }
+
+        // Load style-scoped data directory (styles/{name}/data/) into the style namespace.
+        const style_data_path = try std.fs.path.join(ba, &.{ abs_root, "styles", style_cfg.name, "data" });
+        var style_data = try config.loadDataDir(ba, style_data_path);
+        var sd_it = style_data.iterator();
+        while (sd_it.next()) |sd_entry| {
+            const ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.{s}", .{ style_cfg.name, sd_entry.key_ptr.* });
+            if (style_ctx.resolve(ctx_key) != null) continue;
+            if (sd_entry.value_ptr.* == .map) {
+                try synthesizeItemsLists(ba, &sd_entry.value_ptr.*.map);
+            }
+            try style_ctx.putAt(ctx_key, sd_entry.value_ptr.*);
+        }
+
+        // Build flat `all` list for patterns: combines every category's items with a `category` field.
+        const patterns_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns", .{style_cfg.name});
+        if (style_ctx.resolve(patterns_key)) |patterns_val| {
+            if (patterns_val == .map) {
+                var all_items = std.ArrayListUnmanaged(toupee.Value){};
+                var pat_it = patterns_val.map.iterator();
+                while (pat_it.next()) |cat_entry| {
+                    if (cat_entry.value_ptr.* != .map) continue;
+                    const cat_items = cat_entry.value_ptr.*.map.get("items") orelse continue;
+                    if (cat_items != .list) continue;
+                    for (cat_items.list) |item| {
+                        if (item == .map) {
+                            var augmented = try cloneValueMap(ba, item.map);
+                            try augmented.put(ba, "category", .{ .string = cat_entry.key_ptr.* });
+                            try all_items.append(ba, .{ .map = augmented });
+                        } else {
+                            try all_items.append(ba, item);
+                        }
+                    }
+                }
+                const all_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns.all", .{style_cfg.name});
+                try style_ctx.putAt(all_key, .{ .list = try ba.dupe(toupee.Value, all_items.items) });
+            }
         }
     }
 
@@ -109,6 +148,51 @@ fn buildPhase_styleTokensSiteData(
     return style_ctx;
 }
 
+/// Recursively walks `parent` looking for sub-maps whose values are all
+/// maps (i.e. a directory of YAML files) and synthesizes an `items` list
+/// so templates can iterate with `t-for`.  Each item is a shallow clone
+/// with an added `id` field set to the map key.
+fn synthesizeItemsLists(a: Allocator, parent: *ValueMap) !void {
+    var it = parent.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* != .map) continue;
+        var inner = &entry.value_ptr.*.map;
+
+        // Recurse first so nested directories get items before parent.
+        try synthesizeItemsLists(a, inner);
+
+        if (inner.get("items") != null) continue;
+
+        var all_maps = true;
+        var check_it = inner.iterator();
+        while (check_it.next()) |e| {
+            if (e.value_ptr.* != .map) {
+                all_maps = false;
+                break;
+            }
+        }
+        if (!all_maps or inner.count() == 0) continue;
+
+        var items = std.ArrayListUnmanaged(toupee.Value){};
+        var stem_it = inner.iterator();
+        while (stem_it.next()) |stem_entry| {
+            var item_map = try cloneValueMap(a, stem_entry.value_ptr.*.map);
+            try item_map.put(a, "id", .{ .string = stem_entry.key_ptr.* });
+            try items.append(a, .{ .map = item_map });
+        }
+        try inner.put(a, "items", .{ .list = try a.dupe(toupee.Value, items.items) });
+    }
+}
+
+fn cloneValueMap(a: Allocator, src: ValueMap) !ValueMap {
+    var dst: ValueMap = .{};
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        try dst.put(a, entry.key_ptr.*, entry.value_ptr.*);
+    }
+    return dst;
+}
+
 fn buildPhase_assetBundles(
     ba: Allocator,
     a: Allocator,
@@ -117,6 +201,8 @@ fn buildPhase_assetBundles(
     style_ctx: *toupee.Context,
     output_dir: fs.Dir,
 ) !void {
+    config.sortByDependencyOrder(style_cfgs);
+
     var asset_entries: std.ArrayListUnmanaged(bundles.AssetEntry) = .{};
 
     const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
@@ -126,6 +212,8 @@ fn buildPhase_assetBundles(
         var styles_dir = sd;
         defer styles_dir.close();
 
+        // Process bundle entries in declaration order per style.
+        // Topological sort ensures dependencies are already in asset_entries.
         for (style_cfgs) |style_cfg| {
             const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
             if (assets_val_opt) |assets_val| {
@@ -141,34 +229,57 @@ fn buildPhase_assetBundles(
                                     .string => |s| s,
                                     else => continue,
                                 };
-                                const file_list = switch (bundle_entry.value) {
-                                    .array => |arr| arr,
+
+                                switch (bundle_entry.value) {
+                                    .array => |file_list| {
+                                        var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
+                                        defer file_patterns.deinit(ba);
+                                        for (file_list) |item| {
+                                            if (item == .string) {
+                                                const resolved = try resolveStylePath(ba, style_cfg.name, item.string);
+                                                try file_patterns.append(ba, resolved);
+                                            }
+                                        }
+
+                                        const result = try bundles.processBundle(
+                                            ba,
+                                            style_cfg.name,
+                                            bundle_type,
+                                            bundle_name,
+                                            file_patterns.items,
+                                            styles_dir,
+                                            style_ctx,
+                                            output_dir,
+                                        );
+
+                                        try asset_entries.append(ba, .{
+                                            .style_name = style_cfg.name,
+                                            .bundle_type = bundle_type,
+                                            .bundle_name = bundle_name,
+                                            .result = result,
+                                        });
+                                    },
+                                    .string => |ref| {
+                                        const colon = std.mem.indexOfScalar(u8, ref, ':') orelse continue;
+                                        const src_style = ref[0..colon];
+                                        const src_bundle = ref[colon + 1 ..];
+
+                                        const result = for (asset_entries.items) |ae| {
+                                            if (std.mem.eql(u8, ae.style_name, src_style) and
+                                                std.mem.eql(u8, ae.bundle_type, bundle_type) and
+                                                std.mem.eql(u8, ae.bundle_name, src_bundle))
+                                                break ae.result;
+                                        } else return error.InvalidBundleReference;
+
+                                        try asset_entries.append(ba, .{
+                                            .style_name = style_cfg.name,
+                                            .bundle_type = bundle_type,
+                                            .bundle_name = bundle_name,
+                                            .result = result,
+                                        });
+                                    },
                                     else => continue,
-                                };
-
-                                var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
-                                defer file_patterns.deinit(ba);
-                                for (file_list) |item| {
-                                    if (item == .string) try file_patterns.append(ba, item.string);
                                 }
-
-                                const result = try bundles.processBundle(
-                                    ba,
-                                    style_cfg.name,
-                                    bundle_type,
-                                    bundle_name,
-                                    file_patterns.items,
-                                    styles_dir,
-                                    style_ctx,
-                                    output_dir,
-                                );
-
-                                try asset_entries.append(ba, .{
-                                    .style_name = style_cfg.name,
-                                    .bundle_type = bundle_type,
-                                    .bundle_name = bundle_name,
-                                    .result = result,
-                                });
                             }
                         }
                     }
@@ -179,6 +290,44 @@ fn buildPhase_assetBundles(
 
     const asset_ctx = try bundles.buildAssetContext(ba, asset_entries.items);
     try style_ctx.put("assets", asset_ctx);
+
+    // Build styles.{name}.bundles.{type} as lists of {path, hash, content} maps
+    // so templates can iterate: <t-for stylesheet in document.style.bundles.css>
+    for (style_cfgs) |sc| {
+        var type_lists = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(toupee.Value)){};
+
+        for (asset_entries.items) |ae| {
+            if (!std.mem.eql(u8, ae.style_name, sc.name)) continue;
+            const gop = try type_lists.getOrPut(ba, ae.bundle_type);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            var entry_map = std.StringArrayHashMapUnmanaged(toupee.Value){};
+            try entry_map.put(ba, "path", .{ .string = ae.result.path });
+            try entry_map.put(ba, "hash", .{ .string = ae.result.hash });
+            try entry_map.put(ba, "name", .{ .string = ae.bundle_name });
+            try gop.value_ptr.append(ba, .{ .map = entry_map });
+        }
+
+        var bundles_map = std.StringArrayHashMapUnmanaged(toupee.Value){};
+        var tl_it = type_lists.iterator();
+        while (tl_it.next()) |entry| {
+            try bundles_map.put(ba, entry.key_ptr.*, .{ .list = try ba.dupe(toupee.Value, entry.value_ptr.items) });
+        }
+
+        if (bundles_map.count() > 0) {
+            const path = try std.fmt.allocPrint(ba, "styles.{s}.bundles", .{sc.name});
+            try style_ctx.putAt(path, .{ .map = bundles_map });
+        }
+    }
+}
+
+/// Resolves a bundle source file path. Bare paths are relative to the current
+/// style's root; `style:path` prefixed paths are relative to the named style's root.
+/// Returns a path relative to the `styles/` directory.
+fn resolveStylePath(a: Allocator, current_style: []const u8, raw: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
+        return std.fmt.allocPrint(a, "{s}/{s}", .{ raw[0..colon], raw[colon + 1 ..] });
+    }
+    return std.fmt.allocPrint(a, "{s}/{s}", .{ current_style, raw });
 }
 
 fn buildPhase_scanAndTaxonomies(
@@ -213,8 +362,8 @@ fn buildPhase_scanAndTaxonomies(
         default_slugify,
     );
 
-    const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.taxonomies);
-    try style_ctx.put("taxonomies", tax_ctx);
+    const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.tags);
+    try style_ctx.put("tags", tax_ctx);
 
     if (scan_result.collections.getPtr("pages")) |pv| {
         try style_ctx.putAt("pages", pv.*);
@@ -410,13 +559,10 @@ pub const Site = struct {
         defer output_dir.close();
 
         // --- Phase: style context, tokens, site + data YAML ---
-        var style_ctx = try buildPhase_styleTokensSiteData(ba, &site_cfg, style_cfgs, &data_result);
+        var style_ctx = try buildPhase_styleTokensSiteData(ba, abs_root, &site_cfg, style_cfgs, &data_result);
 
         // --- Phase: CSS/JS bundles and `assets` context ---
         try buildPhase_assetBundles(ba, a, abs_root, style_cfgs, &style_ctx, output_dir);
-
-        // --- Phase: pattern YAML manifests under styles/{name}/patterns/ ---
-        try pattern_manifests.loadIntoContext(ba, abs_root, style_cfgs, &style_ctx);
 
         // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
@@ -445,7 +591,7 @@ pub const Site = struct {
         // --- Hook: pre_scan ---
         for (ctx.hooks.pre_scan) |hook| try hook(&ctx);
 
-        // --- Phase: scan pages, taxonomies, `pages` context ---
+        // --- Phase: scan pages, tags, `pages` context ---
         var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx, &data_result);
         ctx.scan_result = &scan_result;
 

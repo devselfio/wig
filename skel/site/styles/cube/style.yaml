@@ -1,0 +1,31 @@
+# CUBE CSS structural primitives: reset, globals, compositions, utilities, blocks, exceptions.
+# Root of the dependency tree for all Wig styles.
+
+name: cube
+
+bundles:
+  css:
+    cube:
+      - cube/css/globals/reset.css
+      - cube/css/globals/document.css
+      - cube/css/fonts/system.css
+      - cube/css/compositions/center.css
+      - cube/css/compositions/cluster.css
+      - cube/css/compositions/flow.css
+      - cube/css/compositions/grid.css
+      - cube/css/compositions/region.css
+      - cube/css/compositions/repel.css
+      - cube/css/compositions/sidebar.css
+      - cube/css/compositions/stack.css
+      - cube/css/compositions/switcher.css
+      - cube/css/compositions/wrapper.css
+      - cube/css/utilities/indent.css
+      - cube/css/utilities/text-colors.css
+      - cube/css/utilities/text-sizes.css
+      - cube/css/utilities/visually-hidden.css
+      - cube/css/utilities/radius.css
+      - cube/css/blocks/button.css
+      - cube/css/blocks/tag.css
+      - cube/css/blocks/prose.css
+      - cube/css/exceptions/narrow.css
+      - cube/css/globals/syntax.css
