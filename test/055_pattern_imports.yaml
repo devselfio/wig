@@ -1,0 +1,49 @@
+test:
+  name: Pattern imports with glob resolution
+  comment: >
+    imports: supports glob (**) for importing all patterns from another style.
+    Local patterns override imported ones with the same category/id.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: theme
+        layout: page.html
+    styles:
+      base:
+        style.yaml: |
+          name: base
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              description: Base button
+              ---
+              <button>Base</button>
+        css:
+          blocks:
+            button.css: |
+              .button { display: inline-flex; }
+      theme:
+        style.yaml: |
+          name: theme
+          imports:
+            base:
+              patterns: "**"
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: true

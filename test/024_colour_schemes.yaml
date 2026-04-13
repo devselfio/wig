@@ -1,6 +1,8 @@
 test:
-  name: Color scheme CSS generation.
-  comment: Tests palette indirection -- Wig pre-resolves palette names to hex at load time.
+  name: Color scheme CSS generation via pattern auto-bundling.
+  comment: >
+    Pattern CSS with front-matter renders palette-resolved colour values.
+    Palette indirection (name -> hex) is pre-resolved at load time.
   action:
     wig: build
   fixtures: []
@@ -49,23 +51,26 @@ input:
         style.yaml: |
           name: default
           scheme: mono
-          bundles:
-            css:
-              colors:
-                - css/colors.css
         templates:
           layouts:
             page.html: |
               <t-slot />
+        patterns:
+          tokens:
+            colors.html: |
+              ---
+              name: Colours
+              ---
         css:
-          colors.css: |
-            ---
-            ---
-            :root {
-              --text-primary: <t-raw name="colors.mono.light.styles.text.primary" />;
-              --text-link: <t-raw name="colors.mono.light.styles.text.link" />;
-              --bg-primary: <t-raw name="colors.mono.light.styles.background.primary" />;
-            }
+          tokens:
+            colors.css: |
+              ---
+              ---
+              :root {
+                --text-primary: <t-raw name="colors.mono.light.styles.text.primary" />;
+                --text-link: <t-raw name="colors.mono.light.styles.text.link" />;
+                --bg-primary: <t-raw name="colors.mono.light.styles.background.primary" />;
+              }
     pages:
       _index.dj: |
         ---
@@ -76,11 +81,6 @@ output:
     index.html: |
       <p>Home.</p>
     assets:
-      default:
-        css:
-          colors.*.css: |
-            :root {
-              --text-primary: #000000;
-              --text-link: #0066cc;
-              --bg-primary: #ffffff;
-            }
+      css:
+        styles:
+          default.*.css: true

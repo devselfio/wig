@@ -68,14 +68,17 @@ wig/
     slug.zig        # URL slugification (slugifyStem, isSpecialStem, slugifyTerm)
     xml.zig         # XML escaping (appendXmlEscaped)
     frontmatter.zig # shared YAML frontmatter detection + stripping
-    bundles.zig     # asset bundles (CSS + JS): render, concat, hash
+    bundles.zig     # LEGACY — superseded by auto_bundler.zig for pattern-driven bundling
+    pattern_parser.zig  # pattern file parser: front-matter + body split on <!-- variant: .* --> delimiters
+    pattern_loader.zig  # pattern directory scanner: styles/{name}/patterns/{category}/*.html, resource discovery
+    import_resolver.zig # imports: resolution: merge patterns across styles, topological ordering
+    auto_bundler.zig    # @layer CSS auto-bundling from resolved patterns, CUBE order, content-hashed output
     scanner.zig     # walk pages/, collections (ScanResult.init), sections, render gating
     taxonomies.zig  # reverse index from page tags/categories (context key: `tags`)
     pages.zig       # page rendering: unified renderPage, content parsing, shortcodes, layout
     toc.zig         # heading extraction from HTML for table of contents
     search.zig      # search index generation (search.json)
     feeds.zig       # Atom feed + sitemap generation
-    patterns.zig    # CSS doc comment parsing, pattern library pages
     app.zig         # web framework: App, route declaration, middleware
     router.zig      # route matching, path parameters, RouteGroup (with deinit)
     handler.zig     # request Context (with deinit), Endpoint, pipeline()
@@ -140,7 +143,7 @@ my-project/
 **How the two paths share everything:**
 - **Templates** — `src/main.zig` loads the same Toupee `Engine` with the same templates from `styles/`. A route handler calls `engine.renderToString("blocks/game-grid.html", ctx)` to produce an HTMX fragment.
 - **Data** — `data/site.yaml`, color schemes, tokens are available to both paths. The SSG injects them via `buildAll`; the app loads them via Wig's config API.
-- **Styles** — CSS bundles, CUBE layers, fluid tokens are built by `wig build` and served as static assets by both GitHub Pages and the app server.
+- **Styles** — Auto-bundled pattern CSS (`@layer` order), CUBE layers, fluid tokens are built by `wig build` and served as static assets by both GitHub Pages and the app server.
 
 **Web-framework layer** (`app.zig`, `router.zig`, `handler.zig`, `session.zig`) is still **early**: behaviour is not fully specified, it is **not** exercised by the current YAML spec suite, and APIs may change. The four technical requirements are:
 
@@ -351,9 +354,9 @@ Wig's template context has three tiers:
 - *Any other key* -- from files in `data/` (e.g. `data/colors/solarized.yaml` -> `colors.solarized`)
 
 **Style scope** (`styles.{name}.*`):
-- `depends` -- dependency list (from `style.yaml`)
 - `tokens` -- design tokens (from `style.yaml`, extended with `tokens.computed`)
-- `bundles` -- iterable bundle lists (engine-computed)
+- `css.path` -- hashed auto-bundled CSS path (engine-computed)
+- `patterns` -- resolved pattern tree with categories, items lists, and flat all list (engine-computed)
 - *Any other key* -- from `style.yaml` or from files in `styles/{name}/data/`
 
 **Page scope** (per-page):
@@ -362,7 +365,7 @@ Wig's template context has three tiers:
 
 **Reserved site-level keys** (data files must not shadow): `pages`, `styles`, `tags`, `assets`, `paginate`.
 
-**Reserved style-level keys** (style data files must not shadow): `bundles`, `depends`, `tokens`.
+**Reserved style-level keys** (style data files must not shadow): `css`, `patterns`, `tokens`.
 
 ### Data cascade
 
@@ -433,28 +436,118 @@ Each style lives under `styles/{name}/` with this structure:
 
 ```
 styles/default/
-  style.yaml         # style manifest (name, bundles, tokens, scheme, custom fields)
+  style.yaml         # style manifest (name, imports, tokens, scheme, custom fields)
+  patterns/
+    tokens/*.html    # design token documentation patterns
+    resets/*.html    # CSS reset patterns
+    globals/*.html   # global styling patterns (document, syntax, surface)
+    fonts/*.html     # font stack patterns
+    compositions/*.html  # layout compositions (stack, cluster, grid, sidebar, etc.)
+    utilities/*.html # utility class patterns (indent, radius, text-colors, etc.)
+    blocks/*.html    # component patterns (button, tag, prose, skip-link, etc.)
+    exceptions/*.html # exception patterns (narrow, etc.)
   templates/
     layouts/*.html   # page shells (base.html, page.html, post.html)
     blocks/*.html    # components (breadcrumbs.html, card.html)
   css/
-    compositions/*.css
-    blocks/*.css
-    fonts/*.css
+    tokens/*.css     # token CSS (rendered from front-matter when present)
+    resets/*.css
     globals/*.css
+    fonts/*.css
+    compositions/*.css
     utilities/*.css
+    blocks/*.css
+    exceptions/*.css
   data/              # style-scoped data (accessible at styles.{name}.*)
-    patterns/        # pattern library manifests
-      blocks/
-        *.yaml       # merged into styles.{name}.patterns.blocks.{stem}
-      compositions/*.yaml
-      utilities/*.yaml
 ```
 
-- `templates/layouts/` -- page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
-- `templates/blocks/` -- CUBE blocks (components). Use `<t-include template="blocks/card.html" />`. Each block has CSS in `css/blocks/` and HTML in `templates/blocks/`.
-- `css/` -- stylesheets. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
-- `data/` -- style-scoped data. YAML/JSON files under `styles/{name}/data/` are loaded into `styles.{name}.*`. Nested directories create nested keys. Data files must not shadow engine-managed keys (`bundles`, `depends`, `tokens`). Pattern YAML files live here under `data/patterns/` (see **Pattern library**).
+- `patterns/` — CUBE CSS patterns. Each `.html` file has YAML front-matter (metadata, config, description) and an HTML body (example markup). Variants are separated by `<!-- variant: name -->` delimiters. See **Pattern file format**.
+- `css/` — Pattern CSS. Files at `css/{category}/{id}.css` are discovered by convention and associated with the matching pattern. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
+- `templates/layouts/` — page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
+- `templates/blocks/` — CUBE blocks (components). Use `<t-include template="blocks/card.html" />`.
+- `data/` — style-scoped data. YAML/JSON files under `styles/{name}/data/` are loaded into `styles.{name}.*`.
+
+### CUBE CSS categorization guide
+
+Wig is a style-focused site generator with first-class support for the CUBE CSS methodology. Patterns are organized into the following categories, which determine both the `@layer` order in auto-bundled CSS and the sidebar display order in the pattern library:
+
+| Category | Layer | Purpose | Examples |
+|----------|-------|---------|----------|
+| **tokens** | `tokens` | Design token custom properties (colours, spacing, typography) | Colour swatches, spacing scale, type scale |
+| **resets** | `resets` | CSS reset / normalization | Box-sizing, margin removal, form resets |
+| **globals** | `globals` | Document-level styles applied via element selectors | Body typography, link styles, surface backgrounds |
+| **fonts** | `fonts` | Font-face declarations and font stack utilities | System font stack, custom web fonts |
+| **compositions** | `compositions` | Layout primitives (no visual styling) | Stack, Cluster, Sidebar, Grid, Switcher, Center, Flow, Region, Repel, Wrapper |
+| **utilities** | `utilities` | Single-property utility classes | Text sizes, text colours, indent, radius, visually-hidden |
+| **blocks** | `blocks` | Styled components with semantic markup | Button, Tag, Prose, Skip Link, Card, Header, Footer |
+| **exceptions** | `exceptions` | Data-attribute overrides for edge cases | `[data-narrow]` for constrained widths |
+
+**Layer ordering:** CSS is auto-bundled with `@layer` declarations in the order above. This ensures the CUBE CSS cascade: resets first, exceptions last.
+
+**Categorization guidelines:**
+- A pattern that sets layout (flex/grid) without visual styling → **compositions**
+- A pattern that applies a single property → **utilities**
+- A pattern with semantic markup and visual styling → **blocks**
+- A pattern that overrides via `data-*` attributes → **exceptions**
+- Document-level element selectors (h1-h6, p, a) → **globals**
+- Custom property definitions → **tokens**
+
+### Pattern file format
+
+Each pattern is an HTML file with YAML front-matter in `styles/{name}/patterns/{category}/{id}.html`:
+
+```html
+---
+name: Button
+source: .button
+description: Styled control for button and anchor elements.
+config:
+  - property: --button-bg
+    default: var(--color-bg-secondary)
+    description: Background colour.
+notes: Use the <code>templates/blocks/button.html</code> template for consistent markup.
+---
+<button class="button">Default</button>
+<!-- variant: Primary -->
+<button class="button" data-type="primary">Primary</button>
+```
+
+**Front-matter fields:** `name` (display name), `source` (CSS selector), `description` (HTML allowed via `t-raw`), `config` (list of `{property, default, description}` maps), `exceptions` (list of `{attribute, description}` maps), `notes` (HTML), `links` (list of `{label, url}` maps).
+
+**Body:** HTML example markup. Default example is the text before the first variant delimiter.
+
+**Variant delimiters:** `<!-- variant: Name -->` on its own line separates variants. Each variant gets its own preview and source view.
+
+**Front-matter-only patterns:** Patterns with no body (e.g. tokens, resets) are valid. They document configuration without providing example markup.
+
+**Resource discovery by convention:**
+- `css/{category}/{id}.css` — pattern CSS (rendered if it has front-matter)
+- `templates/{category}/{id}.html` — Toupee template (raw source shown in pattern library)
+- `js/{category}/{id}.js` — JavaScript (copied to output)
+- `assets/{category}/{id}/*` — asset files (copied to output)
+
+### Imports
+
+Styles declare dependencies via `imports:` in `style.yaml`. Imported patterns merge into the importing style's namespace (local patterns override imported ones at the same `{category}/{id}`).
+
+```yaml
+imports:
+  cube:
+    patterns: "**"          # import all patterns from cube
+  highlights:
+    patterns:
+      blocks:
+        - code-editor       # import specific pattern
+      globals: "**"         # import entire category
+    data:
+      colors: [rosepine, solarized]  # validate data exists in upstream
+```
+
+**Pattern imports** (`patterns:`): Merged into the local style's resolved pattern set. Local patterns at the same `{category}/{id}` take precedence. Resources (CSS, templates, JS, assets) travel with the pattern.
+
+**Data imports** (`data:`): Validate that the specified data exists in the upstream style's namespace. Data remains accessible at `styles.{upstream}.*` — it is not copied into the importing style's namespace.
+
+**Build order:** `imports:` keys determine topological sort order for pattern resolution and auto-bundling. Upstream styles are processed before their dependents.
 
 ### Template resolution
 
@@ -484,33 +577,36 @@ Resolves to `{style}/templates/layouts/page.html`. No `layouts/` prefix needed i
 
 Parsing: split on first colon. If present, left = style name, right = path. Applies to both `<t-extend>` and `<t-include>`. Colons in path segments are reserved. Cross-style references use **`style:path` only** (there is no `cube/layouts/...` slash alias).
 
-### Bundles
+### CSS auto-bundling
 
-Asset bundles are declared in `style.yaml` as a **nested map only**: `bundles` → **term** (e.g. `css`, `js`) → **bundle name** → **YAML sequence** of file path strings. There is no flat list form at the `bundles` key, and each bundle’s file list must be an array (a one-file bundle is `[ default/css/surface.css ]`, not a single unquoted path scalar). Each path is relative to the site’s **`styles/`** directory when the build opens it (e.g. `default/css/surface.css` for the `default` style).
+Wig automatically bundles CSS from resolved patterns into a single hashed file per style. No manual `bundles:` configuration is needed.
 
-**Legacy alias:** the style manifest may use the top-level key **`assets`** instead of **`bundles`** with the same nested shape; Wig treats them equivalently when loading `style.yaml`.
+**How it works:**
+1. Patterns are resolved (local + imported via `imports:`)
+2. CSS files at `css/{category}/{id}.css` are collected for each pattern
+3. Each category's CSS is wrapped in an `@layer` block (CUBE order: tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions)
+4. The concatenated CSS is content-hashed and written to `zig-out/site/assets/css/styles/{style}.{hash}.css`
 
-```yaml
-name: default
-bundles:
-  css:
-    surface:
-      - default/css/surface.css
-    main:
-      - default/css/reset.css
-      - default/css/main.css
-  js:
-    app:
-      - default/js/app.js
+**Template access:** `document.style.css.path` provides the hashed CSS path for the current page's style:
+
+```html
+<link rel="stylesheet" t-var:href="document.style.css.path" />
 ```
 
-The **term** (`css`, `js`, …) is only a grouping label: it names the output subdirectory under each style’s hashed assets tree and the emitted file extension. The engine does not special-case “CSS” vs “JS” beyond that.
+**Generated CSS structure:**
 
-The **bundle name** may contain `/` (e.g. `nested/demo`); output files go under `assets/{style}/{term}/…` with the same directory nesting, and the filename is `{leaf}.{hash}.{term}` where `leaf` is the last segment of the bundle name.
+```css
+@layer tokens { /* css/tokens/*.css */ }
+@layer resets { /* css/resets/*.css */ }
+@layer globals { /* css/globals/*.css */ }
+@layer fonts { /* css/fonts/*.css */ }
+@layer compositions { /* css/compositions/*.css */ }
+@layer utilities { /* css/utilities/*.css */ }
+@layer blocks { /* css/blocks/*.css */ }
+@layer exceptions { /* css/exceptions/*.css */ }
+```
 
-Templates read root-relative URLs from **`assets.{style}.{term}.…`** — **one nested map key per `/` segment** in the bundle name (not a single key containing a slash), e.g. `assets.default.css.nested.demo.path` for bundle name `nested/demo` under term `css`.
-
-**Site `assets/`** at the project root (not under `styles/`) is copied verbatim into the output `assets/` directory by the build; it is separate from style bundles (no hashing, no manifest entry).
+**CSS with front-matter:** CSS files with `---` delimiters are rendered through Toupee before bundling. This enables token interpolation in CSS (e.g. generating custom properties from YAML data).
 
 ### Color schemes
 
@@ -548,13 +644,33 @@ CSS files with frontmatter are rendered through Toupee but do **not** have the `
 
 ### Pattern library
 
-**YAML manifests (authoring for templates):** Each style may include **`data/patterns/{category}/{stem}.yaml`** files under its style data directory. These are loaded by the general style data directory mechanism (see **Style directory structure**) into context at **`styles.{style}.patterns.{category}.{stem}`** (nested maps: category → stem → fields). Each category sub-map also receives a synthetic **`items`** list for `t-for` iteration (each item is a clone of the pattern map with an added `id` field set to the stem).
+Wig provides first-class CUBE CSS pattern support. Each style's patterns are HTML files with YAML front-matter in `styles/{name}/patterns/{category}/{id}.html`. See **Pattern file format** for the file structure.
 
-In page layouts, the active style is available as **`document.style`**, so a block manifest is reachable as **`document.style.patterns.blocks.{stem}.name`** (and other fields you define: `description`, `example`, `variants`, …).
+**Context tree:** Resolved patterns are exposed at `styles.{name}.patterns`:
+- `styles.{name}.patterns.{category}.{id}` — individual pattern fields (name, description, example, variants, css_source, template_source, etc.)
+- `styles.{name}.patterns.{category}.items` — iterable list of patterns in that category
+- `styles.{name}.patterns.all` — flat list of all patterns in CUBE order, each with a composite `slug` field (`{category}/{id}`)
 
-**Iteration:** Use `<t-for pattern in styles.{name}.patterns.blocks>` to iterate over patterns in a category. Toupee's `t-for` resolves the `items` list within the map automatically.
+**Active style shortcut:** Since `document.style` resolves to the full style object, templates can use `document.style.patterns.{category}.items` without knowing the style name.
 
-**CSS doc comments:** [`patterns.zig`](patterns.zig) can discover pattern-like metadata from **`css/blocks/*.css`** doc comments — a complementary mechanism for documentation and future pattern index generation.
+**Pagination:** The pattern library uses slug-based pagination with `paginate.layout` to generate both the shell and per-pattern pages from a single `_index.dj`:
+
+```yaml
+layout: cube:layouts/patterns.html
+paginate:
+  collection: document.style.patterns.all
+  size: 1
+  slug: slug
+  alias: pattern
+  layout: cube:layouts/pattern.html
+```
+
+This generates:
+- `patterns/index.html` — the shell (rendered with `cube:layouts/patterns.html`)
+- `patterns/blocks/button/index.html` — individual pattern (rendered with `cube:layouts/pattern.html`)
+- `patterns/compositions/stack/index.html` — etc.
+
+**Shell+iframe model:** The pattern library shell template (`patterns.html`) renders a sidebar grouped by CUBE category with viewport controls (Mobile/Tablet/Desktop/Full). Each pattern link targets a named iframe that loads the individual pattern page. The pattern page template (`pattern.html`) renders the pattern's metadata, configuration table, live example, source view, and variants.
 
 ### Feeds
 
@@ -635,6 +751,19 @@ paginate:
 ```
 
 Context: `paginate.items` (current page chunk), `paginate.page` (1-indexed), `paginate.total_pages`, `paginate.previous` / `paginate.next` (maps with `url`, `page` when applicable). URL scheme: page 1 at base path, page 2+ at `base_path/page/N/`.
+
+**Layout override for slug pagination:** When using slug-based pagination (`slug:` field), a `layout:` field inside `paginate:` causes dual rendering: the section index page renders using the page's own `layout:` (e.g. a navigation shell), while each paginated sub-page renders using `paginate.layout:` (e.g. a detail view). Without this field, slug pagination generates only the sub-pages.
+
+```yaml
+paginate:
+  collection: colours
+  size: 1
+  slug: id
+  alias: colour
+  layout: detail.html    # sub-pages use this layout
+```
+
+See `test/060_paginate_layout_override.yaml`.
 
 ### Collection sorting
 
@@ -723,7 +852,7 @@ output:
       contains: "broken link"
 ```
 
-Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `data/patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.
+Specs mirror the on-disk layout: YAML keys under `input.files` are path segments (e.g. `styles/default/templates/layouts/page.html`). The runner does not rewrite paths—use `templates/layouts/`, `templates/blocks/`, `styles/default/patterns/blocks/`, etc. Templates use explicit paths: `<t-extend template="layouts/page.html">`, `<t-include template="blocks/footer.html">`.
 
 Each spec’s `test.name` and `test.comment` state intent; the YAML fixtures and expected `output` are the **ground truth** for behaviour. Prefer writing or extending a spec **when adding an author-facing feature** unless the feature is explicitly in the “YAML not a fit” bucket above.
 

@@ -1,9 +1,9 @@
 test:
-  name: Bundle style:bundle reference inherits resolved artifact
+  name: Multi-level import chain produces correct auto-bundled CSS
   comment: >
-    A scalar style:bundle value references a dependency's already-built bundle.
-    The inheriting style gets the same artifact (path, hash, content).
-    Styles are processed in dependency order via topological sort.
+    Three styles form an import chain: core -> mid -> theme.
+    Each style's auto-bundled CSS includes its own patterns plus
+    all imported patterns. CSS is wrapped in @layer blocks.
   action:
     wig: build
 input:
@@ -18,45 +18,53 @@ input:
       core:
         style.yaml: |
           name: core
-          bundles:
-            css:
-              core:
-                - css/reset.css
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
         css:
-          reset.css: |
-            * { margin: 0; }
+          resets:
+            reset.css: |
+              * { margin: 0; }
       mid:
         style.yaml: |
           name: mid
-          depends: [core]
-          bundles:
-            css:
-              core: core:core
-              mid:
-                - css/colors.css
+          imports:
+            core:
+              patterns: "**"
+        patterns:
+          tokens:
+            colors.html: |
+              ---
+              name: Colours
+              ---
         css:
-          colors.css: |
-            :root { --fg: #000; }
+          tokens:
+            colors.css: |
+              :root { --fg: #000; }
       theme:
         style.yaml: |
           name: theme
-          depends: [core, mid]
-          bundles:
-            css:
-              core: core:core
-              mid: mid:mid
-              theme:
-                - css/surface.css
+          imports:
+            mid:
+              patterns: "**"
         templates:
           layouts:
             page.html: |
-              <t-for stylesheet in document.style.bundles.css>
-              <link t-var:href="stylesheet.path" />
-              </t-for>
+              <link t-var:href="document.style.css.path" />
               <t-slot />
+        patterns:
+          blocks:
+            surface.html: |
+              ---
+              name: Surface
+              ---
         css:
-          surface.css: |
-            body { font-family: serif; }
+          blocks:
+            surface.css: |
+              body { font-family: serif; }
     pages:
       _index.dj: |
         ---
@@ -66,15 +74,8 @@ output:
   files:
     index.html: true
     assets:
-      core:
-        css:
-          core.*.css: |
-            * { margin: 0; }
-      mid:
-        css:
-          mid.*.css: |
-            :root { --fg: #000; }
-      theme:
-        css:
-          theme.*.css: |
-            body { font-family: serif; }
+      css:
+        styles:
+          core.*.css: true
+          mid.*.css: true
+          theme.*.css: true

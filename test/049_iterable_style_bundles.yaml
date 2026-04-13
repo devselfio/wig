@@ -1,8 +1,9 @@
 test:
-  name: Iterable document.style.bundles.css in templates
+  name: document.style.css.path references the auto-bundled CSS file
   comment: >
-    document.style.bundles.css is a list of resolved bundle entries.
-    Templates iterate with t-for; entries appear in style.yaml declaration order.
+    Each style's auto-bundled CSS is exposed as document.style.css.path.
+    Templates use this for a single stylesheet link. The CSS file contains
+    all pattern CSS wrapped in @layer blocks.
   action:
     wig: build
 input:
@@ -17,32 +18,37 @@ input:
       parent:
         style.yaml: |
           name: parent
-          bundles:
-            css:
-              parent:
-                - css/reset.css
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
         css:
-          reset.css: |
-            * { margin: 0; }
+          resets:
+            reset.css: |
+              * { margin: 0; }
       child:
         style.yaml: |
           name: child
-          depends: [parent]
-          bundles:
-            css:
-              parent: parent:parent
-              child:
-                - css/surface.css
+          imports:
+            parent:
+              patterns: "**"
         templates:
           layouts:
             page.html: |
-              <t-for stylesheet in document.style.bundles.css>
-              <link rel="stylesheet" t-var:href="stylesheet.path" />
-              </t-for>
+              <link rel="stylesheet" t-var:href="document.style.css.path" />
               <t-slot />
+        patterns:
+          blocks:
+            surface.html: |
+              ---
+              name: Surface
+              ---
         css:
-          surface.css: |
-            body { color: #333; }
+          blocks:
+            surface.css: |
+              body { color: #333; }
     pages:
       _index.dj: |
         ---
@@ -52,11 +58,6 @@ output:
   files:
     index.html: true
     assets:
-      parent:
-        css:
-          parent.*.css: |
-            * { margin: 0; }
-      child:
-        css:
-          child.*.css: |
-            body { color: #333; }
+      css:
+        styles:
+          child.*.css: true

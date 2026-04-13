@@ -1,6 +1,8 @@
 test:
-  name: Fluid design tokens in CSS via Toupee.
-  comment: CSS bundle renders computed token steps into clamp() custom properties.
+  name: Fluid design tokens in CSS via pattern auto-bundling.
+  comment: >
+    Pattern-associated CSS with front-matter renders computed token steps into
+    clamp() custom properties. Output is @layer-wrapped in the style CSS file.
   action:
     wig: build
   fixtures: []
@@ -33,23 +35,27 @@ input:
             spacing:
               negative: [0.75, 0.5, 0.25]
               positive: [1.5, 2, 3, 4, 6]
-          bundles:
-            css:
-              tokens:
-                - css/tokens.css
         templates:
           layouts:
             page.html: |
+              <link rel="stylesheet" t-var:href="document.style.css.path" />
               <t-slot />
+        patterns:
+          tokens:
+            typography.html: |
+              ---
+              name: Typography
+              ---
         css:
-          tokens.css: |
-            ---
-            ---
-            :root {
-            <t-for step in styles.default.tokens.computed.typography>
-              --size-<t-var name="step.name" />: <t-var name="step.value" />;
-            </t-for>
-            }
+          tokens:
+            typography.css: |
+              ---
+              ---
+              :root {
+              <t-for step in styles.default.tokens.computed.typography>
+                --size-<t-var name="step.name" />: <t-var name="step.value" />;
+              </t-for>
+              }
     pages:
       _index.dj: |
         ---
@@ -57,9 +63,8 @@ input:
         Home.
 output:
   files:
-    index.html: |
-      <p>Home.</p>
+    index.html: true
     assets:
-      default:
-        css:
-          tokens.*.css: true
+      css:
+        styles:
+          default.*.css: true

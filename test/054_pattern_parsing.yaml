@@ -1,0 +1,68 @@
+test:
+  name: Pattern HTML file parsing with variants
+  comment: >
+    HTML pattern files have YAML front-matter and body content. Body is split
+    on ^<!-- variant: .* -->$ delimiters into default example and named variants.
+    Front-matter-only patterns (no body) are valid.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <name><t-var name="document.style.patterns.blocks.button.name" /></name>
+              <desc><t-var name="document.style.patterns.blocks.button.description" /></desc>
+              <example><t-raw name="document.style.patterns.blocks.button.example" /></example>
+              <variants><t-for v in document.style.patterns.blocks.button.variants><t-var name="v.name" />,</t-for></variants>
+              <reset><t-var name="document.style.patterns.resets.reset.name" /></reset>
+              <t-slot />
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              description: A clickable button
+              ---
+              <button class="button">Click me</button>
+
+              <!-- variant: primary -->
+              <button class="button" data-variant="primary">Primary</button>
+
+              <!-- variant: ghost -->
+              <button class="button" data-variant="ghost">Ghost</button>
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              description: CSS reset for consistent defaults
+              ---
+        css:
+          blocks:
+            button.css: |
+              .button { display: inline-flex; }
+          resets:
+            reset.css: |
+              * { margin: 0; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: true
+    assets:
+      css:
+        styles:
+          default.*.css: true

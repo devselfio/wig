@@ -249,20 +249,27 @@ pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
         };
         errdefer parsed.deinit();
 
-        const depends = if (parsed.value.getArray("depends")) |arr| dep_blk: {
-            const items = try a.alloc([]const u8, arr.len);
-            var count: usize = 0;
-            for (arr) |item| {
-                switch (item) {
-                    .string => |s| {
-                        items[count] = s;
-                        count += 1;
-                    },
-                    else => {},
+        const depends = dep_blk: {
+            var dep_list = std.ArrayListUnmanaged([]const u8){};
+            defer dep_list.deinit(a);
+
+            if (parsed.value.get("imports")) |imports_val| {
+                if (imports_val == .object) {
+                    for (imports_val.object) |imp_entry| {
+                        const imp_name = switch (imp_entry.key) {
+                            .string => |s| s,
+                            else => continue,
+                        };
+                        try dep_list.append(a, imp_name);
+                    }
                 }
             }
-            break :dep_blk items[0..count];
-        } else &[_][]const u8{};
+
+            break :dep_blk if (dep_list.items.len > 0)
+                try a.dupe([]const u8, dep_list.items)
+            else
+                &[_][]const u8{};
+        };
 
         try configs.append(a, .{
             .name = try a.dupe(u8, entry.name),
@@ -752,7 +759,7 @@ test "loadDataFiles: loads JSON files" {
     try std.testing.expectEqualStrings("Alice", authors.map.get("name").?.string);
 }
 
-test "loadStyleConfigs: parses depends field" {
+test "loadStyleConfigs: extracts dependencies from imports" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -768,7 +775,7 @@ test "loadStyleConfigs: parses depends field" {
     var hl_dir = try tmp.dir.openDir("styles/highlights", .{});
     defer hl_dir.close();
     var hf = try hl_dir.createFile("style.yaml", .{});
-    try hf.writeAll("name: highlights\ndepends:\n  - cube");
+    try hf.writeAll("name: highlights\nimports:\n  cube:\n    patterns: \"**\"");
     hf.close();
 
     const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
@@ -804,7 +811,7 @@ test "loadStyleConfigs: missing dependency returns error" {
     var orphan_dir = try tmp.dir.openDir("styles/orphan", .{});
     defer orphan_dir.close();
     var f = try orphan_dir.createFile("style.yaml", .{});
-    try f.writeAll("name: orphan\ndepends:\n  - nonexistent");
+    try f.writeAll("name: orphan\nimports:\n  nonexistent:\n    patterns: \"**\"");
     f.close();
 
     const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");

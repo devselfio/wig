@@ -11,14 +11,16 @@ pub const context = @import("context.zig");
 pub const tokens = @import("tokens.zig");
 pub const colours = @import("colours.zig");
 pub const frontmatter = @import("frontmatter.zig");
-pub const bundles = @import("bundles.zig");
 pub const scanner = @import("scanner.zig");
 pub const taxonomies = @import("taxonomies.zig");
 pub const pages = @import("pages.zig");
 pub const toc_mod = @import("toc.zig");
 pub const search = @import("search.zig");
 pub const feeds = @import("feeds.zig");
-pub const patterns = @import("patterns.zig");
+pub const pattern_parser = @import("pattern_parser.zig");
+pub const pattern_loader = @import("pattern_loader.zig");
+pub const import_resolver = @import("import_resolver.zig");
+pub const auto_bundler = @import("auto_bundler.zig");
 pub const app = @import("app.zig");
 pub const router = @import("router.zig");
 pub const handler = @import("handler.zig");
@@ -102,31 +104,6 @@ fn buildPhase_styleTokensSiteData(
             }
             try style_ctx.putAt(ctx_key, sd_entry.value_ptr.*);
         }
-
-        // Build flat `all` list for patterns: combines every category's items with a `category` field.
-        const patterns_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns", .{style_cfg.name});
-        if (style_ctx.resolve(patterns_key)) |patterns_val| {
-            if (patterns_val == .map) {
-                var all_items = std.ArrayListUnmanaged(toupee.Value){};
-                var pat_it = patterns_val.map.iterator();
-                while (pat_it.next()) |cat_entry| {
-                    if (cat_entry.value_ptr.* != .map) continue;
-                    const cat_items = cat_entry.value_ptr.*.map.get("items") orelse continue;
-                    if (cat_items != .list) continue;
-                    for (cat_items.list) |item| {
-                        if (item == .map) {
-                            var augmented = try cloneValueMap(ba, item.map);
-                            try augmented.put(ba, "category", .{ .string = cat_entry.key_ptr.* });
-                            try all_items.append(ba, .{ .map = augmented });
-                        } else {
-                            try all_items.append(ba, item);
-                        }
-                    }
-                }
-                const all_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns.all", .{style_cfg.name});
-                try style_ctx.putAt(all_key, .{ .list = try ba.dupe(toupee.Value, all_items.items) });
-            }
-        }
     }
 
     const site_val = try context.combToToupee(ba, site_cfg.raw);
@@ -193,141 +170,35 @@ fn cloneValueMap(a: Allocator, src: ValueMap) !ValueMap {
     return dst;
 }
 
-fn buildPhase_assetBundles(
+fn buildPhase_patternsAndAutoBundle(
     ba: Allocator,
-    a: Allocator,
     abs_root: []const u8,
     style_cfgs: []config.StyleConfig,
     style_ctx: *toupee.Context,
     output_dir: fs.Dir,
 ) !void {
-    config.sortByDependencyOrder(style_cfgs);
+    const styles_path = try fs.path.join(ba, &.{ abs_root, "styles" });
 
-    var asset_entries: std.ArrayListUnmanaged(bundles.AssetEntry) = .{};
+    var styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch return;
+    defer styles_dir.close();
 
-    const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
-    defer a.free(styles_path);
+    const resolved = try import_resolver.resolveAllStyles(
+        ba,
+        style_cfgs,
+        styles_dir,
+        style_ctx,
+    );
 
-    if (fs.openDirAbsolute(styles_path, .{ .iterate = true })) |sd| {
-        var styles_dir = sd;
-        defer styles_dir.close();
+    for (resolved) |rs| {
+        const pattern_ctx = try pattern_loader.buildPatternContext(ba, rs.result);
+        const ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns", .{rs.name});
+        try style_ctx.putAt(ctx_key, pattern_ctx);
 
-        // Process bundle entries in declaration order per style.
-        // Topological sort ensures dependencies are already in asset_entries.
-        for (style_cfgs) |style_cfg| {
-            const assets_val_opt = style_cfg.raw.get("bundles") orelse style_cfg.raw.get("assets");
-            if (assets_val_opt) |assets_val| {
-                if (assets_val == .object) {
-                    for (assets_val.object) |type_entry| {
-                        const bundle_type = switch (type_entry.key) {
-                            .string => |s| s,
-                            else => continue,
-                        };
-                        if (type_entry.value == .object) {
-                            for (type_entry.value.object) |bundle_entry| {
-                                const bundle_name = switch (bundle_entry.key) {
-                                    .string => |s| s,
-                                    else => continue,
-                                };
-
-                                switch (bundle_entry.value) {
-                                    .array => |file_list| {
-                                        var file_patterns: std.ArrayListUnmanaged([]const u8) = .{};
-                                        defer file_patterns.deinit(ba);
-                                        for (file_list) |item| {
-                                            if (item == .string) {
-                                                const resolved = try resolveStylePath(ba, style_cfg.name, item.string);
-                                                try file_patterns.append(ba, resolved);
-                                            }
-                                        }
-
-                                        const result = try bundles.processBundle(
-                                            ba,
-                                            style_cfg.name,
-                                            bundle_type,
-                                            bundle_name,
-                                            file_patterns.items,
-                                            styles_dir,
-                                            style_ctx,
-                                            output_dir,
-                                        );
-
-                                        try asset_entries.append(ba, .{
-                                            .style_name = style_cfg.name,
-                                            .bundle_type = bundle_type,
-                                            .bundle_name = bundle_name,
-                                            .result = result,
-                                        });
-                                    },
-                                    .string => |ref| {
-                                        const colon = std.mem.indexOfScalar(u8, ref, ':') orelse continue;
-                                        const src_style = ref[0..colon];
-                                        const src_bundle = ref[colon + 1 ..];
-
-                                        const result = for (asset_entries.items) |ae| {
-                                            if (std.mem.eql(u8, ae.style_name, src_style) and
-                                                std.mem.eql(u8, ae.bundle_type, bundle_type) and
-                                                std.mem.eql(u8, ae.bundle_name, src_bundle))
-                                                break ae.result;
-                                        } else return error.InvalidBundleReference;
-
-                                        try asset_entries.append(ba, .{
-                                            .style_name = style_cfg.name,
-                                            .bundle_type = bundle_type,
-                                            .bundle_name = bundle_name,
-                                            .result = result,
-                                        });
-                                    },
-                                    else => continue,
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else |_| {}
-
-    const asset_ctx = try bundles.buildAssetContext(ba, asset_entries.items);
-    try style_ctx.put("assets", asset_ctx);
-
-    // Build styles.{name}.bundles.{type} as lists of {path, hash, content} maps
-    // so templates can iterate: <t-for stylesheet in document.style.bundles.css>
-    for (style_cfgs) |sc| {
-        var type_lists = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(toupee.Value)){};
-
-        for (asset_entries.items) |ae| {
-            if (!std.mem.eql(u8, ae.style_name, sc.name)) continue;
-            const gop = try type_lists.getOrPut(ba, ae.bundle_type);
-            if (!gop.found_existing) gop.value_ptr.* = .{};
-            var entry_map = std.StringArrayHashMapUnmanaged(toupee.Value){};
-            try entry_map.put(ba, "path", .{ .string = ae.result.path });
-            try entry_map.put(ba, "hash", .{ .string = ae.result.hash });
-            try entry_map.put(ba, "name", .{ .string = ae.bundle_name });
-            try gop.value_ptr.append(ba, .{ .map = entry_map });
-        }
-
-        var bundles_map = std.StringArrayHashMapUnmanaged(toupee.Value){};
-        var tl_it = type_lists.iterator();
-        while (tl_it.next()) |entry| {
-            try bundles_map.put(ba, entry.key_ptr.*, .{ .list = try ba.dupe(toupee.Value, entry.value_ptr.items) });
-        }
-
-        if (bundles_map.count() > 0) {
-            const path = try std.fmt.allocPrint(ba, "styles.{s}.bundles", .{sc.name});
-            try style_ctx.putAt(path, .{ .map = bundles_map });
+        if (try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir)) |bundle| {
+            const css_path_key = try std.fmt.allocPrint(ba, "styles.{s}.css.path", .{rs.name});
+            try style_ctx.putAt(css_path_key, .{ .string = bundle.path });
         }
     }
-}
-
-/// Resolves a bundle source file path. Bare paths are relative to the current
-/// style's root; `style:path` prefixed paths are relative to the named style's root.
-/// Returns a path relative to the `styles/` directory.
-fn resolveStylePath(a: Allocator, current_style: []const u8, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
-        return std.fmt.allocPrint(a, "{s}/{s}", .{ raw[0..colon], raw[colon + 1 ..] });
-    }
-    return std.fmt.allocPrint(a, "{s}/{s}", .{ current_style, raw });
 }
 
 fn buildPhase_scanAndTaxonomies(
@@ -561,8 +432,8 @@ pub const Site = struct {
         // --- Phase: style context, tokens, site + data YAML ---
         var style_ctx = try buildPhase_styleTokensSiteData(ba, abs_root, &site_cfg, style_cfgs, &data_result);
 
-        // --- Phase: CSS/JS bundles and `assets` context ---
-        try buildPhase_assetBundles(ba, a, abs_root, style_cfgs, &style_ctx, output_dir);
+        // --- Phase: pattern loading, import resolution, @layer auto-bundling ---
+        try buildPhase_patternsAndAutoBundle(ba, abs_root, style_cfgs, &style_ctx, output_dir);
 
         // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
@@ -822,14 +693,16 @@ test {
     _ = tokens;
     _ = colours;
     _ = frontmatter;
-    _ = bundles;
     _ = scanner;
     _ = taxonomies;
     _ = pages;
     _ = toc_mod;
     _ = search;
     _ = feeds;
-    _ = patterns;
+    _ = pattern_parser;
+    _ = pattern_loader;
+    _ = import_resolver;
+    _ = auto_bundler;
     _ = app;
     _ = router;
     _ = handler;

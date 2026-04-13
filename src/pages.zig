@@ -42,13 +42,14 @@ pub fn renderOne(
     transform_registry: *const toupee.transform.Registry,
     scan_result: *const scanner_mod.ScanResult,
 ) !RenderResult {
-    return renderPage(a, entry, null, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+    return renderPage(a, entry, null, null, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
 }
 
 fn renderPage(
     a: Allocator,
     entry: *const scanner_mod.PageEntry,
     pagination: ?PaginationChunk,
+    layout_override: ?[]const u8,
     engine: *const toupee.Engine,
     base_ctx: *const toupee.Context,
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
@@ -206,7 +207,8 @@ fn renderPage(
     if (ctx.resolve(style_path)) |style_val| {
         try ctx.putAt("document.style", style_val);
     }
-    const layout_short = cascade.resolveLayout(entry, scan_result, base_ctx) orelse
+    const layout_short = layout_override orelse
+        cascade.resolveLayout(entry, scan_result, base_ctx) orelse
         base_ctx.resolveString("document.layout") orelse "page.html";
     try ctx.putAt("document.layout", .{ .string = try a.dupe(u8, layout_short) });
 
@@ -220,7 +222,13 @@ fn renderPage(
 
     const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
         if (err != error.TemplateNotFound) return err;
-        const src = (loader.getSource(a, layout_name) catch return error.MissingTemplate) orelse return error.MissingTemplate;
+        const src = (loader.getSource(a, layout_name) catch {
+            std.debug.print("MissingTemplate(load): {s} for page {s}\n", .{ layout_name, entry.source_path });
+            return error.MissingTemplate;
+        }) orelse {
+            std.debug.print("MissingTemplate(null): {s} for page {s}\n", .{ layout_name, entry.source_path });
+            return error.MissingTemplate;
+        };
         defer a.free(src);
         break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| return e;
     };
@@ -262,6 +270,28 @@ fn resolveCollection(ctx: *const toupee.Context, path: []const u8) ?[]const toup
     return null;
 }
 
+/// Resolves a collection for a specific page. When the collection path starts
+/// with "document.style.", rewrites the path to use the page's resolved style
+/// name so paths like `document.style.patterns.all` map to
+/// `styles.{resolved_name}.patterns.all` in the base context.
+fn resolveCollectionForPage(
+    a: Allocator,
+    base_ctx: *const toupee.Context,
+    collection_path: []const u8,
+    page: *const scanner_mod.PageEntry,
+    scan_result: *const scanner_mod.ScanResult,
+) ?[]const toupee.Value {
+    const prefix = "document.style.";
+    if (!std.mem.startsWith(u8, collection_path, prefix)) {
+        return resolveCollection(@constCast(base_ctx), collection_path);
+    }
+    const style_name = cascade.resolveStyle(page, scan_result, base_ctx) orelse "default";
+    const suffix = collection_path[prefix.len..];
+    const rewritten = std.fmt.allocPrint(a, "styles.{s}.{s}", .{ style_name, suffix }) catch return null;
+    defer a.free(rewritten);
+    return resolveCollection(@constCast(base_ctx), rewritten);
+}
+
 /// Converts a pagination URL path (e.g. "/posts/", "/posts/page/2/") to output file path.
 fn paginateUrlPathToFile(a: Allocator, url_path: []const u8) ![]const u8 {
     var trimmed = url_path;
@@ -291,9 +321,8 @@ pub fn renderAll(
 
         if (paginate_cfg != null and page.is_section) {
             const cfg = paginate_cfg.?;
-            const items = resolveCollection(@constCast(base_ctx), cfg.collection) orelse {
+            const items = resolveCollectionForPage(a, base_ctx, cfg.collection, page, scan_result) orelse {
                 results[i] = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
-                // Best-effort mkdir; the real error surfaces on createFile below.
                 output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
                 var f = try output_dir.createFile(page.output_file, .{});
                 defer f.close();
@@ -308,9 +337,22 @@ pub fn renderAll(
                 try paginate(a, items, cfg.size, base_path, cfg.path);
             defer a.free(chunks);
 
+            // When slug pagination has a layout override, also render the
+            // section index page using the page's own layout (e.g. a shell
+            // with sidebar navigation) before generating the sub-pages.
+            const has_index = cfg.slug != null and cfg.layout != null;
+            if (has_index) {
+                const index_result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
+                var idx_f = try output_dir.createFile(page.output_file, .{});
+                defer idx_f.close();
+                try idx_f.writeAll(index_result.output_html);
+                results[i] = index_result;
+            }
+
             var first_result: ?RenderResult = null;
             for (chunks) |chunk| {
-                const result = try renderPage(a, page, chunk, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                const result = try renderPage(a, page, chunk, cfg.layout, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
                 const file_path = try paginateUrlPathToFile(a, chunk.output_path);
                 defer a.free(file_path);
                 output_dir.makePath(std.fs.path.dirname(file_path) orelse ".") catch {};
@@ -319,7 +361,9 @@ pub fn renderAll(
                 try f.writeAll(result.output_html);
                 if (first_result == null) first_result = result;
             }
-            results[i] = first_result.?;
+            if (!has_index) {
+                results[i] = first_result.?;
+            }
         } else {
             const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
             output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};

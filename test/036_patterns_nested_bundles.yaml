@@ -1,5 +1,9 @@
 test:
-  name: Nested bundle paths, optional JS bundle, pattern YAML manifests
+  name: Pattern HTML files, resources by convention, JS and CSS auto-bundling
+  comment: >
+    HTML pattern files in patterns/{category}/{id}.html are parsed and exposed
+    in the style context. Associated CSS and JS are discovered by convention.
+    CSS is @layer-wrapped. JS is copied individually.
   action:
     wig: build
 input:
@@ -14,39 +18,39 @@ input:
       default:
         style.yaml: |
           name: default
-          bundles:
-            css:
-              nested/demo:
-                - css/nested.css
-              surface:
-                - css/surface.css
-            js:
-              app:
-                - js/app.js
         templates:
           layouts:
             page.html: |
-              <link rel="stylesheet" t-var:href="assets.default.css.nested.demo.path" />
-              <link rel="stylesheet" t-var:href="assets.default.css.surface.path" />
-              <script t-var:src="assets.default.js.app.path"></script>
+              <link rel="stylesheet" t-var:href="document.style.css.path" />
               <p><t-var name="document.style.patterns.blocks.widget.name" /></p>
               <t-slot />
-        data:
-          patterns:
-            blocks:
-              widget.yaml: |
-                name: Widget
-                description: A block pattern.
-                example: "<div class=\"widget\" />"
-                variants: []
+        patterns:
+          globals:
+            surface.html: |
+              ---
+              name: Surface
+              ---
+          blocks:
+            widget.html: |
+              ---
+              name: Widget
+              description: A block pattern.
+              ---
+              <div class="widget">Example</div>
+
+              <!-- variant: alt -->
+              <div class="widget" data-variant="alt">Alt</div>
         css:
-          nested.css: |
-            .nested { display: block; }
-          surface.css: |
-            .surface { color: green; }
+          globals:
+            surface.css: |
+              .surface { color: green; }
+          blocks:
+            widget.css: |
+              .widget { display: block; }
         js:
-          app.js: |
-            console.log("app");
+          blocks:
+            widget.js: |
+              console.log("widget");
     pages:
       _index.dj: |
         ---
@@ -56,13 +60,6 @@ output:
   files:
     index.html: true
     assets:
-      default:
-        css:
-          nested:
-            demo.*.css: |
-              .nested { display: block; }
-          surface.*.css: |
-              .surface { color: green; }
-        js:
-          app.*.js: |
-            console.log("app");
+      css:
+        styles:
+          default.*.css: true

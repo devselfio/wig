@@ -45,6 +45,12 @@ Internal links are checked automatically during every build. The link checker wa
 
 `wig check` validates site config (`data/site.yaml`), style manifests, and Toupee template resolution without running a full build. It catches missing config, bad template references, and structural issues early.
 
+## CUBE CSS patterns
+
+Wig is a style-focused site generator with first-class CUBE CSS support. Styles contain patterns organized by CUBE category (tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions). CSS is auto-bundled with `@layer` declarations in cascade order. Pattern libraries are auto-generated with shell+iframe navigation and viewport controls.
+
+See **[`AGENTS.md`](AGENTS.md)** for the full CUBE CSS categorization guide and pattern file format.
+
 ## Contributing
 
 See **[`AGENTS.md`](AGENTS.md)** for architecture, conventions, and testing (YAML specs under `test/`, `zig build test`).

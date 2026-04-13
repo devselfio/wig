@@ -3,8 +3,8 @@ test:
   comment: >
     Files under styles/{name}/data/ extend the style namespace. Nested
     directories create nested keys. Data files must not overwrite engine-managed
-    keys (bundles, depends). Pattern YAML with nested sub-maps gets synthetic
-    `items` lists for t-for iteration.
+    keys (patterns, imports). Patterns are now in patterns/ directory,
+    not data/patterns/.
   action:
     wig: build
   fixtures: []
@@ -20,34 +20,27 @@ input:
       default:
         style.yaml: |
           name: default
-          bundles:
-            css:
-              main:
-                - css/main.css
-        css:
-          main.css: |
-            body { margin: 0; }
         data:
           meta.yaml: |
             version: "2.0"
             license: MIT
-          patterns:
-            blocks:
-              button.yaml: |
-                name: Button
-                description: A clickable button
-              tag.yaml: |
-                name: Tag
-                description: A label tag
-          bundles.yaml: |
+          patterns.yaml: |
             should: be ignored
+        patterns:
+          globals:
+            surface.html: |
+              ---
+              name: Surface
+              ---
+        css:
+          globals:
+            surface.css: |
+              body { margin: 0; }
         templates:
           layouts:
             page.html: |
               <version><t-var name="document.style.meta.version" /></version>
               <license><t-var name="document.style.meta.license" /></license>
-              <button><t-var name="document.style.patterns.blocks.button.name" /></button>
-              <items><t-for p in document.style.patterns.blocks.items><t-var name="p.name" />,</t-for></items>
               <ignored><t-var name="document.style.should">not overwritten</t-var></ignored>
               <t-slot />
     pages:
@@ -60,7 +53,5 @@ output:
     index.html: |
       <version>2.0</version>
       <license>MIT</license>
-      <button>Button</button>
-      <items>Tag,Button,</items>
       <ignored>not overwritten</ignored>
       <p>Hello.</p>

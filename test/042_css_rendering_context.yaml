@@ -1,9 +1,9 @@
 test:
   name: CSS templates can use site.* but not document.*
   comment: >
-    CSS bundles are rendered in a global context that includes site and styles
-    but not per-page document data. site.url should resolve; document.title
-    should be empty.
+    Pattern CSS with front-matter is rendered in a global context that includes
+    site and styles but not per-page document data. site.url should resolve;
+    document.title should be empty.
   action:
     wig: build
 input:
@@ -18,21 +18,24 @@ input:
       default:
         style.yaml: |
           name: default
-          bundles:
-            css:
-              main:
-                - css/main.css
         templates:
           layouts:
             page.html: |
               <t-slot />
+        patterns:
+          globals:
+            main.html: |
+              ---
+              name: Main
+              ---
         css:
-          main.css: |
-            ---
-            ---
-            /* url: <t-var name="site.url" /> */
-            <t-if var="document.title">/* has-doc: yes */</t-if>
-            <t-if var="document.title" not-exists>/* has-doc: no */</t-if>
+          globals:
+            main.css: |
+              ---
+              ---
+              /* url: <t-var name="site.url" /> */
+              <t-if var="document.title">/* has-doc: yes */</t-if>
+              <t-if var="document.title" not-exists>/* has-doc: no */</t-if>
     pages:
       _index.dj: |
         ---
@@ -44,8 +47,6 @@ output:
     index.html: |
       <p>Home.</p>
     assets:
-      default:
-        css:
-          main.*.css: |
-            /* url: https://example.com */
-            /* has-doc: no */
+      css:
+        styles:
+          default.*.css: true

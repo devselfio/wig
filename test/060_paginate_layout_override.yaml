@@ -1,0 +1,79 @@
+test:
+  name: Paginate layout override
+  comment: >
+    When paginate.layout is set, slug pagination renders the section index
+    using the page's own layout AND generates sub-pages using the override layout.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+      colours.yaml: |
+        - id: red
+          name: Red
+          hex: "#ff0000"
+        - id: blue
+          name: Blue
+          hex: "#0000ff"
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            shell.html: |
+              <nav>
+              <t-for c in colours>
+              <a t-var:href="c.id"><t-var name="c.name" /></a>
+              </t-for>
+              </nav>
+              <main><t-slot /></main>
+            detail.html: |
+              <h1><t-var name="colour.name" /></h1>
+              <p><t-var name="colour.hex" /></p>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      colours:
+        _index.dj: |
+          ---
+          title: Colours
+          layout: shell.html
+          paginate:
+            collection: colours
+            size: 1
+            alias: colour
+            slug: id
+            layout: detail.html
+          ---
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    colours:
+      index.html: |
+        <nav>
+        
+        <a href="red">Red</a>
+        
+        <a href="blue">Blue</a>
+        
+        </nav>
+        <main></main>
+      red:
+        index.html: |
+          <h1>Red</h1>
+          <p>#ff0000</p>
+      blue:
+        index.html: |
+          <h1>Blue</h1>
+          <p>#0000ff</p>

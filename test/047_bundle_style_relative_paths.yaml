@@ -1,8 +1,9 @@
 test:
-  name: Bundle source paths resolve relative to style root
+  name: Import merges upstream CSS into auto-bundled output
   comment: >
-    Bare paths resolve relative to the current style's directory.
-    style:path prefixed paths resolve relative to the named style's directory.
+    When a child style imports patterns from a base style, the CSS from
+    imported patterns is included in the child's auto-bundled output.
+    Each style produces its own hashed CSS file at assets/css/styles/.
   action:
     wig: build
 input:
@@ -17,30 +18,36 @@ input:
       base:
         style.yaml: |
           name: base
-          bundles:
-            css:
-              base:
-                - css/reset.css
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
         css:
-          reset.css: |
-            * { margin: 0; }
+          resets:
+            reset.css: |
+              * { margin: 0; }
       child:
         style.yaml: |
           name: child
-          depends: [base]
-          bundles:
-            css:
-              base: base:base
-              child:
-                - base:css/reset.css
-                - css/surface.css
+          imports:
+            base:
+              patterns: "**"
         templates:
           layouts:
             page.html: |
               <t-slot />
+        patterns:
+          blocks:
+            surface.html: |
+              ---
+              name: Surface
+              ---
         css:
-          surface.css: |
-            body { color: #333; }
+          blocks:
+            surface.css: |
+              body { color: #333; }
     pages:
       _index.dj: |
         ---
@@ -51,12 +58,7 @@ output:
     index.html: |
       <p>Hello.</p>
     assets:
-      base:
-        css:
-          base.*.css: |
-            * { margin: 0; }
-      child:
-        css:
-          child.*.css: |
-            * { margin: 0; }
-            body { color: #333; }
+      css:
+        styles:
+          base.*.css: true
+          child.*.css: true

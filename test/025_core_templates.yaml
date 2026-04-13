@@ -21,7 +21,9 @@ input:
       default:
         style.yaml: |
           name: default
-          depends: [cube]
+          imports:
+            cube:
+              patterns: "**"
         templates:
           layouts:
             page.html: |

@@ -1,6 +1,8 @@
 test:
   name: Full blog E2E
-  comment: Template chain, collections, CSS bundle, assets. Inline input, no fixtures.
+  comment: >
+    Template chain, collections, pattern-driven CSS auto-bundling, assets.
+    Inline input, no fixtures.
   action:
     wig: build
 input:
@@ -16,11 +18,6 @@ input:
       default:
         style.yaml: |
           name: default
-          bundles:
-            css:
-              main:
-                - reset.css
-                - site.css
         templates:
           layouts:
             base.html: |
@@ -29,7 +26,7 @@ input:
             page.html: |
               <t-extend template="layouts/base.html">
                 <t-define name="head">
-                  <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+                  <link rel="stylesheet" t-var:href="document.style.css.path" />
                 </t-define>
                 <t-define>
                   <t-slot />
@@ -55,10 +52,24 @@ input:
                   <t-slot />
                 </t-define>
               </t-extend>
-        reset.css: |
-            * { margin: 0; }
-        site.css: |
-            body { font-family: sans-serif; }
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
+          globals:
+            site.html: |
+              ---
+              name: Site
+              ---
+        css:
+          resets:
+            reset.css: |
+              * { margin: 0; }
+          globals:
+            site.css: |
+              body { font-family: sans-serif; }
     pages:
       _index.dj: |
         ---
@@ -96,7 +107,7 @@ output:
       second:
         index.html: true
     assets:
-      default:
-        css:
-          main.*.css: true
+      css:
+        styles:
+          default.*.css: true
       favicon.ico: true

@@ -1,5 +1,9 @@
 test:
-  name: CSS bundle concatenation with fingerprinted filename
+  name: CSS auto-bundling with @layer wrapping from patterns
+  comment: >
+    Patterns drive CSS collection. Each category's CSS is wrapped in an @layer
+    block. The output file is at assets/css/styles/{style}.{hash}.css.
+    document.style.css.path provides the path.
   action:
     wig: build
 input:
@@ -14,20 +18,30 @@ input:
       default:
         style.yaml: |
           name: default
-          bundles:
-            css:
-              main:
-                - reset.css
-                - styles.css
         templates:
           layouts:
             page.html: |
-              <link rel="stylesheet" t-var:href="assets.default.css.main.path" />
+              <link rel="stylesheet" t-var:href="document.style.css.path" />
               <t-slot />
-        reset.css: |
-            * { margin: 0; }
-        styles.css: |
-            body { color: #333; }
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
+          globals:
+            document.html: |
+              ---
+              name: Document
+              ---
+              <p>Body text</p>
+        css:
+          resets:
+            reset.css: |
+              * { margin: 0; }
+          globals:
+            document.css: |
+              body { color: #333; }
     pages:
       _index.dj: |
         ---
@@ -37,8 +51,6 @@ output:
   files:
     index.html: true
     assets:
-      default:
-        css:
-          main.*.css: |
-            * { margin: 0; }
-            body { color: #333; }
+      css:
+        styles:
+          default.*.css: true

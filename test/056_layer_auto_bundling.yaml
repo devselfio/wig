@@ -1,0 +1,78 @@
+test:
+  name: "@layer auto-bundling with CUBE CSS ordering"
+  comment: >
+    Pattern CSS is collected per category and wrapped in @layer blocks.
+    A layer declaration is emitted first in fixed CUBE CSS order:
+    tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions.
+    Only categories with actual CSS content get @layer body blocks.
+    CSS files without a corresponding pattern are ignored.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <link rel="stylesheet" t-var:href="document.style.css.path" />
+              <t-slot />
+        patterns:
+          resets:
+            reset.html: |
+              ---
+              name: Reset
+              ---
+          globals:
+            document.html: |
+              ---
+              name: Document
+              ---
+          compositions:
+            stack.html: |
+              ---
+              name: Stack
+              ---
+              <div class="stack">items</div>
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <button class="button">Click</button>
+        css:
+          resets:
+            reset.css: |
+              * { margin: 0; }
+          globals:
+            document.css: |
+              body { line-height: 1.5; }
+          compositions:
+            stack.css: |
+              .stack > * + * { margin-block-start: var(--space, 1em); }
+          blocks:
+            button.css: |
+              .button { display: inline-flex; }
+          utilities:
+            orphan.css: |
+              .orphan { display: none; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: true
+    assets:
+      css:
+        styles:
+          default.*.css: true

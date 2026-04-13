@@ -1,0 +1,49 @@
+test:
+  name: Import data validation keeps upstream namespace
+  comment: >
+    Data imports validate existence of upstream data but keep it in the
+    upstream style's namespace (styles.{upstream}.*). This avoids merge
+    conflicts. Pattern imports merge into the local namespace.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: theme
+        layout: page.html
+    styles:
+      palette:
+        style.yaml: |
+          name: palette
+        data:
+          colors:
+            warm.yaml: |
+              primary: "#ff6600"
+              secondary: "#cc4400"
+      theme:
+        style.yaml: |
+          name: theme
+          imports:
+            palette:
+              data:
+                colors: [warm]
+        templates:
+          layouts:
+            page.html: |
+              <primary><t-var name="styles.palette.colors.warm.primary" /></primary>
+              <secondary><t-var name="styles.palette.colors.warm.secondary" /></secondary>
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <primary>#ff6600</primary>
+      <secondary>#cc4400</secondary>
+      <p>Hello.</p>

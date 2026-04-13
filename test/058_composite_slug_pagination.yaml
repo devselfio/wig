@@ -1,0 +1,86 @@
+test:
+  name: Composite slug pagination producing nested directory output
+  comment: >
+    Slugs containing slashes (e.g. blocks/button) create nested directory
+    output. This supports pattern library URLs like /patterns/blocks/button/.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+            pattern.html: |
+              <h1><t-var name="pattern.name" /></h1>
+              <p><t-var name="pattern.category" /></p>
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <button>Click</button>
+            tag.html: |
+              ---
+              name: Tag
+              ---
+              <span class="tag">Label</span>
+          compositions:
+            stack.html: |
+              ---
+              name: Stack
+              ---
+              <div class="stack">items</div>
+        css:
+          blocks:
+            button.css: |
+              .button { display: inline-flex; }
+            tag.css: |
+              .tag { display: inline-block; }
+          compositions:
+            stack.css: |
+              .stack > * + * { margin-block-start: 1em; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+      patterns:
+        _index.dj: |
+          ---
+          title: Patterns
+          layout: pattern.html
+          paginate:
+            collection: styles.default.patterns.all
+            size: 1
+            alias: pattern
+            slug: slug
+          ---
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    patterns:
+      blocks:
+        button:
+          index.html: true
+        tag:
+          index.html: true
+      compositions:
+        stack:
+          index.html: true
+    assets:
+      css:
+        styles:
+          default.*.css: true
