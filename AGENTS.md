@@ -22,11 +22,13 @@ A library-first static site generator and web framework in Zig. Wig promotes CUB
 
 | Name | Purpose | License |
 |------|---------|---------|
-| [Toupee](https://github.com/QuiteClose/toupee) | HTML-native template engine (`<t-*>` elements); **v0.2+** includes `$()` dynamic dot-path segments | MIT |
+| [Toupee](https://github.com/QuiteClose/toupee) | HTML-native template engine (`<t-*>` elements); includes `$()` dynamic dot-path segments | MIT |
 | [Comb](https://github.com/QuiteClose/comb) | YAML parser | MIT |
 | [zjot](https://github.com/QuiteClose/zjot) | Djot-to-HTML converter | MIT |
 
 **`build.zig.zon`** pins these with `git+https://github.com/QuiteClose/{repo}.git#tag` plus a `1220…` content hash so a clone builds without sibling folders. Refresh pins with `zig fetch --save git+https://github.com/QuiteClose/toupee.git#vX.Y.Z` (use **`.url` + `.hash`** in the zon — a bare `git+…` string must not be stored under `.path`).
+
+**Tagging convention:** Always pin dependencies to git tags (`#vX.Y.Z`), not bare commit SHAs. Commit-hash pins are acceptable only temporarily during cross-repo development of an unreleased feature. As soon as the dependency is tagged, update the pin to the tag.
 
 ## Build commands
 
@@ -45,6 +47,8 @@ zig build run      # run the wig CLI
 **Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build check` wrappers; that is separate from the stock CLI.
 
 ## Project structure
+
+Canonical file list: `ls src/*.zig`. The annotations below document architectural intent but may lag the actual source tree.
 
 ```
 wig/
@@ -68,7 +72,6 @@ wig/
     slug.zig        # URL slugification (slugifyStem, isSpecialStem, slugifyTerm)
     xml.zig         # XML escaping (appendXmlEscaped)
     frontmatter.zig # shared YAML frontmatter detection + stripping
-    bundles.zig     # LEGACY — superseded by auto_bundler.zig for pattern-driven bundling
     pattern_parser.zig  # pattern file parser: front-matter + body split on <!-- variant: .* --> delimiters
     pattern_loader.zig  # pattern directory scanner: styles/{name}/patterns/{category}/*.html, resource discovery
     import_resolver.zig # imports: resolution: merge patterns across styles, topological ordering
@@ -84,6 +87,7 @@ wig/
     handler.zig     # request Context (with deinit), Endpoint, pipeline()
     session.zig     # cookie-based sessions, MemoryStore (returns pointers, handles overwrites)
     scaffold.zig    # wig init (copies skel/site), add style, add block, install
+    skel.zig        # embedded skel/site tree for wig init scaffolding
     html.zig        # shared HTML utilities (stripTags)
     test_runner.zig # spec test runner (`NNN_*.yaml` full-site builds)
     test_report.zig # report types, Reporter, Failure, unified diff formatting
@@ -622,7 +626,7 @@ Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{nam
 
 **Legacy:** A `data/colours/` directory is still supported; it merges as the top-level `colours` key and receives the same resolution. Prefer `data/colors/` and `colors.*` for new sites.
 
-**Dynamic path resolution (Toupee 0.2+):** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colors.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
+**Dynamic path resolution:** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colors.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
 
 ### CSS rendering context
 
@@ -671,6 +675,8 @@ This generates:
 - `patterns/compositions/stack/index.html` — etc.
 
 **Shell+iframe model:** The pattern library shell template (`patterns.html`) renders a sidebar grouped by CUBE category with viewport controls (Mobile/Tablet/Desktop/Full). Each pattern link targets a named iframe that loads the individual pattern page. The pattern page template (`pattern.html`) renders the pattern's metadata, configuration table, live example, source view, and variants.
+
+**Library overview page:** The body content of the `patterns/_index.dj` file is rendered as the default view when the pattern library loads, accessible via a "Library" link at the top of the sidebar. Clicking a pattern link hides the overview and shows the iframe; clicking "Library" hides the iframe and restores the overview. Each style can provide its own introductory content about its patterns and design language.
 
 ### Feeds
 
