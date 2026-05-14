@@ -48,8 +48,6 @@ zig build run      # run the wig CLI
 
 ## Project structure
 
-Canonical file list: `ls src/*.zig`. The annotations below document architectural intent but may lag the actual source tree.
-
 ```
 wig/
   build.zig         # library module (wig) + CLI executable
@@ -73,7 +71,7 @@ wig/
     xml.zig         # XML escaping (appendXmlEscaped)
     frontmatter.zig # shared YAML frontmatter detection + stripping
     pattern_parser.zig  # pattern file parser: front-matter + body split on <!-- variant: .* --> delimiters
-    pattern_loader.zig  # pattern directory scanner: styles/{name}/patterns/{category}/*.html, resource discovery
+    pattern_loader.zig  # pattern directory scanner: styles/{name}/patterns/{category}/*.html, file + generic resource discovery
     import_resolver.zig # imports: resolution: merge patterns across styles, topological ordering
     auto_bundler.zig    # @layer CSS auto-bundling from resolved patterns, CUBE order, content-hashed output
     scanner.zig     # walk pages/, collections (ScanResult.init), sections, render gating
@@ -102,7 +100,7 @@ wig/
   test/
     NNN_*.yaml      # spec tests (3-digit id prefix; primary integration tests)
   skel/
-    site/           # default project tree copied by `wig init` (`cube` + `default`, data, pages, assets)
+    site/           # default project tree copied by `wig init` (`cube` + `default`, data, pages, files)
 ```
 
 ### Typed PageMeta architecture
@@ -120,7 +118,7 @@ comb.Value (YAML parse) → parsePageMeta → PageMeta (typed, compile-time safe
 
 ### Library-first design
 
-Wig is a Zig library (`Site`, `Site.buildAll`, …) that also ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `cube`, `default` style, `data/`, `pages/`, `assets/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
+Wig is a Zig library (`Site`, `Site.buildAll`, …) that also ships a **`wig` executable**. Most authors use only the binary: `wig init` copies `skel/site/` (shared `cube`, `default` style, `data/`, `pages/`, `files/`), then `wig build` produces `zig-out/site/`. Embedders who import Wig into an app can still call the same APIs from their own `build.zig` or binaries.
 
 ### SSG + web framework (hybrid architecture)
 
@@ -134,7 +132,7 @@ Wig is **both** an SSG and a **library for Zig web applications**. The same temp
 
 ```
 my-project/
-  assets/          # static files (images, fonts, robots.txt)
+  files/           # static files (images, fonts, robots.txt) → output root
   data/            # YAML data (site.yaml, document.yaml, colors/)
   src/
     main.zig       # Zig app: imports wig, handles routes, renders responses
@@ -351,7 +349,6 @@ Wig's template context has three tiers:
 
 **Site scope** (top-level keys):
 - `site` -- from `data/site.yaml`
-- `assets` -- hashed asset paths (engine-computed)
 - `pages` -- page collection (engine-computed)
 - `tags` -- tag indexes (engine-computed)
 - `styles` -- full style tree (engine-computed)
@@ -361,15 +358,16 @@ Wig's template context has three tiers:
 - `tokens` -- design tokens (from `style.yaml`, extended with `tokens.computed`)
 - `css.path` -- hashed auto-bundled CSS path (engine-computed)
 - `patterns` -- resolved pattern tree with categories, items lists, and flat all list (engine-computed)
+- `files` -- nested map mirroring `styles/{name}/files/` directory (engine-computed; keyed by stem, values are web path strings; directories with files get an `items` list)
 - *Any other key* -- from `style.yaml` or from files in `styles/{name}/data/`
 
 **Page scope** (per-page):
 - `document` -- frontmatter cascade + engine-computed values (path, url, layout, style, parent, ancestors, children, toc, excerpt)
 - `paginate` -- pagination chunks (when active)
 
-**Reserved site-level keys** (data files must not shadow): `pages`, `styles`, `tags`, `assets`, `paginate`.
+**Reserved site-level keys** (data files must not shadow): `pages`, `styles`, `tags`, `paginate`.
 
-**Reserved style-level keys** (style data files must not shadow): `css`, `patterns`, `tokens`.
+**Reserved style-level keys** (style data files must not shadow): `css`, `patterns`, `tokens`, `files`.
 
 ### Data cascade
 
@@ -436,25 +434,28 @@ Dates in frontmatter use ISO 8601 format with optional time: `2026-03-16` (date 
 
 ### Style directory structure (CUBE-aligned)
 
-Each style lives under `styles/{name}/` with this structure:
+Each style lives under `styles/{name}/` with well-defined subdirectory roles:
 
 ```
 styles/default/
   style.yaml         # style manifest (name, imports, tokens, scheme, custom fields)
-  patterns/
-    tokens/*.html    # design token documentation patterns
-    resets/*.html    # CSS reset patterns
-    globals/*.html   # global styling patterns (document, syntax, surface)
-    fonts/*.html     # font stack patterns
-    compositions/*.html  # layout compositions (stack, cluster, grid, sidebar, etc.)
-    utilities/*.html # utility class patterns (indent, radius, text-colors, etc.)
-    blocks/*.html    # component patterns (button, tag, prose, skip-link, etc.)
-    exceptions/*.html # exception patterns (narrow, etc.)
-  templates/
+  patterns/          # RESERVED: pattern files (frontmatter + example markup)
+    tokens/*.html
+    resets/*.html
+    globals/*.html
+    fonts/*.html
+    compositions/*.html
+    utilities/*.html
+    blocks/*.html
+    exceptions/*.html
+  templates/         # RESERVED: Toupee templates (layouts + blocks)
     layouts/*.html   # page shells (base.html, page.html, post.html)
     blocks/*.html    # components (breadcrumbs.html, card.html)
-  css/
-    tokens/*.css     # token CSS (rendered from front-matter when present)
+  data/              # RESERVED: style-scoped data (styles.{name}.*)
+  demo/              # RESERVED: raw files copied to pages/ on style install
+  files/             # raw files, binary-safe, no preprocessing → /assets/styles/{name}/
+  css/               # resource: pattern CSS; auto-bundled if pattern-matched
+    tokens/*.css
     resets/*.css
     globals/*.css
     fonts/*.css
@@ -462,14 +463,31 @@ styles/default/
     utilities/*.css
     blocks/*.css
     exceptions/*.css
-  data/              # style-scoped data (accessible at styles.{name}.*)
+  {anything}/        # generic resource directories (js/, scripts/, shaders/, etc.)
 ```
 
-- `patterns/` — CUBE CSS patterns. Each `.html` file has YAML front-matter (metadata, config, description) and an HTML body (example markup). Variants are separated by `<!-- variant: name -->` delimiters. See **Pattern file format**.
-- `css/` — Pattern CSS. Files at `css/{category}/{id}.css` are discovered by convention and associated with the matching pattern. Files with frontmatter (`---`) are rendered through Toupee (for tokens, colors). Files without frontmatter are plain text.
+**Reserved directories** (special handling by the pipeline):
+- `patterns/` — CUBE CSS patterns. Each `.html` file has YAML front-matter and an HTML body. Variants separated by `<!-- variant: name -->`. See **Pattern file format**.
 - `templates/layouts/` — page shells referenced via `document.layout`. Use `<t-extend template="layouts/page.html">`.
 - `templates/blocks/` — CUBE blocks (components). Use `<t-include template="blocks/card.html" />`.
 - `data/` — style-scoped data. YAML/JSON files under `styles/{name}/data/` are loaded into `styles.{name}.*`.
+- `demo/` — raw files for demo content, copied to `pages/` on style install.
+
+**`files/`** — raw files (images, fonts, etc.), copied verbatim to `/assets/styles/{name}/` in output. Exposed in context as `styles.{name}.files` (nested map keyed by stem; directories with files get an `items` list). **Stem collision is an error:** two files sharing a stem but differing in extension (e.g. `icon.svg` and `icon.png`) fail the build.
+
+**Generic resource directories** — any non-reserved subdirectory is treated as a resource type. Names are author-chosen (`css/`, `js/`, `scripts/`, `images/`, etc.). Files mirror the pattern hierarchy (`{category}/{id}.{ext}`). Discovered dynamically — Wig is unopinionated about what resource types exist. Text-based resource files with a `---` frontmatter fence are rendered through Toupee for token interpolation. The auto-bundler requires the name `css/` by convention.
+
+**Output mapping:**
+
+```
+files/  is the input,  assets/  is the output.
+
+Site:   files/{rest}                         →  /{rest}
+Style:  styles/{style}/files/{rest}          →  /assets/styles/{style}/{rest}
+Rsrc:   styles/{style}/{type}/{cat}/{id}.ext →  /assets/{type}/styles/{style}/{cat}/{id}.ext
+```
+
+**Collision check:** If the site-level `files/assets/styles/` directory exists, the build errors to prevent conflicts with style file output paths.
 
 ### CUBE CSS categorization guide
 
@@ -524,11 +542,15 @@ notes: Use the <code>templates/blocks/button.html</code> template for consistent
 
 **Front-matter-only patterns:** Patterns with no body (e.g. tokens, resets) are valid. They document configuration without providing example markup.
 
+**Pattern example rendering:** All pattern examples are rendered through Toupee before being stored in the context. This allows patterns to use `<t-include>` to reference actual templates, preventing duplication and drift between examples and templates. Toupee is inert on plain HTML — examples without `<t-*>` tags pass through unchanged. The rendering happens during `buildPhase_patternsAndBundle`, before the full context is built, using the style context (tokens, colours, data) so examples can reference style values via `<t-var>`.
+
 **Resource discovery by convention:**
-- `css/{category}/{id}.css` — pattern CSS (rendered if it has front-matter)
+- `css/{category}/{id}.css` — pattern CSS (rendered if it has front-matter; auto-bundled)
 - `templates/{category}/{id}.html` — Toupee template (raw source shown in pattern library)
-- `js/{category}/{id}.js` — JavaScript (copied to output)
-- `assets/{category}/{id}/*` — asset files (copied to output)
+- `{type}/{category}/{id}.{ext}` — generic resources (any non-reserved directory name: `js/`, `scripts/`, etc.)
+- `files/{category}/{id}/*` — raw files (copied verbatim to `/assets/styles/{style}/{category}/{id}/`)
+
+Generic resources are discovered dynamically — any subdirectory not in the reserved set (`data/`, `demo/`, `patterns/`, `templates/`, `files/`) is treated as a resource type. Text-based resource files with `---` frontmatter are rendered through Toupee before output.
 
 ### Imports
 
@@ -547,7 +569,7 @@ imports:
       colors: [rosepine, solarized]  # validate data exists in upstream
 ```
 
-**Pattern imports** (`patterns:`): Merged into the local style's resolved pattern set. Local patterns at the same `{category}/{id}` take precedence. Resources (CSS, templates, JS, assets) travel with the pattern.
+**Pattern imports** (`patterns:`): Merged into the local style's resolved pattern set. Local patterns at the same `{category}/{id}` take precedence. Resources (CSS, templates, and any generic resource types) travel with the pattern.
 
 **Data imports** (`data:`): Validate that the specified data exists in the upstream style's namespace. Data remains accessible at `styles.{upstream}.*` — it is not copied into the importing style's namespace.
 
@@ -628,13 +650,15 @@ Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{nam
 
 **Dynamic path resolution:** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colors.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
 
-### CSS rendering context
+### Resource rendering context
 
-CSS files with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style assets, not pages). They receive the full site context minus `document.*`:
+Text-based resource files (CSS, JS, or any generic resource) with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style resources, not pages). They receive the full site context minus `document.*`:
 - `styles.*` -- all style manifests; **`styles.{name}.tokens.computed`** holds fluid typography and spacing from `tokens.compute` (e.g. `styles.default.tokens.computed.typography` as a list of `{name, value}` maps)
 - `colors.*` -- all color scheme data from `data/colors/` (pre-resolved); legacy `colours.*` if you use `data/colours/`
 - `site.*` -- site configuration
 - All other data directory keys
+
+This applies uniformly to all resource types — CSS, JS, SVG, or any text-based file in a generic resource directory that includes a `---` frontmatter fence.
 
 ### Template reusability
 
@@ -724,13 +748,15 @@ Fields: `url`, `title`, `content` (text-only), `excerpt`, `tags` (list or empty)
 
 **Excluding pages:** Set `search: false` in page frontmatter to exclude a page from `search.json`. The page is still built and published; it simply does not appear in the search index. See `test/041_search_exclusion.yaml`.
 
-### Static assets
+### Static files
 
-Files in `assets/` are copied verbatim to the output directory without rendering or frontmatter processing. Directory structure is preserved:
+Files in `files/` are copied verbatim to the **output root** without rendering or frontmatter processing. Directory structure is preserved:
 
-- `assets/robots.txt` -> `zig-out/site/assets/robots.txt`
-- `assets/css/reset.css` -> `zig-out/site/assets/css/reset.css`
-- `assets/images/logo.png` -> `zig-out/site/assets/images/logo.png`
+- `files/robots.txt` -> `zig-out/site/robots.txt`
+- `files/assets/css/reset.css` -> `zig-out/site/assets/css/reset.css`
+- `files/assets/images/logo.png` -> `zig-out/site/assets/images/logo.png`
+
+`files/` is the input directory; `assets/` is the output directory convention. To place files at `/assets/...` in the output, create `files/assets/...` in the input.
 
 ### Tags
 

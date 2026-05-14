@@ -204,9 +204,8 @@ fn renderPage(
     const style_name = cascade.resolveStyle(entry, scan_result, base_ctx) orelse "default";
     const style_path = try std.fmt.allocPrint(a, "styles.{s}", .{style_name});
     defer a.free(style_path);
-    if (ctx.resolve(style_path)) |style_val| {
+    if (ctx.resolve(style_path)) |style_val|
         try ctx.putAt("document.style", style_val);
-    }
     const layout_short = layout_override orelse
         cascade.resolveLayout(entry, scan_result, base_ctx) orelse
         base_ctx.resolveString("document.layout") orelse "page.html";
@@ -220,8 +219,14 @@ fn renderPage(
     };
     const loader = style_loader.loader();
 
+    var err_detail: toupee.ErrorDetail = .{};
+    ctx.err_detail = &err_detail;
+
     const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
-        if (err != error.TemplateNotFound) return err;
+        if (err != error.TemplateNotFound) {
+            logRenderError(a, &err_detail, entry.source_path, layout_name);
+            return err;
+        }
         const src = (loader.getSource(a, layout_name) catch {
             std.debug.print("MissingTemplate(load): {s} for page {s}\n", .{ layout_name, entry.source_path });
             return error.MissingTemplate;
@@ -230,13 +235,30 @@ fn renderPage(
             return error.MissingTemplate;
         };
         defer a.free(src);
-        break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| return e;
+        break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| {
+            logRenderError(a, &err_detail, entry.source_path, layout_name);
+            return e;
+        };
     };
 
     return .{
         .output_html = output_html,
         .search_content = search_content,
     };
+}
+
+/// Logs a Toupee render error with full detail (source location, caret, suggestion)
+/// to stderr. Called when template rendering fails for a page.
+fn logRenderError(a: Allocator, ed: *const toupee.ErrorDetail, page_source: []const u8, layout: []const u8) void {
+    if (ed.kind == .none) {
+        std.debug.print("render error: page '{s}' layout '{s}' (no detail available)\n", .{ page_source, layout });
+        return;
+    }
+    const formatted = ed.formatError(a) catch {
+        std.debug.print("render error: page '{s}' layout '{s}': {s}\n", .{ page_source, layout, ed.message });
+        return;
+    };
+    std.debug.print("--- render error: page '{s}' ---\n{s}\n", .{ page_source, formatted });
 }
 
 /// Resolves a short layout name to the full template path within a style.

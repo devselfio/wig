@@ -30,7 +30,7 @@ pub fn generateBundle(
 ) !?AutoBundleResult {
     var has_any_css = false;
     for (resolved.all) |p| {
-        if (p.css_source != null) {
+        if (p.resources.contains("css")) {
             has_any_css = true;
             break;
         }
@@ -72,8 +72,8 @@ pub fn buildLayeredCss(a: Allocator, resolved: LoadResult) ![]const u8 {
     for (resolved.categories) |group| {
         var cat_css = std.ArrayListUnmanaged([]const u8){};
         for (group.patterns) |p| {
-            if (p.css_source) |css| {
-                const trimmed = std.mem.trim(u8, css, " \t\r\n");
+            if (p.resources.get("css")) |entry| {
+                const trimmed = std.mem.trim(u8, entry.content, " \t\r\n");
                 if (trimmed.len > 0) {
                     try cat_css.append(a, trimmed);
                 }
@@ -105,17 +105,22 @@ const pattern_parser = @import("pattern_parser.zig");
 fn stubPattern(a: Allocator, id: []const u8, category: []const u8, css: ?[]const u8) pattern_loader.Pattern {
     var meta = ValueMap{};
     meta.put(a, "name", .{ .string = id }) catch {};
+    var resources = std.StringArrayHashMapUnmanaged(pattern_loader.ResourceEntry){};
+    if (css) |c| resources.put(a, "css", .{
+        .content = c,
+        .rel_path = std.fmt.allocPrint(a, "{s}/{s}.css", .{ category, id }) catch "",
+    }) catch {};
     return .{
         .id = id,
         .category = category,
         .slug = std.fmt.allocPrint(a, "{s}/{s}", .{ category, id }) catch id,
+        .source_style = "test",
         .metadata = .{ .map = meta },
         .example = "",
         .variants = &.{},
-        .css_source = css,
+        .resources = resources,
         .template_source = null,
-        .js_source = null,
-        .asset_paths = &.{},
+        .file_paths = &.{},
     };
 }
 

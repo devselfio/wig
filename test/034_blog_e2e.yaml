@@ -95,7 +95,7 @@ input:
           layout: post.html
           ---
           Second content.
-    assets:
+    files:
       favicon.ico: "ICO"
 output:
   files:
@@ -106,8 +106,8 @@ output:
         index.html: true
       second:
         index.html: true
+    favicon.ico: true
     assets:
       css:
         styles:
           default.*.css: true
-      favicon.ico: true

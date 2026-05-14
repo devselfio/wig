@@ -49,7 +49,7 @@ pub fn resolveAllStyles(
         };
         defer style_dir.close();
 
-        const local = try pattern_loader.loadStylePatterns(a, style_dir, style_ctx);
+        const local = try pattern_loader.loadStylePatterns(a, style_cfg.name, style_dir, style_ctx);
 
         const import_decls = try parseImports(a, style_cfg.raw);
 
@@ -609,12 +609,12 @@ fn stubPatternWithName(a: Allocator, id: []const u8, category: []const u8, name:
         .id = id,
         .category = category,
         .slug = slug,
+        .source_style = "test",
         .metadata = .{ .map = meta },
         .example = "",
         .variants = &.{},
-        .css_source = null,
+        .resources = std.StringArrayHashMapUnmanaged(pattern_loader.ResourceEntry){},
         .template_source = null,
-        .js_source = null,
-        .asset_paths = &.{},
+        .file_paths = &.{},
     };
 }

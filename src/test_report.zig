@@ -166,8 +166,8 @@ pub const Reporter = struct {
         _ = self;
         return switch (f.kind) {
             .yaml_parse_error => "YAML parse error",
-            .site_init_failed => "Site.init failed",
-            .build_failed => "buildAll failed",
+            .site_init_failed => if (f.err) |e| std.fmt.allocPrint(a, "Site.init failed: {}", .{e}) catch "Site.init failed" else "Site.init failed",
+            .build_failed => if (f.err) |e| std.fmt.allocPrint(a, "buildAll failed: {}", .{e}) catch "buildAll failed" else "buildAll failed",
             .expected_fail_but_succeeded => "expected build to fail but it succeeded",
             .output_dir_missing => "could not open zig-out/site",
             .missing_file => std.fmt.allocPrint(a, "output file missing: {s}", .{f.path.?}) catch "output file missing",

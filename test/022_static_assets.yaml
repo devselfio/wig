@@ -1,6 +1,8 @@
 test:
-  name: Static asset copying.
-  comment: Files in assets/ are copied verbatim to output without rendering.
+  name: Static file copying.
+  comment: >
+    Files in files/ are copied verbatim to the output root without rendering.
+    files/robots.txt -> /robots.txt, files/assets/css/reset.css -> /assets/css/reset.css.
   action:
     wig: build
   fixtures: []
@@ -20,13 +22,14 @@ input:
           layouts:
             page.html: |
               <t-slot />
-    assets:
+    files:
       robots.txt: |
         User-agent: *
         Disallow: /admin/
-      css:
-        reset.css: |
-          * { margin: 0; padding: 0; }
+      assets:
+        css:
+          reset.css: |
+            * { margin: 0; padding: 0; }
     pages:
       _index.dj: |
         ---
@@ -36,10 +39,10 @@ output:
   files:
     index.html: |
       <p>Home.</p>
+    robots.txt: |
+      User-agent: *
+      Disallow: /admin/
     assets:
-      robots.txt: |
-        User-agent: *
-        Disallow: /admin/
       css:
         reset.css: |
           * { margin: 0; padding: 0; }

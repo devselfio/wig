@@ -1,0 +1,213 @@
+test:
+  name: Generic resource discovery with frontmatter preprocessing and output files
+  comment: >
+    Any non-reserved subdirectory is a resource type. Files with frontmatter
+    are preprocessed through Toupee. Resource content appears on the pattern
+    context keyed by directory name. Non-CSS resources are also written to
+    output as individual files.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          tokens:
+            step: "1.25"
+        templates:
+          layouts:
+            page.html: |
+              <js><t-raw name="document.style.patterns.blocks.dropdown.js" /></js>
+              <t-slot />
+        patterns:
+          blocks:
+            dropdown.html: |
+              ---
+              name: Dropdown
+              ---
+              <div class="dropdown">Menu</div>
+        js:
+          blocks:
+            dropdown.js: |
+              ---
+              ---
+              const step = '<t-raw name="styles.default.tokens.step" />';
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <js>const step = '1.25';</js>
+      <p>Hello.</p>
+    assets:
+      js:
+        styles:
+          default:
+            blocks:
+              dropdown.js: |
+                const step = '1.25';
+---
+test:
+  name: Novel resource type discovered dynamically with output file
+  comment: >
+    An author-created resource directory (shaders/) is discovered and
+    preprocessed like any other resource type. Output file is written.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          tokens:
+            speed: "0.5"
+        templates:
+          layouts:
+            page.html: |
+              <shader><t-raw name="document.style.patterns.blocks.particle.shaders" /></shader>
+              <t-slot />
+        patterns:
+          blocks:
+            particle.html: |
+              ---
+              name: Particle
+              ---
+              <canvas class="particle"></canvas>
+        shaders:
+          blocks:
+            particle.glsl: |
+              ---
+              ---
+              uniform float speed = <t-raw name="styles.default.tokens.speed" />;
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <shader>uniform float speed = 0.5;</shader>
+      <p>Hello.</p>
+    assets:
+      shaders:
+        styles:
+          default:
+            blocks:
+              particle.glsl: |
+                uniform float speed = 0.5;
+---
+test:
+  name: Frontmatter command dispatch is not yet implemented
+  comment: >
+    A resource file with command: in frontmatter emits a diagnostic.
+    Command dispatch is deferred to a follow-up.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        patterns:
+          blocks:
+            widget.html: |
+              ---
+              name: Widget
+              ---
+              <div class="widget">W</div>
+        scripts:
+          blocks:
+            widget.sh: |
+              ---
+              command: cp $INPUT $OUTPUT
+              ---
+              content
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "command dispatch not yet implemented"
+---
+test:
+  name: CSS auto-bundler still works with resources map
+  comment: >
+    After replacing pattern.css with resources.get("css"), the auto-bundler
+    still produces a single CSS bundle. Individual CSS files are NOT output.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <css><t-if var="document.style.css.path">yes</t-if></css>
+              <t-slot />
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <button>Click</button>
+        css:
+          blocks:
+            button.css: |
+              .button { display: inline-flex; }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <css>yes</css>
+      <p>Hello.</p>
+    assets:
+      css:
+        styles:
+          default.*.css: true

@@ -1,0 +1,86 @@
+test:
+  name: Pattern examples rendered through Toupee with t-include
+  comment: >
+    Pattern examples are rendered through Toupee after templates are loaded.
+    Examples using t-include reference the real template, preventing drift.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <example><t-raw name="document.style.patterns.blocks.button.example" /></example>
+              <t-slot />
+          blocks:
+            button.html: |
+              <button class="button"><t-slot /></button>
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <t-include template="blocks/button.html">Click me</t-include>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <example><button class="button">Click me</button></example>
+      <p>Hello.</p>
+---
+test:
+  name: Plain HTML pattern examples pass through unchanged
+  comment: >
+    Pattern examples without Toupee tags render identically — Toupee is
+    inert on plain HTML.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <example><t-raw name="document.style.patterns.blocks.tag.example" /></example>
+              <t-slot />
+        patterns:
+          blocks:
+            tag.html: |
+              ---
+              name: Tag
+              ---
+              <span class="tag">Label</span>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <example><span class="tag">Label</span></example>
+      <p>Hello.</p>

@@ -170,16 +170,23 @@ fn cloneValueMap(a: Allocator, src: ValueMap) !ValueMap {
     return dst;
 }
 
-fn buildPhase_patternsAndAutoBundle(
+const PatternsResult = struct {
+    resolved: []const import_resolver.ResolvedStyle,
+    bundle_paths: std.StringArrayHashMapUnmanaged(?[]const u8),
+};
+
+fn buildPhase_patternsAndBundle(
     ba: Allocator,
     abs_root: []const u8,
     style_cfgs: []config.StyleConfig,
-    style_ctx: *toupee.Context,
+    style_ctx: *const toupee.Context,
     output_dir: fs.Dir,
-) !void {
+    diags: *diagnostics_mod.Collector,
+) !PatternsResult {
     const styles_path = try fs.path.join(ba, &.{ abs_root, "styles" });
 
-    var styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch return;
+    var styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch
+        return .{ .resolved = &.{}, .bundle_paths = .{} };
     defer styles_dir.close();
 
     const resolved = try import_resolver.resolveAllStyles(
@@ -190,15 +197,159 @@ fn buildPhase_patternsAndAutoBundle(
     );
 
     for (resolved) |rs| {
-        const pattern_ctx = try pattern_loader.buildPatternContext(ba, rs.result);
+        for (rs.result.command_dispatch_paths) |path| {
+            try diags.errFmt(ba, "command dispatch not yet implemented: {s}", .{path});
+        }
+    }
+
+    var bundle_paths = std.StringArrayHashMapUnmanaged(?[]const u8){};
+    for (resolved) |rs| {
+        const bundle = try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir);
+        try bundle_paths.put(ba, rs.name, if (bundle) |b| b.path else null);
+    }
+
+    return .{ .resolved = resolved, .bundle_paths = bundle_paths };
+}
+
+fn renderPatternExamples(
+    ba: Allocator,
+    patterns_result: PatternsResult,
+    template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
+    style_ctx: *const toupee.Context,
+) !std.StringArrayHashMapUnmanaged([]const u8) {
+    var overrides = std.StringArrayHashMapUnmanaged([]const u8){};
+
+    for (patterns_result.resolved) |rs| {
+        var style_loader = template_loader.StyleLoader{
+            .templates = template_map,
+            .style_name = rs.name,
+        };
+
+        for (rs.result.all) |pattern| {
+            if (pattern.example.len == 0) continue;
+            if (std.mem.indexOf(u8, pattern.example, "<t-") == null) continue;
+
+            const rendered = toupee.render(ba, pattern.example, style_ctx, style_loader.loader(), .{
+                .strict = false,
+            }) catch continue;
+
+            if (!std.mem.eql(u8, rendered, pattern.example)) {
+                try overrides.put(ba, pattern.slug, try ba.dupe(u8, rendered));
+            }
+        }
+    }
+
+    return overrides;
+}
+
+fn buildPhase_patternContext(
+    ba: Allocator,
+    abs_root: []const u8,
+    patterns_result: PatternsResult,
+    example_overrides: *const std.StringArrayHashMapUnmanaged([]const u8),
+    style_ctx: *toupee.Context,
+    diags: *diagnostics_mod.Collector,
+) !void {
+    for (patterns_result.resolved) |rs| {
+        const pattern_ctx = try pattern_loader.buildPatternContext(ba, rs.result, example_overrides);
         const ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.patterns", .{rs.name});
         try style_ctx.putAt(ctx_key, pattern_ctx);
 
-        if (try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir)) |bundle| {
-            const css_path_key = try std.fmt.allocPrint(ba, "styles.{s}.css.path", .{rs.name});
-            try style_ctx.putAt(css_path_key, .{ .string = bundle.path });
+        if (patterns_result.bundle_paths.get(rs.name)) |opt_path| {
+            if (opt_path) |path| {
+                const css_path_key = try std.fmt.allocPrint(ba, "styles.{s}.css.path", .{rs.name});
+                try style_ctx.putAt(css_path_key, .{ .string = path });
+            }
+        }
+
+        // Build style file tree at styles.{name}.files
+        const files_dir_path = try fs.path.join(ba, &.{ abs_root, "styles", rs.name, "files" });
+        var files_dir = fs.openDirAbsolute(files_dir_path, .{ .iterate = true }) catch continue;
+        defer files_dir.close();
+
+        const file_tree = try buildStyleFileTree(ba, files_dir, rs.name, "", diags);
+        const files_ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.files", .{rs.name});
+        try style_ctx.putAt(files_ctx_key, file_tree);
+    }
+}
+
+/// Recursively walks a style's `files/` directory, building a nested toupee.Value
+/// map. Files are keyed by stem (no extension), values are web path strings.
+/// Directories with file children get an `items` list sorted alphabetically.
+/// Stem collisions (two files with same stem, different extensions) are errors.
+fn buildStyleFileTree(
+    a: Allocator,
+    dir: fs.Dir,
+    style_name: []const u8,
+    prefix: []const u8,
+    diags: *diagnostics_mod.Collector,
+) !toupee.Value {
+    var map = ValueMap{};
+    var items = std.ArrayListUnmanaged(toupee.Value){};
+    var stem_exts = std.StringArrayHashMapUnmanaged([]const u8){};
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        switch (entry.kind) {
+            .file => {
+                const name = try a.dupe(u8, entry.name);
+                const dot_pos = std.mem.lastIndexOfScalar(u8, name, '.') orelse continue;
+                const stem = name[0..dot_pos];
+
+                if (stem_exts.get(stem)) |existing_ext| {
+                    const collision_path = if (prefix.len > 0)
+                        try std.fmt.allocPrint(a, "{s}/{s}", .{ prefix, stem })
+                    else
+                        try a.dupe(u8, stem);
+                    try diags.errFmt(a, "style file collision: styles/{s}/files/{s} has multiple extensions ({s}, {s})", .{
+                        style_name, collision_path, existing_ext, name[dot_pos..],
+                    });
+                    continue;
+                }
+                try stem_exts.put(a, stem, name[dot_pos..]);
+
+                const web_path = if (prefix.len > 0)
+                    try std.fmt.allocPrint(a, "/assets/styles/{s}/{s}/{s}", .{ style_name, prefix, name })
+                else
+                    try std.fmt.allocPrint(a, "/assets/styles/{s}/{s}", .{ style_name, name });
+
+                try map.put(a, stem, .{ .string = web_path });
+                try items.append(a, .{ .string = web_path });
+            },
+            .directory => {
+                const dir_name = try a.dupe(u8, entry.name);
+                const sub_prefix = if (prefix.len > 0)
+                    try std.fmt.allocPrint(a, "{s}/{s}", .{ prefix, dir_name })
+                else
+                    dir_name;
+
+                var sub_dir = dir.openDir(dir_name, .{ .iterate = true }) catch continue;
+                defer sub_dir.close();
+                const sub_tree = try buildStyleFileTree(a, sub_dir, style_name, sub_prefix, diags);
+                try map.put(a, dir_name, sub_tree);
+            },
+            else => {},
         }
     }
+
+    if (items.items.len > 0) {
+        std.mem.sort(toupee.Value, items.items, {}, struct {
+            fn cmp(_: void, lhs: toupee.Value, rhs: toupee.Value) bool {
+                const ls = switch (lhs) {
+                    .string => |s| s,
+                    else => "",
+                };
+                const rs = switch (rhs) {
+                    .string => |s| s,
+                    else => "",
+                };
+                return std.mem.order(u8, ls, rs) == .lt;
+            }
+        }.cmp);
+        try map.put(a, "items", .{ .list = try a.dupe(toupee.Value, items.items) });
+    }
+
+    return .{ .map = map };
 }
 
 fn buildPhase_scanAndTaxonomies(
@@ -433,12 +584,18 @@ pub const Site = struct {
         var style_ctx = try buildPhase_styleTokensSiteData(ba, abs_root, &site_cfg, style_cfgs, &data_result);
 
         // --- Phase: pattern loading, import resolution, @layer auto-bundling ---
-        try buildPhase_patternsAndAutoBundle(ba, abs_root, style_cfgs, &style_ctx, output_dir);
+        const patterns_result = try buildPhase_patternsAndBundle(ba, abs_root, style_cfgs, &style_ctx, output_dir, &diags);
 
         // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
         var template_map = std.StringArrayHashMapUnmanaged([]const u8){};
         try buildPhase_loadTemplates(ba, a, abs_root, style_cfgs, &engine, &template_map);
+
+        // --- Phase: render pattern examples through Toupee ---
+        var example_overrides = try renderPatternExamples(ba, patterns_result, &template_map, &style_ctx);
+
+        // --- Phase: build pattern context + style file tree ---
+        try buildPhase_patternContext(ba, abs_root, patterns_result, &example_overrides, &style_ctx, &diags);
 
         var transform_reg = toupee.transform.Registry{};
         try transform_reg.registerBuiltins(ba);
@@ -500,8 +657,11 @@ pub const Site = struct {
             render_results,
         );
 
-        // --- Phase: copy static assets ---
-        try copyAssets(a, self.root_dir, output_dir);
+        // --- Phase: copy static files ---
+        try checkSiteStyleCollision(self.root_dir, &diags, ba);
+        try copyFiles(a, self.root_dir, output_dir);
+        try copyStyleFiles(a, self.root_dir, output_dir, style_cfgs);
+        try writeStyleResources(a, patterns_result, output_dir);
 
         // --- Phase: link checking ---
         {
@@ -646,16 +806,81 @@ fn sectionFromUrl(a: Allocator, url_path: []const u8) !?[]const u8 {
     return null;
 }
 
-/// Recursively copies `assets/` to the output directory.
-fn copyAssets(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir) !void {
-    var assets_dir = root_dir.openDir("assets", .{ .iterate = true }) catch return;
-    defer assets_dir.close();
+/// Copies style-level `files/` directories to output at `/assets/styles/{name}/`.
+fn copyStyleFiles(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir, style_cfgs: []config.StyleConfig) !void {
+    for (style_cfgs) |style_cfg| {
+        const src_path = try std.fmt.allocPrint(a, "styles/{s}/files", .{style_cfg.name});
+        defer a.free(src_path);
+        var src_dir = root_dir.openDir(src_path, .{ .iterate = true }) catch continue;
+        defer src_dir.close();
 
-    output_dir.makePath("assets") catch {};
-    var out_assets = try output_dir.openDir("assets", .{});
-    defer out_assets.close();
+        const dst_path = try std.fmt.allocPrint(a, "assets/styles/{s}", .{style_cfg.name});
+        defer a.free(dst_path);
+        output_dir.makePath(dst_path) catch {};
+        var dst_dir = try output_dir.openDir(dst_path, .{});
+        defer dst_dir.close();
 
-    try copyDirRecursive(a, assets_dir, out_assets);
+        try copyDirRecursive(a, src_dir, dst_dir);
+    }
+}
+
+/// Writes processed resource files to output. Pattern-matched CSS is skipped
+/// (handled by the auto-bundler). All other resources are individually output.
+fn writeStyleResources(
+    a: Allocator,
+    patterns_result: PatternsResult,
+    output_dir: fs.Dir,
+) !void {
+    for (patterns_result.resolved) |rs| {
+        // Pattern-matched non-CSS resources.
+        for (rs.result.all) |pattern| {
+            var res_it = pattern.resources.iterator();
+            while (res_it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, "css")) continue;
+
+                const out_path = try std.fmt.allocPrint(a, "assets/{s}/styles/{s}/{s}", .{
+                    entry.key_ptr.*, pattern.source_style, entry.value_ptr.rel_path,
+                });
+                defer a.free(out_path);
+
+                const dir_part = std.fs.path.dirname(out_path) orelse "";
+                output_dir.makePath(dir_part) catch {};
+                var f = try output_dir.createFile(out_path, .{});
+                defer f.close();
+                try f.writeAll(entry.value_ptr.content);
+            }
+        }
+
+        // Standalone resources.
+        for (rs.result.standalone_resources) |res| {
+            const out_path = try std.fmt.allocPrint(a, "assets/{s}/styles/{s}/{s}", .{
+                res.resource_type, rs.name, res.rel_path,
+            });
+            defer a.free(out_path);
+
+            const dir_part = std.fs.path.dirname(out_path) orelse "";
+            output_dir.makePath(dir_part) catch {};
+            var f = try output_dir.createFile(out_path, .{});
+            defer f.close();
+            try f.writeAll(res.content);
+        }
+    }
+}
+
+/// Checks for collision between site-level `files/assets/styles/` and style file output.
+fn checkSiteStyleCollision(root_dir: fs.Dir, diags: *diagnostics_mod.Collector, ba: Allocator) !void {
+    var check_dir = root_dir.openDir("files/assets/styles", .{}) catch return;
+    check_dir.close();
+    try diags.err(ba, "site files/assets/styles/ collides with style file output path; move site files elsewhere");
+}
+
+/// Recursively copies `files/` to the output root directory.
+/// `files/robots.txt` → `/robots.txt`, `files/assets/img.png` → `/assets/img.png`.
+fn copyFiles(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir) !void {
+    var files_dir = root_dir.openDir("files", .{ .iterate = true }) catch return;
+    defer files_dir.close();
+
+    try copyDirRecursive(a, files_dir, output_dir);
 }
 
 fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
@@ -793,20 +1018,26 @@ test "E2E: data pipeline loads config, computes tokens, renders template" {
     try std.testing.expectEqualStrings("has-tokens", html2);
 }
 
-test "copyAssets: copies files recursively" {
+test "copyFiles: copies files/ to output root recursively" {
     const a = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("assets/images");
+    try tmp.dir.makePath("files/assets/images");
     {
-        var assets = try tmp.dir.openDir("assets", .{});
-        defer assets.close();
-        var f = try assets.createFile("style.css", .{});
-        try f.writeAll("body{}");
+        var files = try tmp.dir.openDir("files", .{});
+        defer files.close();
+        var f = try files.createFile("robots.txt", .{});
+        try f.writeAll("User-agent: *");
         f.close();
 
-        var images = try assets.openDir("images", .{});
+        var assets_dir = try files.openDir("assets", .{});
+        defer assets_dir.close();
+        var css = try assets_dir.createFile("style.css", .{});
+        try css.writeAll("body{}");
+        css.close();
+
+        var images = try assets_dir.openDir("images", .{});
         defer images.close();
         var img = try images.createFile("logo.png", .{});
         try img.writeAll("PNG");
@@ -817,7 +1048,11 @@ test "copyAssets: copies files recursively" {
     var output = try tmp.dir.openDir("output", .{});
     defer output.close();
 
-    try copyAssets(a, tmp.dir, output);
+    try copyFiles(a, tmp.dir, output);
+
+    const robots = try output.readFileAlloc(a, "robots.txt", 4096);
+    defer a.free(robots);
+    try std.testing.expectEqualStrings("User-agent: *", robots);
 
     const css = try output.readFileAlloc(a, "assets/style.css", 4096);
     defer a.free(css);
@@ -826,4 +1061,343 @@ test "copyAssets: copies files recursively" {
     const img = try output.readFileAlloc(a, "assets/images/logo.png", 4096);
     defer a.free(img);
     try std.testing.expectEqualStrings("PNG", img);
+}
+
+test "putAt then resolve preserves nested map values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = toupee.Context.init(a);
+    defer ctx.deinit();
+
+    // Step 1: simulate buildPhase_styleTokensSiteData — styles.default with a name
+    var style_map = ValueMap{};
+    try style_map.put(a, "name", .{ .string = "default" });
+    var styles_map = ValueMap{};
+    try styles_map.put(a, "default", .{ .map = style_map });
+    try ctx.put("styles", .{ .map = styles_map });
+
+    // Step 2: simulate putAt("styles.default.patterns", ...)
+    var patterns_map = ValueMap{};
+    try patterns_map.put(a, "all", .{ .list = &.{} });
+    try ctx.putAt("styles.default.patterns", .{ .map = patterns_map });
+
+    // Step 3: simulate putAt("styles.default.files", ...) with nested map
+    var logo_map = ValueMap{};
+    try logo_map.put(a, "logo", .{ .string = "/assets/styles/default/images/logo.svg" });
+    var files_map = ValueMap{};
+    try files_map.put(a, "images", .{ .map = logo_map });
+    try ctx.putAt("styles.default.files", .{ .map = files_map });
+
+    // Verify: resolve from ctx directly
+    const files_val = ctx.resolve("styles.default.files") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(files_val == .map);
+    try std.testing.expectEqual(@as(usize, 1), files_val.map.count());
+
+    const images_val = ctx.resolve("styles.default.files.images") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(images_val == .map);
+
+    const logo = ctx.resolve("styles.default.files.images.logo") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(logo == .string);
+    try std.testing.expectEqualStrings("/assets/styles/default/images/logo.svg", logo.string);
+
+    // Step 4: simulate what renderPage does — initFrom + putAt("document.style", ...)
+    var child = try toupee.Context.initFrom(a, &ctx);
+    defer child.deinit();
+
+    const style_resolved = child.resolve("styles.default") orelse return error.TestUnexpectedResult;
+    try child.putAt("document.style", style_resolved);
+
+    // Verify: document.style.files.images.logo
+    const ds_files = child.resolve("document.style.files") orelse {
+        std.debug.print("FAIL: document.style.files not found\n", .{});
+        // Extra diagnostics: check what document.style contains
+        if (child.resolve("document.style")) |ds| {
+            if (ds == .map) {
+                std.debug.print("  document.style keys:", .{});
+                var ds_it = ds.map.iterator();
+                while (ds_it.next()) |e| std.debug.print(" {s}({s})", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+                std.debug.print("\n", .{});
+            }
+        }
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(ds_files == .map);
+
+    const ds_logo = child.resolve("document.style.files.images.logo") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("/assets/styles/default/images/logo.svg", ds_logo.string);
+}
+
+test "putAt into existing map merges, does not clobber siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = toupee.Context.init(a);
+    defer ctx.deinit();
+
+    // Put a map at a.b with key "x"
+    var inner = ValueMap{};
+    try inner.put(a, "x", .{ .string = "1" });
+    try ctx.putAt("a.b", .{ .map = inner });
+
+    // Now put a new key at a.b.y — should not clobber x
+    try ctx.putAt("a.b.y", .{ .string = "2" });
+
+    // Both should be present
+    const x = ctx.resolve("a.b.x") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("1", x.string);
+    const y = ctx.resolve("a.b.y") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("2", y.string);
+
+    // But putAt("a.b", new_map) REPLACES the whole map
+    var replacement = ValueMap{};
+    try replacement.put(a, "z", .{ .string = "3" });
+    try ctx.putAt("a.b", .{ .map = replacement });
+
+    // x and y should be gone, z should exist
+    try std.testing.expect(ctx.resolve("a.b.x") == null);
+    try std.testing.expect(ctx.resolve("a.b.y") == null);
+    const z = ctx.resolve("a.b.z") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("3", z.string);
+}
+
+test "putAt-only style pipeline: putAt styles.default then add children" {
+    // Reproduces the real pipeline: putAt("styles.default", val), then
+    // putAt("styles.default.patterns", ...), then putAt("styles.default.files", ...).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = toupee.Context.init(a);
+    defer ctx.deinit();
+
+    // Step 1: buildPhase_styleTokensSiteData — putAt("styles.default", yaml_value)
+    var style_val = ValueMap{};
+    try style_val.put(a, "name", .{ .string = "default" });
+    try ctx.putAt("styles.default", .{ .map = style_val });
+
+    // Verify initial state
+    const name1 = ctx.resolve("styles.default.name") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("default", name1.string);
+
+    // Step 2: putAt("styles.default.patterns", ...) — adds patterns sibling
+    var patterns = ValueMap{};
+    try patterns.put(a, "all", .{ .list = &.{} });
+    try ctx.putAt("styles.default.patterns", .{ .map = patterns });
+
+    // Verify name still there
+    const name2 = ctx.resolve("styles.default.name") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("default", name2.string);
+
+    // Step 3: putAt("styles.default.files", ...) — adds files sibling
+    var images = ValueMap{};
+    try images.put(a, "logo", .{ .string = "/assets/styles/default/images/logo.svg" });
+    var files = ValueMap{};
+    try files.put(a, "images", .{ .map = images });
+    try ctx.putAt("styles.default.files", .{ .map = files });
+
+    // Verify all three siblings present
+    try std.testing.expect(ctx.resolve("styles.default.name") != null);
+    try std.testing.expect(ctx.resolve("styles.default.patterns") != null);
+    const f = ctx.resolve("styles.default.files") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(f == .map);
+    try std.testing.expectEqual(@as(usize, 1), f.map.count());
+    const logo = ctx.resolve("styles.default.files.images.logo") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("/assets/styles/default/images/logo.svg", logo.string);
+}
+
+test "initFrom child sees parent putAt additions via document.style alias" {
+    // Full pipeline simulation: build style context, create child, alias to document.style
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = toupee.Context.init(a);
+    defer parent.deinit();
+
+    // Build up styles.default with putAt (as real code does)
+    var style_val = ValueMap{};
+    try style_val.put(a, "name", .{ .string = "default" });
+    try parent.putAt("styles.default", .{ .map = style_val });
+    try parent.putAt("styles.default.patterns", .{ .string = "pat-placeholder" });
+
+    var images = ValueMap{};
+    try images.put(a, "logo", .{ .string = "/assets/styles/default/images/logo.svg" });
+    var files = ValueMap{};
+    try files.put(a, "images", .{ .map = images });
+    try parent.putAt("styles.default.files", .{ .map = files });
+
+    // Create child context (as renderPage does)
+    var child = try toupee.Context.initFrom(a, &parent);
+    defer child.deinit();
+
+    // Resolve styles.default and put as document.style (as renderPage line 207-208)
+    const style_resolved = child.resolve("styles.default") orelse return error.TestUnexpectedResult;
+    try child.putAt("document.style", style_resolved);
+
+    // Verify document.style.files.images.logo
+    const ds_logo = child.resolve("document.style.files.images.logo") orelse {
+        // Diagnostic: dump what document.style actually contains
+        if (child.resolve("document.style")) |ds| {
+            if (ds == .map) {
+                std.debug.print("document.style keys:", .{});
+                var it2 = ds.map.iterator();
+                while (it2.next()) |e| std.debug.print(" {s}({s})", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+                std.debug.print("\n", .{});
+            }
+        }
+        if (child.resolve("document.style.files")) |dsf| {
+            if (dsf == .map) {
+                std.debug.print("document.style.files count={d} keys:", .{dsf.map.count()});
+                var it3 = dsf.map.iterator();
+                while (it3.next()) |e| std.debug.print(" {s}", .{e.key_ptr.*});
+                std.debug.print("\n", .{});
+            } else {
+                std.debug.print("document.style.files is {s}\n", .{@tagName(dsf)});
+            }
+        } else {
+            std.debug.print("document.style.files is null\n", .{});
+        }
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqualStrings("/assets/styles/default/images/logo.svg", ds_logo.string);
+}
+
+test "detachPerPageDocumentMap preserves style alias" {
+    // Tests the detachPerPageDocumentMap step that happens between initFrom
+    // and document.style being set. This copies the document map.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = toupee.Context.init(a);
+    defer parent.deinit();
+
+    // Set up parent with style data and document defaults
+    var style_val = ValueMap{};
+    try style_val.put(a, "name", .{ .string = "default" });
+    try parent.putAt("styles.default", .{ .map = style_val });
+
+    var images = ValueMap{};
+    try images.put(a, "logo", .{ .string = "/logo.svg" });
+    var files = ValueMap{};
+    try files.put(a, "images", .{ .map = images });
+    try parent.putAt("styles.default.files", .{ .map = files });
+
+    // Set document.layout in parent (as document.yaml would)
+    try parent.putAt("document.layout", .{ .string = "page.html" });
+
+    // Create child and detach document map (as renderPage does)
+    var child = try toupee.Context.initFrom(a, &parent);
+    defer child.deinit();
+
+    // detachPerPageDocumentMap clones the document map
+    const doc_val = parent.resolve("document") orelse return error.TestUnexpectedResult;
+    if (doc_val == .map) {
+        var clone: ValueMap = .{};
+        var it = doc_val.map.iterator();
+        while (it.next()) |e| {
+            const val = e.value_ptr.*;
+            const val_copy: toupee.Value = if (val == .string)
+                .{ .string = try a.dupe(u8, val.string) }
+            else
+                val;
+            try clone.put(a, try a.dupe(u8, e.key_ptr.*), val_copy);
+        }
+        try child.put("document", .{ .map = clone });
+    }
+
+    // Now set document.style from resolved styles.default
+    const style_resolved = child.resolve("styles.default") orelse return error.TestUnexpectedResult;
+    try child.putAt("document.style", style_resolved);
+
+    // Verify
+    const logo = child.resolve("document.style.files.images.logo") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("/logo.svg", logo.string);
+}
+
+test "full renderPage context sequence with many document.* putAt calls" {
+    // Reproduces the exact sequence of putAt calls that renderPage makes,
+    // including many document.* entries that grow the map before document.style.
+    // Uses arena allocators like the real pipeline to catch allocator-specific issues.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = toupee.Context.init(a);
+    defer parent.deinit();
+
+    // Set up parent like the real build pipeline
+    var style_map = ValueMap{};
+    try style_map.put(a, "name", .{ .string = "default" });
+    try parent.putAt("styles.default", .{ .map = style_map });
+
+    var patterns = ValueMap{};
+    try patterns.put(a, "all", .{ .list = &.{} });
+    try parent.putAt("styles.default.patterns", .{ .map = patterns });
+
+    var images = ValueMap{};
+    try images.put(a, "logo", .{ .string = "/assets/styles/default/images/logo.svg" });
+    var files = ValueMap{};
+    try files.put(a, "images", .{ .map = images });
+    try parent.putAt("styles.default.files", .{ .map = files });
+
+    try parent.putAt("document.layout", .{ .string = "page.html" });
+    try parent.putAt("document.style", .{ .string = "default" });
+
+    // Create child context (line 93 of pages.zig)
+    var ctx = try toupee.Context.initFrom(a, &parent);
+    defer ctx.deinit();
+
+    // detachPerPageDocumentMap (line 94)
+    const doc_val = parent.resolve("document") orelse return error.TestUnexpectedResult;
+    if (doc_val == .map) {
+        var clone: ValueMap = .{};
+        var it = doc_val.map.iterator();
+        while (it.next()) |e| {
+            const val = e.value_ptr.*;
+            const val_copy: toupee.Value = if (val == .string) .{ .string = try a.dupe(u8, val.string) } else val;
+            try clone.put(a, try a.dupe(u8, e.key_ptr.*), val_copy);
+        }
+        try ctx.put("document", .{ .map = clone });
+    }
+
+    // Lines 95-96: document.path, document.url
+    try ctx.putAt("document.path", .{ .string = "/" });
+    try ctx.putAt("document.url", .{ .string = "http://localhost/" });
+
+    // Line 133: document.ancestors
+    try ctx.putAt("document.ancestors", .{ .list = &.{} });
+
+    // Line 156-158: document.children
+    try ctx.putAt("document.children", .{ .list = &.{} });
+
+    // Line 161: document.toc
+    try ctx.putAt("document.toc", .{ .list = &.{} });
+
+    // Line 165: document.excerpt
+    try ctx.putAt("document.excerpt", .{ .string = "" });
+
+    // Lines 207-208: resolve styles.default and put as document.style
+    const style_resolved = ctx.resolve("styles.default") orelse return error.TestUnexpectedResult;
+    try ctx.putAt("document.style", style_resolved);
+
+    // Line 213: document.layout AFTER document.style
+    try ctx.putAt("document.layout", .{ .string = try a.dupe(u8, "page.html") });
+
+    // NOW verify — does document.style.files survive all the map growth?
+    const ds = ctx.resolve("document.style") orelse {
+        std.debug.print("FAIL: document.style not found\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(ds == .map);
+
+    const ds_files = ctx.resolve("document.style.files") orelse {
+        std.debug.print("FAIL: document.style.files not found\n", .{});
+        std.debug.print("document.style keys:", .{});
+        var it2 = ds.map.iterator();
+        while (it2.next()) |e| std.debug.print(" {s}({s})", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+        std.debug.print("\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(ds_files == .map);
+
+    const logo = ctx.resolve("document.style.files.images.logo") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("/assets/styles/default/images/logo.svg", logo.string);
 }

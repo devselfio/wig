@@ -1,0 +1,202 @@
+test:
+  name: Style files directory copied to output with context tree
+  comment: >
+    files/ under a style is copied to output at /assets/styles/{name}/
+    and exposed in context as styles.{name}.files with stem-keyed web paths.
+    Pattern file_paths contain valid web URLs.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <logo><t-var name="document.style.files.images.logo" /></logo>
+              <icon><t-var name="document.style.files.blocks.button.icon" /></icon>
+              <file-paths><t-for p in document.style.patterns.blocks.button.file_paths><t-var name="p" />,</t-for></file-paths>
+              <t-slot />
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <button>Click</button>
+        files:
+          images:
+            logo.svg: |
+              <svg></svg>
+          blocks:
+            button:
+              icon.svg: |
+                <svg>icon</svg>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <logo>/assets/styles/default/images/logo.svg</logo>
+      <icon>/assets/styles/default/blocks/button/icon.svg</icon>
+      <file-paths>/assets/styles/default/blocks/button/icon.svg,</file-paths>
+      <p>Hello.</p>
+    assets:
+      styles:
+        default:
+          images:
+            logo.svg: |
+              <svg></svg>
+          blocks:
+            button:
+              icon.svg: |
+                <svg>icon</svg>
+---
+test:
+  name: Style file stem collision is a build error
+  comment: >
+    Two files in the same directory with the same stem but different
+    extensions produce a build error.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        files:
+          images:
+            icon.svg: |
+              <svg></svg>
+            icon.png: "PNG"
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "style file collision"
+---
+test:
+  name: Site files/assets/styles/ collides with style file output
+  comment: >
+    If site-level files/ contains assets/styles/, it collides with
+    the style file output namespace at /assets/styles/. Build fails.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    files:
+      assets:
+        styles:
+          something.txt: "collision"
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "site files/assets/styles/ collides"
+---
+test:
+  name: Imported pattern file_paths resolve to source style
+  comment: >
+    When booth imports cube's button, the pattern's file_paths point to
+    /assets/styles/cube/ not /assets/styles/booth/.
+    booth's own file tree does not contain cube's files.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: booth
+        layout: page.html
+    styles:
+      cube:
+        style.yaml: |
+          name: cube
+        patterns:
+          blocks:
+            button.html: |
+              ---
+              name: Button
+              ---
+              <button>Click</button>
+        files:
+          blocks:
+            button:
+              icon.svg: |
+                <svg>cube-icon</svg>
+      booth:
+        style.yaml: |
+          name: booth
+          imports:
+            cube:
+              patterns: "**"
+        templates:
+          layouts:
+            page.html: |
+              <paths><t-for p in document.style.patterns.blocks.button.file_paths><t-var name="p" />,</t-for></paths>
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hello.
+output:
+  files:
+    index.html: |
+      <paths>/assets/styles/cube/blocks/button/icon.svg,</paths>
+      <p>Hello.</p>
+    assets:
+      styles:
+        cube:
+          blocks:
+            button:
+              icon.svg: |
+                <svg>cube-icon</svg>
