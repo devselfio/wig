@@ -1,0 +1,77 @@
+test:
+  name: "{{ document.style.files.* }} resolves in Djot content"
+  comment: >
+    The {{ }} preprocessor must resolve document.style.files paths inside
+    Djot content, not only in Toupee templates. This verifies that the
+    interpolation context includes the resolved style sub-tree.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        files:
+          images:
+            logo.svg: |
+              <svg></svg>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        ![Logo]({{ document.style.files.images.logo }})
+output:
+  files:
+    index.html: |
+      <p><img alt="Logo" src="/assets/styles/default/images/logo.svg"></p>
+    assets:
+      styles:
+        default:
+          images:
+            logo.svg: |
+              <svg></svg>
+---
+test:
+  name: "Unresolved {{ }} interpolation produces a build error"
+  comment: >
+    When a {{ path }} cannot be resolved, the build must fail with a
+    diagnostic rather than silently emitting an empty string.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Link: {{ no.such.path }}
+output:
+  exit: 1
+  diagnostics:
+    - kind: error
+      contains: "unresolved interpolation"

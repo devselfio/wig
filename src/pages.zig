@@ -6,6 +6,7 @@ const context_mod = @import("context.zig");
 const html = @import("html.zig");
 const template_loader = @import("template_loader.zig");
 const cascade = @import("cascade.zig");
+const diagnostics_mod = @import("diagnostics.zig");
 
 const Allocator = std.mem.Allocator;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
@@ -41,8 +42,9 @@ pub fn renderOne(
     content_parsers: []const ContentParserEntry,
     transform_registry: *const toupee.transform.Registry,
     scan_result: *const scanner_mod.ScanResult,
+    diags: *diagnostics_mod.Collector,
 ) !RenderResult {
-    return renderPage(a, entry, null, null, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+    return renderPage(a, entry, null, null, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
 }
 
 fn renderPage(
@@ -56,6 +58,7 @@ fn renderPage(
     content_parsers: []const ContentParserEntry,
     transform_registry: *const toupee.transform.Registry,
     scan_result: *const scanner_mod.ScanResult,
+    diags: *diagnostics_mod.Collector,
 ) !RenderResult {
     // Phase 1: content preparation (interpolations → parse → shortcodes)
     var interp_ctx = try toupee.Context.initFrom(a, base_ctx);
@@ -76,7 +79,13 @@ fn renderPage(
             }
         }
     }
-    const content_preprocessed = try resolveInterpolations(a, entry.content_body, &interp_ctx, transform_registry);
+    // Resolve document.style so {{ document.style.files.* }} works in content.
+    const interp_style_name = cascade.resolveStyle(entry, scan_result, base_ctx) orelse "default";
+    const interp_style_path = try std.fmt.allocPrint(a, "styles.{s}", .{interp_style_name});
+    defer a.free(interp_style_path);
+    if (interp_ctx.resolve(interp_style_path)) |style_val|
+        try interp_ctx.putAt("document.style", style_val);
+    const content_preprocessed = try resolveInterpolations(a, entry.content_body, &interp_ctx, transform_registry, entry.source_path, diags);
     errdefer a.free(content_preprocessed);
     const content_html = try parseContent(a, content_preprocessed, entry.extension, content_parsers);
     a.free(content_preprocessed);
@@ -334,6 +343,7 @@ pub fn renderAll(
     content_parsers: []const ContentParserEntry,
     transform_registry: *const toupee.transform.Registry,
     output_dir: fs.Dir,
+    diags: *diagnostics_mod.Collector,
 ) ![]RenderResult {
     const all_pages = scan_result.pages;
     const results = try a.alloc(RenderResult, all_pages.len);
@@ -344,7 +354,7 @@ pub fn renderAll(
         if (paginate_cfg != null and page.is_section) {
             const cfg = paginate_cfg.?;
             const items = resolveCollectionForPage(a, base_ctx, cfg.collection, page, scan_result) orelse {
-                results[i] = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                results[i] = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
                 output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
                 var f = try output_dir.createFile(page.output_file, .{});
                 defer f.close();
@@ -364,7 +374,7 @@ pub fn renderAll(
             // with sidebar navigation) before generating the sub-pages.
             const has_index = cfg.slug != null and cfg.layout != null;
             if (has_index) {
-                const index_result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                const index_result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
                 output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
                 var idx_f = try output_dir.createFile(page.output_file, .{});
                 defer idx_f.close();
@@ -374,7 +384,7 @@ pub fn renderAll(
 
             var first_result: ?RenderResult = null;
             for (chunks) |chunk| {
-                const result = try renderPage(a, page, chunk, cfg.layout, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+                const result = try renderPage(a, page, chunk, cfg.layout, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
                 const file_path = try paginateUrlPathToFile(a, chunk.output_path);
                 defer a.free(file_path);
                 output_dir.makePath(std.fs.path.dirname(file_path) orelse ".") catch {};
@@ -387,7 +397,7 @@ pub fn renderAll(
                 results[i] = first_result.?;
             }
         } else {
-            const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result);
+            const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
             output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
             var f = try output_dir.createFile(page.output_file, .{});
             defer f.close();
@@ -402,11 +412,14 @@ pub fn renderAll(
 /// Resolves `{{ variable }}` interpolations in content using the given context.
 /// Supports `{{ path }}` and `{{ path | transform }}` / `{{ path | transform:arg }}`.
 /// Runs before content parsing (zjot) so Djot links get resolved URLs.
+/// Emits a diagnostic error for unresolvable paths instead of silently producing empty strings.
 fn resolveInterpolations(
     a: Allocator,
     content: []const u8,
     ctx: *const toupee.Context,
     transform_registry: *const toupee.transform.Registry,
+    source_path: []const u8,
+    diags: *diagnostics_mod.Collector,
 ) ![]const u8 {
     var out = std.ArrayListUnmanaged(u8){};
     defer out.deinit(a);
@@ -430,13 +443,13 @@ fn resolveInterpolations(
         const path = if (pipe) |p| std.mem.trim(u8, inner[0..p], " \t\n\r") else inner;
 
         const resolved = ctx.resolve(path) orelse {
-            try out.appendSlice(a, "");
-            continue;
+            try diags.errFmt(a, "unresolved interpolation: {{{{ {s} }}}} in {s}", .{ path, source_path });
+            return error.BuildFailed;
         };
 
         const str_val = try resolved.toStringValue(a) orelse {
-            try out.appendSlice(a, "");
-            continue;
+            try diags.errFmt(a, "non-string interpolation: {{{{ {s} }}}} in {s}", .{ path, source_path });
+            return error.BuildFailed;
         };
 
         if (pipe) |p| {

@@ -639,6 +639,7 @@ pub const Site = struct {
             self.options.content_parsers,
             &transform_reg,
             output_dir,
+            &diags,
         );
 
         // --- Hook: post_render ---
