@@ -11,6 +11,8 @@ const reload_script_tag = "<script defer src=\"/__wig/reload.js\"></script>";
 const log = std.log.scoped(.serve);
 
 pub const Options = struct {
+    /// Bind address. Defaults to 127.0.0.1; use "0.0.0.0" to accept from all interfaces.
+    host: []const u8 = "127.0.0.1",
     port: u16 = 8080,
     live_reload: bool = true,
 };
@@ -59,8 +61,8 @@ pub const DevServer = struct {
         http_thread.detach();
 
         std.debug.print(
-            "wig serve: listening on http://localhost:{d}/\n",
-            .{options.port},
+            "wig serve: listening on http://{s}:{d}/\n",
+            .{ options.host, options.port },
         );
 
         while (true) {
@@ -128,7 +130,7 @@ pub const DevServer = struct {
     }
 
     fn httpAcceptLoop(self: *DevServer) void {
-        const address = std.net.Address.resolveIp("127.0.0.1", self.options.port) catch |err| {
+        const address = std.net.Address.resolveIp(self.options.host, self.options.port) catch |err| {
             std.debug.print("wig serve: failed to resolve address: {s}\n", .{@errorName(err)});
             return;
         };

@@ -42,7 +42,7 @@ zig build run      # run the wig CLI
 
 **Binary workflow:** `wig init [path]` then `wig build [path] [--clean] [--strict-links]` writes the static site to `<site-root>/zig-out/site/` (same layout as the spec runner). Internal links are checked post-build; `--strict-links` makes broken links errors. No project `build.zig` is required for SSG.
 
-**Dev server:** `wig serve [path] [--port PORT] [--no-reload]` builds the site, serves it over HTTP, watches for source file changes, rebuilds on change, and live-reloads connected browsers via WebSocket. Default port is 8080.
+**Dev server:** `wig serve [path] [--host HOST] [--port PORT] [--no-reload]` builds the site, serves it over HTTP, watches for source file changes, rebuilds on change, and live-reloads connected browsers via WebSocket. Default host is 127.0.0.1; use `0.0.0.0` to accept connections from other machines. Default port is 8080.
 
 **Optional Zig project:** Users who embed the library may add their own `build.zig` with `zig build render`, `zig build serve`, or `zig build check` wrappers; that is separate from the stock CLI.
 

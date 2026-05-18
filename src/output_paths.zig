@@ -45,7 +45,7 @@ pub fn prepareSiteOutput(allocator: Allocator, abs_site_root: []const u8, clean:
     fs.makeDirAbsolute(parent_path) catch {};
     fs.makeDirAbsolute(site_path) catch {};
 
-    return try fs.openDirAbsolute(site_path, .{});
+    return try fs.openDirAbsolute(site_path, .{ .iterate = true });
 }
 
 test "output_paths join absolute paths" {

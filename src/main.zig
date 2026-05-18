@@ -86,6 +86,7 @@ pub fn main() !void {
         var site = try wig.Site.init(a, .{ .root = opts.path });
         defer site.deinit();
         wig.serve_mod.DevServer.run(a, &site, .{
+            .host = opts.host,
             .port = opts.port,
             .live_reload = opts.live_reload,
         }) catch |err| {
@@ -150,8 +151,8 @@ fn printUsage() void {
         \\  install <name|url>           Install a style (not available in v0.1.0)
         \\  add style <name>             Create a new empty style
         \\  add block <style> <name>     Add a block pattern to a style
-        \\  serve [path] [--port PORT] [--no-reload]
-        \\                               Dev server with live reload
+        \\    serve [path] [--host HOST] [--port PORT] [--no-reload]
+\\                               Dev server with live reload
         \\  check [path] [--external]    Validate config/templates without building
         \\
     , .{});
@@ -216,17 +217,25 @@ fn parseCheckArgs(args: *std.process.ArgIterator) CheckArgs {
 
 const ServeArgs = struct {
     path: []const u8,
+    host: []const u8,
     port: u16,
     live_reload: bool,
 };
 
 fn parseServeArgs(args: *std.process.ArgIterator) ServeArgs {
     var path: ?[]const u8 = null;
+    var host: []const u8 = "127.0.0.1";
     var port: u16 = 8080;
     var live_reload = true;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--no-reload")) {
             live_reload = false;
+        } else if (std.mem.startsWith(u8, arg, "--host")) {
+            if (std.mem.eql(u8, arg, "--host")) {
+                if (args.next()) |h| host = h;
+            } else if (arg.len > 7 and arg[6] == '=') {
+                host = arg[7..];
+            }
         } else if (std.mem.startsWith(u8, arg, "--port")) {
             if (std.mem.eql(u8, arg, "--port")) {
                 if (args.next()) |p| {
@@ -243,7 +252,7 @@ fn parseServeArgs(args: *std.process.ArgIterator) ServeArgs {
             std.debug.print("wig serve: unexpected extra argument '{s}'\n", .{arg});
         }
     }
-    return .{ .path = path orelse ".", .port = port, .live_reload = live_reload };
+    return .{ .path = path orelse ".", .host = host, .port = port, .live_reload = live_reload };
 }
 
 fn hasFlag(args: *std.process.ArgIterator, flag: []const u8) bool {
