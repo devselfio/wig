@@ -1,0 +1,85 @@
+test:
+  name: Color scheme CSS generation via pattern auto-bundling.
+  comment: >
+    Pattern CSS with front-matter renders palette-resolved color values.
+    Palette indirection (name -> hex) is pre-resolved at load time.
+  action:
+    wig: build
+  fixtures: []
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+      colors:
+        mono-light.yaml: |
+          meta:
+            name: Mono Light
+          palette:
+            white: "#ffffff"
+            black: "#000000"
+            grey: "#888888"
+            blue: "#0066cc"
+          document:
+            text:
+              primary: black
+              secondary: grey
+              link: blue
+            background:
+              primary: white
+        mono-dark.yaml: |
+          meta:
+            name: Mono Dark
+          palette:
+            white: "#ffffff"
+            black: "#111111"
+            grey: "#aaaaaa"
+            blue: "#66aaff"
+          document:
+            text:
+              primary: white
+              secondary: grey
+              link: blue
+            background:
+              primary: black
+    styles:
+      default:
+        style.yaml: |
+          name: default
+          scheme: mono
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+        patterns:
+          tokens:
+            colors.html: |
+              ---
+              name: Colors
+              ---
+        css:
+          tokens:
+            colors.css: |
+              ---
+              ---
+              :root {
+                --text-primary: <t-raw name="colors.mono-light.document.text.primary" />;
+                --text-link: <t-raw name="colors.mono-light.document.text.link" />;
+                --bg-primary: <t-raw name="colors.mono-light.document.background.primary" />;
+              }
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Home.
+output:
+  files:
+    index.html: |
+      <p>Home.</p>
+    assets:
+      css:
+        styles:
+          default.*.css: true

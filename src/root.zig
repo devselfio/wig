@@ -9,7 +9,7 @@ const fs = std.fs;
 pub const config = @import("config.zig");
 pub const context = @import("context.zig");
 pub const tokens = @import("tokens.zig");
-pub const colours = @import("colours.zig");
+pub const colors = @import("colors.zig");
 pub const frontmatter = @import("frontmatter.zig");
 pub const scanner = @import("scanner.zig");
 pub const taxonomies = @import("taxonomies.zig");
@@ -76,7 +76,13 @@ fn buildPhase_styleTokensSiteData(
 ) !toupee.Context {
     var style_ctx = toupee.Context.init(ba);
     for (style_cfgs) |style_cfg| {
-        const style_val = try context.combToToupee(ba, style_cfg.raw);
+        var style_val = try context.combToToupee(ba, style_cfg.raw);
+        if (style_val == .map) {
+            // Before items synthesis so cloned `available.items` carry `source`.
+            try ensureHighlightsPairDefaultSources(ba, &style_val.map);
+            // Synthesize `items` lists within the style manifest (e.g. highlights.available)
+            try synthesizeItemsLists(ba, &style_val.map);
+        }
         try style_ctx.putAt(
             try std.fmt.allocPrint(ba, "styles.{s}", .{style_cfg.name}),
             style_val,
@@ -99,10 +105,16 @@ fn buildPhase_styleTokensSiteData(
         while (sd_it.next()) |sd_entry| {
             const ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.{s}", .{ style_cfg.name, sd_entry.key_ptr.* });
             if (style_ctx.resolve(ctx_key) != null) continue;
-            if (sd_entry.value_ptr.* == .map) {
-                try synthesizeItemsLists(ba, &sd_entry.value_ptr.*.map);
+            var sd_val = sd_entry.value_ptr.*;
+            if (sd_val == .map) {
+                // Resolve palette indirection in style-scoped colour schemes.
+                if (std.mem.eql(u8, sd_entry.key_ptr.*, "colors")) {
+                    sd_val = try colors.resolveColorsData(ba, sd_val);
+                } else {
+                    try synthesizeItemsLists(ba, &sd_val.map);
+                }
             }
-            try style_ctx.putAt(ctx_key, sd_entry.value_ptr.*);
+            try style_ctx.putAt(ctx_key, sd_val);
         }
     }
 
@@ -113,16 +125,51 @@ fn buildPhase_styleTokensSiteData(
         var data_it = data_result.value.map.iterator();
         while (data_it.next()) |entry| {
             var val = entry.value_ptr.*;
-            if ((std.mem.eql(u8, entry.key_ptr.*, "colors") or
-                std.mem.eql(u8, entry.key_ptr.*, "colours")) and val == .map)
-            {
-                val = try colours.resolveColoursData(ba, val);
+            if (std.mem.eql(u8, entry.key_ptr.*, "colors") and val == .map) {
+                val = try colors.resolveColorsData(ba, val);
             }
             try style_ctx.put(entry.key_ptr.*, val);
         }
     }
 
     return style_ctx;
+}
+
+/// Highlights convention: optional `pair.source` (which style owns the scheme YAML under
+/// `styles.<source>.colors.<id>`). When omitted, defaults to the current style's own name
+/// so a provider style need not repeat itself. Fills in before `highlights.available.items`
+/// synthesis so cloned items carry `source` for `$()` dot paths.
+fn ensureHighlightsPairDefaultSources(a: Allocator, style_map: *ValueMap) !void {
+    const hl_ptr = style_map.getPtr("highlights") orelse return;
+    if (hl_ptr.* != .map) return;
+
+    const avail_ptr = hl_ptr.map.getPtr("available") orelse return;
+    if (avail_ptr.* != .map) return;
+
+    const default_source: []const u8 = if (style_map.get("name")) |n|
+        switch (n) {
+            .string => |s| s,
+            else => "highlights",
+        }
+    else
+        "highlights";
+
+    var keys = std.ArrayListUnmanaged([]const u8){};
+    defer keys.deinit(a);
+
+    var scan_it = avail_ptr.map.iterator();
+    while (scan_it.next()) |e| {
+        if (std.mem.eql(u8, e.key_ptr.*, "items")) continue;
+        if (e.value_ptr.* != .map) continue;
+        if (e.value_ptr.map.get("source") != null) continue;
+        try keys.append(a, try a.dupe(u8, e.key_ptr.*));
+    }
+
+    for (keys.items) |k| {
+        const vp = avail_ptr.map.getPtr(k) orelse continue;
+        if (vp.* != .map) continue;
+        try vp.map.put(a, "source", .{ .string = default_source });
+    }
 }
 
 /// Recursively walks `parent` looking for sub-maps whose values are all
@@ -204,7 +251,7 @@ fn buildPhase_patternsAndBundle(
 
     var bundle_paths = std.StringArrayHashMapUnmanaged(?[]const u8){};
     for (resolved) |rs| {
-        const bundle = try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir);
+        const bundle = try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir, style_ctx);
         try bundle_paths.put(ba, rs.name, if (bundle) |b| b.path else null);
     }
 
@@ -917,7 +964,7 @@ test {
     _ = config;
     _ = context;
     _ = tokens;
-    _ = colours;
+    _ = colors;
     _ = frontmatter;
     _ = scanner;
     _ = taxonomies;

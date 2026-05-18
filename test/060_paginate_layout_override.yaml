@@ -13,7 +13,7 @@ input:
       document.yaml: |
         style: default
         layout: page.html
-      colours.yaml: |
+      colors.yaml: |
         - id: red
           name: Red
           hex: "#ff0000"
@@ -30,28 +30,28 @@ input:
               <t-slot />
             shell.html: |
               <nav>
-              <t-for c in colours>
+              <t-for c in colors>
               <a t-var:href="c.id"><t-var name="c.name" /></a>
               </t-for>
               </nav>
               <main><t-slot /></main>
             detail.html: |
-              <h1><t-var name="colour.name" /></h1>
-              <p><t-var name="colour.hex" /></p>
+              <h1><t-var name="color.name" /></h1>
+              <p><t-var name="color.hex" /></p>
     pages:
       _index.dj: |
         ---
         ---
         Home.
-      colours:
+      colors:
         _index.dj: |
           ---
-          title: Colours
+          title: Colors
           layout: shell.html
           paginate:
-            collection: colours
+            collection: colors
             size: 1
-            alias: colour
+            alias: color
             slug: id
             layout: detail.html
           ---
@@ -59,7 +59,7 @@ output:
   files:
     index.html: |
       <p>Home.</p>
-    colours:
+    colors:
       index.html: |
         <nav>
         

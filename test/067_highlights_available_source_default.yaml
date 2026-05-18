@@ -1,0 +1,88 @@
+test:
+  name: highlights.available pair without source defaults to the current style name
+  comment: >
+    A provider style that declares highlights.available pairs should not need to
+    repeat itself with source: <own-name>. When source is absent, Wig injects the
+    style's own name as the default so the CSS template's $(pair.source) path
+    resolves correctly without any explicit source field.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: hlprovider
+        layout: page.html
+    styles:
+      hlprovider:
+        style.yaml: |
+          name: hlprovider
+          highlights:
+            default: highlights
+            available:
+              highlights:
+                label: Highlights
+                light: highlights-light
+                dark: highlights-dark
+        data:
+          colors:
+            highlights-light.yaml: |
+              meta:
+                name: Highlights Light
+              palette:
+                accent: "#aabbcc"
+              document:
+                text:
+                  primary: accent
+              syntax:
+                keyword: accent
+            highlights-dark.yaml: |
+              meta:
+                name: Highlights Dark
+              palette:
+                accent: "#112233"
+              document:
+                text:
+                  primary: accent
+              syntax:
+                keyword: accent
+        patterns:
+          tokens:
+            colors.html: |
+              ---
+              name: Colour tokens
+              ---
+        css:
+          tokens:
+            colors.css: |
+              <t-for pair in style.highlights.available>
+              [data-theme="<t-raw name="pair.light" />"] {
+                --syntax-keyword: <t-raw name="styles.$(pair.source).colors.$(pair.light).syntax.keyword" />;
+              }
+              </t-for>
+        templates:
+          layouts:
+            page.html: |
+              <link t-var:href="document.style.css.path" />
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hi.
+output:
+  files:
+    index.html: true
+    assets:
+      css:
+        styles:
+          hlprovider.*.css: |
+            @layer tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions;
+
+            @layer tokens {
+            [data-theme="highlights-light"] {
+              --syntax-keyword: #aabbcc;
+            }
+            }

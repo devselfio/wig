@@ -1,0 +1,78 @@
+test:
+  name: Importing a subset of upstream token patterns limits bundled CSS
+  comment: >
+    Upstream "highlights kit" style ships two token patterns (demo, noise). A consumer
+    imports only `demo` via `patterns.tokens` plus `data.colors` like Highlights
+    consumers. The auto-bundled CSS must contain the demo sheet and must not
+    contain the noise pattern's rules.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: consumer
+        layout: page.html
+    styles:
+      hlkit:
+        style.yaml: |
+          name: hlkit
+        data:
+          colors:
+            kit.yaml: |
+              meta:
+                name: Kit
+              palette:
+                accent: "#badcff"
+        patterns:
+          tokens:
+            demo.html: |
+              ---
+              name: Demo tokens
+              ---
+            noise.html: |
+              ---
+              name: Noise tokens
+              ---
+        css:
+          tokens:
+            demo.css: |
+              .wig-kit-demo{color:#badcff}
+            noise.css: |
+              .wig-kit-noise{display:none}
+      consumer:
+        style.yaml: |
+          name: consumer
+          imports:
+            hlkit:
+              patterns:
+                tokens:
+                  - demo
+              data:
+                colors:
+                  - kit
+        templates:
+          layouts:
+            page.html: |
+              <link t-var:href="document.style.css.path" />
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hi.
+output:
+  files:
+    index.html: true
+    assets:
+      css:
+        styles:
+          consumer.cfc476d8.css: |
+            @layer tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions;
+
+            @layer tokens {
+            .wig-kit-demo{color:#badcff}
+            }
+          hlkit.*.css: true

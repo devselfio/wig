@@ -1,0 +1,128 @@
+test:
+  name: Importing highlighted-code and colors emits pair.light data-theme selectors
+  comment: >
+    Upstream ships colors token CSS (Toupee template), highlighted-code block, and a noise
+    block. Consumer imports highlighted-code and colors only. Bundle must contain
+    [data-theme="highlights-light"] from pair.light (not id suffix), .highlighted-code .keyword,
+    and must not contain noise rules.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: consumer
+        layout: page.html
+    styles:
+      hlkit:
+        style.yaml: |
+          name: hlkit
+        data:
+          colors:
+            highlights-light.yaml: |
+              meta:
+                name: Kit Light
+              palette:
+                accent: "#aabbcc"
+              document:
+                text:
+                  primary: accent
+              syntax:
+                keyword: accent
+            highlights-dark.yaml: |
+              meta:
+                name: Kit Dark
+              palette:
+                accent: "#112233"
+              document:
+                text:
+                  primary: accent
+              syntax:
+                keyword: accent
+        patterns:
+          tokens:
+            colors.html: |
+              ---
+              name: Colour tokens
+              ---
+          blocks:
+            highlighted-code.html: |
+              ---
+              name: Highlighted code
+              ---
+            noise.html: |
+              ---
+              name: Noise block
+              ---
+        css:
+          tokens:
+            colors.css: |
+              <t-for pair in style.highlights.available>
+              [data-theme="<t-raw name="pair.light" />"] {
+                --syntax-keyword: <t-raw name="styles.$(pair.source).colors.$(pair.light).syntax.keyword" />;
+              }
+              [data-theme="<t-raw name="pair.dark" />"] {
+                --syntax-keyword: <t-raw name="styles.$(pair.source).colors.$(pair.dark).syntax.keyword" />;
+              }
+              </t-for>
+          blocks:
+            highlighted-code.css: |
+              .highlighted-code .keyword { color: var(--syntax-keyword); }
+            noise.css: |
+              .wig-kit-noise { display: none; }
+      consumer:
+        style.yaml: |
+          name: consumer
+          highlights:
+            default: highlights
+            available:
+              highlights:
+                label: Highlights
+                light: highlights-light
+                dark: highlights-dark
+                source: hlkit
+          imports:
+            hlkit:
+              patterns:
+                tokens:
+                  - colors
+                blocks:
+                  - highlighted-code
+              data:
+                colors:
+                  - highlights-light
+                  - highlights-dark
+        templates:
+          layouts:
+            page.html: |
+              <link t-var:href="document.style.css.path" />
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        Hi.
+output:
+  files:
+    index.html: true
+    assets:
+      css:
+        styles:
+          consumer.4f2877a9.css: |
+            @layer tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions;
+
+            @layer tokens {
+            [data-theme="highlights-light"] {
+              --syntax-keyword: #aabbcc;
+            }
+            [data-theme="highlights-dark"] {
+              --syntax-keyword: #112233;
+            }
+            }
+
+            @layer blocks {
+            .highlighted-code .keyword { color: var(--syntax-keyword); }
+            }
+          hlkit.*.css: true

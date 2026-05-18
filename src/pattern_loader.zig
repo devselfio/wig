@@ -23,8 +23,11 @@ pub const CUBE_CATEGORIES = [_][]const u8{
 
 pub const ResourceEntry = struct {
     content: []const u8,
-    /// Relative path within the resource type dir (e.g. `blocks/dropdown.js`).
+    /// Relative path within the resource type dir (e.g. `tokens/colors.css` on disk stem).
     rel_path: []const u8,
+    /// Parsed YAML stylesheet front-matter (keys merged into Toupee context when the
+    /// CSS body is rendered at bundle time). `.nil` when absent.
+    stylesheet_fm_overlay: toupee.Value = .nil,
 };
 
 pub const Pattern = struct {
@@ -88,10 +91,15 @@ pub fn loadStylePatterns(
     style_dir: fs.Dir,
     style_ctx: *const toupee.Context,
 ) !LoadResult {
+    // Always duplicate with `{ .iterate = true }` so top-level enumeration works even
+    // when callers hand us a `Dir` opened without iterate (e.g. `testing.tmpDir` on Linux).
+    var root = try style_dir.openDir(".", .{ .iterate = true });
+    defer root.close();
+
     var categories = std.ArrayListUnmanaged(CategoryGroup){};
     var all_patterns = std.ArrayListUnmanaged(Pattern){};
 
-    var patterns_dir = style_dir.openDir("patterns", .{ .iterate = true }) catch |err| switch (err) {
+    var patterns_dir = root.openDir("patterns", .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return .{
             .categories = &.{},
             .all = &.{},
@@ -132,11 +140,11 @@ pub fn loadStylePatterns(
             const id = filename[0 .. filename.len - ".html".len];
             const rel_path = try std.fmt.allocPrint(a, "patterns/{s}/{s}", .{ category, filename });
 
-            const source = try style_dir.readFileAlloc(a, rel_path, 4 * 1024 * 1024);
+            const source = try root.readFileAlloc(a, rel_path, 4 * 1024 * 1024);
             const parsed = try pattern_parser.parsePatternFile(a, source);
 
-            const template_source = readRawResourceFile(a, style_dir, "templates", category, id);
-            const file_paths = discoverFiles(a, style_dir, category, id);
+            const template_source = readRawResourceFile(a, root, "templates", category, id);
+            const file_paths = discoverFiles(a, root, category, id);
             const slug = try std.fmt.allocPrint(a, "{s}/{s}", .{ category, id });
             try slug_set.put(a, slug, {});
 
@@ -168,7 +176,7 @@ pub fn loadStylePatterns(
     var cmd_paths = std.ArrayListUnmanaged([]const u8){};
     var resource_dirs = std.ArrayListUnmanaged([]const u8){};
     {
-        var top_it = style_dir.iterate();
+        var top_it = root.iterate();
         while (try top_it.next()) |entry| {
             if (entry.kind != .directory) continue;
             if (isReservedDir(entry.name)) continue;
@@ -182,10 +190,10 @@ pub fn loadStylePatterns(
     }.cmp);
 
     for (resource_dirs.items) |res_type| {
-        var res_dir = style_dir.openDir(res_type, .{ .iterate = true }) catch continue;
+        var res_dir = root.openDir(res_type, .{ .iterate = true }) catch continue;
         defer res_dir.close();
 
-        try discoverResourcesRecursive(a, style_dir, res_type, res_dir, "", &slug_set, all_patterns.items, style_ctx, &standalone, &cmd_paths);
+        try discoverResourcesRecursive(a, root, res_type, res_dir, "", &slug_set, all_patterns.items, style_ctx, &standalone, &cmd_paths);
     }
 
     // Re-dupe patterns since we mutated resources maps on the items.
@@ -249,6 +257,34 @@ fn discoverResourcesRecursive(
 
                 const full_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ res_type, rel_in_type });
 
+                if (std.mem.eql(u8, res_type, "css")) {
+                    const css_loaded = loadCssStylesheet(a, style_dir, full_path) orelse continue;
+                    if (isCommandSentinel(css_loaded.body)) {
+                        try cmd_paths.append(a, full_path);
+                        continue;
+                    }
+                    if (slug_set.contains(pattern_slug)) {
+                        for (patterns) |*p| {
+                            if (std.mem.eql(u8, p.slug, pattern_slug)) {
+                                try p.resources.put(a, res_type, .{
+                                    .content = css_loaded.body,
+                                    .rel_path = rel_in_type,
+                                    .stylesheet_fm_overlay = css_loaded.stylesheet_fm_overlay,
+                                });
+                                break;
+                            }
+                        }
+                    } else {
+                        try standalone.append(a, .{
+                            .resource_type = res_type,
+                            .rel_path = rel_in_type,
+                            .content = css_loaded.body,
+                            .output_ext = null,
+                        });
+                    }
+                    continue;
+                }
+
                 const content = readResourceFileGeneric(a, style_dir, full_path, style_ctx) orelse continue;
                 if (isCommandSentinel(content)) {
                     try cmd_paths.append(a, full_path);
@@ -287,6 +323,39 @@ fn discoverResourcesRecursive(
             else => {},
         }
     }
+}
+
+/// Loads a stylesheet: strips YAML front-matter from the body, parses keys into `stylesheet_fm_overlay`
+/// for merging at bundle-render time (see `auto_bundler`). Does not run Toupee on the body.
+/// Returns `"command"` sentinel body when deferred `command:` is present.
+fn loadCssStylesheet(
+    a: Allocator,
+    style_dir: fs.Dir,
+    rel_path: []const u8,
+) ?struct {
+    body: []const u8,
+    stylesheet_fm_overlay: toupee.Value,
+} {
+    const source = style_dir.readFileAlloc(a, rel_path, 4 * 1024 * 1024) catch return null;
+
+    var fm_result = frontmatter.parse(a, source) catch {
+        return .{ .body = source, .stylesheet_fm_overlay = .nil };
+    };
+    if (fm_result) |*fm| {
+        defer fm.deinit();
+
+        if (fm.data.getStr("command") != null) {
+            return .{ .body = error_sentinel, .stylesheet_fm_overlay = .nil };
+        }
+
+        const overlay = context_mod.combToToupee(a, fm.data) catch .nil;
+        return .{
+            .body = fm.content,
+            .stylesheet_fm_overlay = overlay,
+        };
+    }
+
+    return .{ .body = source, .stylesheet_fm_overlay = .nil };
 }
 
 /// Reads a resource file at the given path. If it has frontmatter, preprocesses
@@ -709,7 +778,7 @@ test "loadStylePatterns: template source read raw" {
     try testing.expect(std.mem.indexOf(u8, p.template_source.?, "t-slot") != null);
 }
 
-test "loadStylePatterns: CSS with front-matter is rendered" {
+test "loadStylePatterns: CSS with front-matter is stored raw for per-consumer bundle rendering" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -718,7 +787,7 @@ test "loadStylePatterns: CSS with front-matter is rendered" {
     defer tmp.cleanup();
 
     try createFile(tmp.dir, "patterns/tokens/colors.html",
-        "---\nname: Colours\n---"
+        "---\nname: Colors\n---"
     );
     try createFile(tmp.dir, "css/tokens/colors.css",
         "---\ncolor: red\n---\n:root { --accent: <t-raw name=\"color\" />; }"
@@ -729,7 +798,7 @@ test "loadStylePatterns: CSS with front-matter is rendered" {
 
     const p = result.all[0];
     try testing.expect(p.resources.get("css") != null);
-    try testing.expectEqualStrings(":root { --accent: red; }", p.resources.get("css").?.content);
+    try testing.expectEqualStrings(":root { --accent: <t-raw name=\"color\" />; }", p.resources.get("css").?.content);
 }
 
 test "loadStylePatterns: CSS without front-matter passed through" {

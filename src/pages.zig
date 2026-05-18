@@ -85,6 +85,11 @@ fn renderPage(
     defer a.free(interp_style_path);
     if (interp_ctx.resolve(interp_style_path)) |style_val|
         try interp_ctx.putAt("document.style", style_val);
+    // Content `{{ document.title }}` resolves only when a root `title:` exists in frontmatter;
+    // nested-only `document:` blocks leave `document.title` unset (see test/035). Treat as empty.
+    if (interp_ctx.resolve("document.title") == null) {
+        try interp_ctx.putAt("document.title", .{ .string = "" });
+    }
     const content_preprocessed = try resolveInterpolations(a, entry.content_body, &interp_ctx, transform_registry, entry.source_path, diags);
     errdefer a.free(content_preprocessed);
     const content_html = try parseContent(a, content_preprocessed, entry.extension, content_parsers);

@@ -11,7 +11,7 @@ input:
       document.yaml: |
         style: default
         layout: page.html
-      colours.yaml: |
+      colors.yaml: |
         - id: red
           name: Red
           hex: "#ff0000"
@@ -29,9 +29,9 @@ input:
           layouts:
             page.html: |
               <t-slot />
-            colour.html: |
-              <h1><t-var name="colour.name" /></h1>
-              <p><t-var name="colour.hex" /></p>
+            color.html: |
+              <h1><t-var name="color.name" /></h1>
+              <p><t-var name="color.hex" /></p>
               <t-if var="paginate.previous">
               <a t-var:href="paginate.previous.url">Prev</a>
               </t-if>
@@ -43,41 +43,41 @@ input:
         ---
         ---
         Home.
-      colours:
+      colors:
         _index.dj: |
           ---
-          title: Colours
-          layout: colour.html
+          title: Colors
+          layout: color.html
           paginate:
-            collection: colours
+            collection: colors
             size: 1
-            alias: colour
+            alias: color
             slug: id
           ---
 output:
   files:
     index.html: |
       <p>Home.</p>
-    colours:
+    colors:
       red:
         index.html: |
           <h1>Red</h1>
           <p>#ff0000</p>
           
           
-          <a href="/colours/blue/">Next</a>
+          <a href="/colors/blue/">Next</a>
       blue:
         index.html: |
           <h1>Blue</h1>
           <p>#0000ff</p>
           
-          <a href="/colours/red/">Prev</a>
+          <a href="/colors/red/">Prev</a>
           
           
-          <a href="/colours/green/">Next</a>
+          <a href="/colors/green/">Next</a>
       green:
         index.html: |
           <h1>Green</h1>
           <p>#00ff00</p>
           
-          <a href="/colours/blue/">Prev</a>
+          <a href="/colors/blue/">Prev</a>

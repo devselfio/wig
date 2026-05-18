@@ -39,6 +39,19 @@ fn wrapTagListDocumentItem(a: Allocator, page_val: toupee.Value) !toupee.Value {
     return .{ .map = outer };
 }
 
+/// Order documents on a tag page: fewer tags first (narrower topic), then path descending so
+/// file walk order (/blog/a, …) does not dictate listing (spec: popularity-style sort).
+fn tagTaggedPageLessThan(x: toupee.Value, y: toupee.Value) bool {
+    const cx = taxonomies.getTerms(x, "tags") orelse &[_]toupee.Value{};
+    const cy = taxonomies.getTerms(y, "tags") orelse &[_]toupee.Value{};
+    if (cx.len != cy.len) return cx.len < cy.len;
+    if (x != .map or y != .map) return false;
+    const px = x.map.get("path") orelse return false;
+    const py = y.map.get("path") orelse return true;
+    if (px != .string or py != .string) return false;
+    return std.mem.order(u8, px.string, py.string) == .gt;
+}
+
 fn pageHasBothTagSlugs(fm: toupee.Value, a_slug: []const u8, b_slug: []const u8, ba: Allocator) !bool {
     const terms = taxonomies.getTerms(fm, "tags") orelse return false;
     var has_a = false;
@@ -151,17 +164,28 @@ pub fn render(
         const path_tags_str = try std.fmt.allocPrint(ba, "{s}", .{info.slug});
         try tag_wrap.put(ba, "path_tags", .{ .string = path_tags_str });
 
-        const doc_items = try ba.alloc(toupee.Value, info.tag_pages.len);
-        var doc_n: usize = 0;
+        var sorted_pages = try ba.alloc(toupee.Value, info.tag_pages.len);
+        defer ba.free(sorted_pages);
+        var sp_n: usize = 0;
         for (info.tag_pages) |pv| {
             if (pv != .map) continue;
             if (pv.map.get("path")) |pp| {
                 if (pp != .string) continue;
             } else continue;
-            doc_items[doc_n] = try wrapTagListDocumentItem(ba, pv);
-            doc_n += 1;
+            sorted_pages[sp_n] = pv;
+            sp_n += 1;
         }
-        try tag_wrap.put(ba, "documents", .{ .list = doc_items[0..doc_n] });
+        std.mem.sort(toupee.Value, sorted_pages[0..sp_n], {}, struct {
+            fn lt(_: void, x: toupee.Value, y: toupee.Value) bool {
+                return tagTaggedPageLessThan(x, y);
+            }
+        }.lt);
+
+        const doc_items = try ba.alloc(toupee.Value, sp_n);
+        for (sorted_pages[0..sp_n], doc_items) |pv, *out| {
+            out.* = try wrapTagListDocumentItem(ba, pv);
+        }
+        try tag_wrap.put(ba, "documents", .{ .list = doc_items });
         try tag_wrap.put(ba, "tags", .{ .list = list_vals });
         try ctx.put("tag", .{ .map = tag_wrap });
 
@@ -223,6 +247,12 @@ pub fn render(
             try match_pages.append(ba, try tagPageValueFromEntry(ba, sp));
         }
         if (match_pages.items.len == 0) continue;
+
+        std.mem.sort(toupee.Value, match_pages.items, {}, struct {
+            fn lt(_: void, x: toupee.Value, y: toupee.Value) bool {
+                return tagTaggedPageLessThan(x, y);
+            }
+        }.lt);
 
         const path_tags_join = try std.fmt.allocPrint(ba, "{s}/{s}", .{ a_slug, b_slug });
         var doc_map2 = ValueMap{};

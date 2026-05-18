@@ -64,7 +64,7 @@ wig/
     template_loader.zig # StyleLoader + loadTemplates (shared by buildAll and check)
     tag_pages.zig   # taxonomy tag page rendering (/tags/, /tags/{slug}/, /tags/{a}/{b}/)
     tokens.zig      # fluid typography + spacing computation (CUBE CSS)
-    colours.zig     # color scheme resolution (palette indirection; data key `colors` or legacy `colours`)
+    colors.zig      # color scheme resolution (palette indirection; data key `colors`)
     context.zig     # Comb.Value/std.json.Value -> Toupee.Value translation
     comb_utils.zig  # safe typed extraction from comb.Value (getString, getBool, getList, etc.)
     slug.zig        # URL slugification (slugifyStem, isSpecialStem, slugifyTerm)
@@ -328,7 +328,7 @@ data:
 
 Pages inherit `document.*` values from the cascade (see Data cascade below). This page’s frontmatter overrides inherited defaults at `document.*`.
 
-Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colors.*`, `site.*`, etc.; legacy sites may still use a top-level `colours` data directory and `colours.*` paths).
+Files in `styles/` with frontmatter are template-rendered; without are plain text. CSS files get the full site context minus `document.*` (they see `styles.*`, `colors.*`, `site.*`, etc.).
 
 ### Clean URLs
 
@@ -495,12 +495,12 @@ Wig is a style-focused site generator with first-class support for the CUBE CSS 
 
 | Category | Layer | Purpose | Examples |
 |----------|-------|---------|----------|
-| **tokens** | `tokens` | Design token custom properties (colours, spacing, typography) | Colour swatches, spacing scale, type scale |
+| **tokens** | `tokens` | Design token custom properties (colors, spacing, typography) | Color swatches, spacing scale, type scale |
 | **resets** | `resets` | CSS reset / normalization | Box-sizing, margin removal, form resets |
 | **globals** | `globals` | Document-level styles applied via element selectors | Body typography, link styles, surface backgrounds |
 | **fonts** | `fonts` | Font-face declarations and font stack utilities | System font stack, custom web fonts |
 | **compositions** | `compositions` | Layout primitives (no visual styling) | Stack, Cluster, Sidebar, Grid, Switcher, Center, Flow, Region, Repel, Wrapper |
-| **utilities** | `utilities` | Single-property utility classes | Text sizes, text colours, indent, radius, visually-hidden |
+| **utilities** | `utilities` | Single-property utility classes | Text sizes, text colors, indent, radius, visually-hidden |
 | **blocks** | `blocks` | Styled components with semantic markup | Button, Tag, Prose, Skip Link, Card, Header, Footer |
 | **exceptions** | `exceptions` | Data-attribute overrides for edge cases | `[data-narrow]` for constrained widths |
 
@@ -526,7 +526,7 @@ description: Styled control for button and anchor elements.
 config:
   - property: --button-bg
     default: var(--color-bg-secondary)
-    description: Background colour.
+    description: Background color.
 notes: Use the <code>templates/blocks/button.html</code> template for consistent markup.
 ---
 <button class="button">Default</button>
@@ -542,10 +542,10 @@ notes: Use the <code>templates/blocks/button.html</code> template for consistent
 
 **Front-matter-only patterns:** Patterns with no body (e.g. tokens, resets) are valid. They document configuration without providing example markup.
 
-**Pattern example rendering:** All pattern examples are rendered through Toupee before being stored in the context. This allows patterns to use `<t-include>` to reference actual templates, preventing duplication and drift between examples and templates. Toupee is inert on plain HTML — examples without `<t-*>` tags pass through unchanged. The rendering happens during `buildPhase_patternsAndBundle`, before the full context is built, using the style context (tokens, colours, data) so examples can reference style values via `<t-var>`.
+**Pattern example rendering:** All pattern examples are rendered through Toupee before being stored in the context. This allows patterns to use `<t-include>` to reference actual templates, preventing duplication and drift between examples and templates. Toupee is inert on plain HTML — examples without `<t-*>` tags pass through unchanged. The rendering happens during `buildPhase_patternsAndBundle`, before the full context is built, using the style context (tokens, colors, data) so examples can reference style values via `<t-var>`.
 
 **Resource discovery by convention:**
-- `css/{category}/{id}.css` — pattern CSS (rendered if it has front-matter; auto-bundled)
+- `css/{category}/{id}.css` — pattern CSS (stored raw after frontmatter strip; rendered per-consumer at bundle time — see CSS auto-bundling below)
 - `templates/{category}/{id}.html` — Toupee template (raw source shown in pattern library)
 - `{type}/{category}/{id}.{ext}` — generic resources (any non-reserved directory name: `js/`, `scripts/`, etc.)
 - `files/{category}/{id}/*` — raw files (copied verbatim to `/assets/styles/{style}/{category}/{id}/`)
@@ -609,9 +609,17 @@ Wig automatically bundles CSS from resolved patterns into a single hashed file p
 
 **How it works:**
 1. Patterns are resolved (local + imported via `imports:`)
-2. CSS files at `css/{category}/{id}.css` are collected for each pattern
-3. Each category's CSS is wrapped in an `@layer` block (CUBE order: tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions)
-4. The concatenated CSS is content-hashed and written to `zig-out/site/assets/css/styles/{style}.{hash}.css`
+2. CSS files at `css/{category}/{id}.css` are stored raw (frontmatter stripped, Toupee tags preserved)
+3. At bundle-assembly time, each CSS body is rendered through Toupee with a **per-consumer context**: the base `style_ctx` plus a top-level `style` key bound to the consuming style's data (`styles.{consumer}.*`). This means a CSS file shipped from an imported style (e.g. `highlights`) can produce different output for each consumer, enabling consumer-driven theme bundling.
+4. Each category's CSS is wrapped in an `@layer` block (CUBE order: tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions)
+5. The concatenated CSS is content-hashed and written to `zig-out/site/assets/css/styles/{style}.{hash}.css`
+
+**Per-consumer context keys:** Templates in CSS files can reference:
+- `style.*` — the consuming style's manifest data (e.g. `style.highlights.available`)
+- `styles.*` — all styles' data (e.g. `styles.highlights.colors.*` for imported schemes)
+- `site.*`, `colors.*` — global site and color data
+
+**Style manifest items:** Map-of-maps blocks in `style.yaml` (such as `highlights.available`) get an `items` list synthesised automatically, so `<t-for pair in style.highlights.available>` iterates them in declaration order.
 
 **Template access:** `document.style.css.path` provides the hashed CSS path for the current page's style:
 
@@ -636,17 +644,20 @@ Wig automatically bundles CSS from resolved patterns into a single hashed file p
 
 ### Color schemes
 
-Wig uses a three-layer color indirection system:
+Wig resolves palette indirection **per colour scheme YAML** merged into **`colors`** (including style-scoped `styles/{style}/data/colors/`):
 
-1. **Palette** -- maps color names to hex values. Each scheme uses its own native naming.
-2. **Styles** -- maps semantic roles (`text.primary`, `background.primary`, `text.link`) to palette names.
-3. **Syntax** -- maps code highlighting roles (`keyword`, `string`, `comment`) to palette names.
+1. **Palette** — maps author-chosen colour names → hex (`#…`).
+2. **Semantic maps** — flat or nested YAML maps listing **palette key strings** (`document`, **`terminal`**, `syntax`).
+   - **`document`**: UI roles for page chrome (text.primary, backgrounds, …).
+   - **`syntax`**: code-highlighting roles.
+   - **`terminal`**: canonical terminal slots (`black`, `bright-white`, `foreground`, `background`, …) → **`palette`** names; resolved at load time beside **`document`** / **`syntax`**.
+3. Older site-level scheme files omit **`terminal`**; Highlights-generated themes include it explicitly.
 
-Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{name}.yaml` (merged as `colors.{name}` in site data). The style manifest declares which scheme to use: `scheme: mono`.
+Legacy note: manifests may still declare `scheme:` for site `data/colors/`; Highlights pairs use `style.highlights` (see Highlights style README under `wig-stand/`).
 
-**Palette pre-resolution:** Wig resolves palette indirection at load time. When scheme data is loaded, Wig walks the `styles` and `syntax` maps and replaces palette names with their hex values. Template authors access resolved values directly (e.g. `colors.mono.light.styles.text.primary` contains `"#000000"`, not `"black"`).
+**Palette pre-resolution (`colors.resolveColorsData`):** Wig walks **`document`**, **`terminal`**, and **`syntax`** and replaces palette name strings with **`palette`** hexes. Resolved values exposed to Toupee/CSS are literals (hex strings).
 
-**Legacy:** A `data/colours/` directory is still supported; it merges as the top-level `colours` key and receives the same resolution. Prefer `data/colors/` and `colors.*` for new sites.
+For site-level examples: `colors.mono-light.document.text.primary` may resolve to `#000000` instead of `"black"`.
 
 **Dynamic path resolution:** Templates may use **`$(expression)`** inside dot-paths so a segment is chosen at render time (e.g. `colors.$(scheme).light…`). See Toupee’s `dynamic-path.test` and docs. Wig does not add syntax beyond Toupee’s resolver.
 
@@ -654,7 +665,7 @@ Schemes have `light` and `dark` variants. Scheme data lives in `data/colors/{nam
 
 Text-based resource files (CSS, JS, or any generic resource) with frontmatter are rendered through Toupee but do **not** have the `document.*` namespace (they are style resources, not pages). They receive the full site context minus `document.*`:
 - `styles.*` -- all style manifests; **`styles.{name}.tokens.computed`** holds fluid typography and spacing from `tokens.compute` (e.g. `styles.default.tokens.computed.typography` as a list of `{name, value}` maps)
-- `colors.*` -- all color scheme data from `data/colors/` (pre-resolved); legacy `colours.*` if you use `data/colours/`
+- `colors.*` -- all color scheme data from `data/colors/` (pre-resolved)
 - `site.*` -- site configuration
 - All other data directory keys
 
@@ -788,10 +799,10 @@ Context: `paginate.items` (current page chunk), `paginate.page` (1-indexed), `pa
 
 ```yaml
 paginate:
-  collection: colours
+  collection: colors
   size: 1
   slug: id
-  alias: colour
+  alias: color
   layout: detail.html    # sub-pages use this layout
 ```
 

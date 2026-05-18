@@ -700,7 +700,7 @@ test "specNumericPrefix and WIG_TEST numeric match" {
 }
 
 test "wig integration test suite" {
-    var test_dir = fs.cwd().openDir("test", .{}) catch |err| {
+    var test_dir = fs.cwd().openDir("test", .{ .iterate = true }) catch |err| {
         std.debug.print("\nCould not open test directory: {}\n", .{err});
         return err;
     };
