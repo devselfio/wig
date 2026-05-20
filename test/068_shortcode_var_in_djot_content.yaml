@@ -1,0 +1,74 @@
+test:
+  name: "<t-var> and <t-raw> resolve in Djot =html raw blocks"
+  comment: >
+    Djot =html raw blocks pass content through zjot verbatim, then the
+    shortcode pass resolves Toupee data-access tags (<t-var>, <t-raw>)
+    against the build context. Site and document variables are available.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        title: My Site
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        title: Test Page
+        ---
+        ``` =html
+        <p class="site"><t-var name="site.title" /></p>
+        <p class="page"><t-raw name="document.title" /></p>
+        ```
+output:
+  files:
+    index.html: |
+      <p class="site">My Site</p>
+      <p class="page">Test Page</p>
+---
+test:
+  name: "<t-var> in HTML page content resolves against build context"
+  comment: >
+    HTML pages (not Djot) also pass through the shortcode pass, so <t-var>
+    and <t-raw> in their content body resolve against site and document data.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        title: HTML Site
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.html: |
+        ---
+        title: HTML Page
+        ---
+        <p><t-var name="site.title" /> — <t-raw name="document.title" /></p>
+output:
+  files:
+    index.html: |
+      <p>HTML Site — HTML Page</p>

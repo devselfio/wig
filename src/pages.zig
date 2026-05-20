@@ -96,8 +96,14 @@ fn renderPage(
     a.free(content_preprocessed);
     const search_content = try a.dupe(u8, content_html);
 
-    var resolver: toupee.Resolver = .{};
-    const shortcoded = toupee.render(a, content_html, base_ctx, resolver.loader(), .{}) catch content_html;
+    // Shortcode pass: resolve <t-var>, <t-raw>, <t-if>, <t-for>, and <t-include> tags
+    // in content HTML (from Djot =html raw blocks or HTML pages) using the page's style
+    // loader so block templates are available alongside data-access shortcodes.
+    const shortcode_style_loader = template_loader.StyleLoader{
+        .templates = template_map,
+        .style_name = interp_style_name,
+    };
+    const shortcoded = toupee.render(a, content_html, base_ctx, shortcode_style_loader.loader(), .{}) catch content_html;
 
     const toc_entries = try toc_mod.extract(a, shortcoded);
     const toc_value = try toc_mod.toValue(a, toc_entries);

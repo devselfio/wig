@@ -197,14 +197,17 @@ try wig.DevServer.run(allocator, &site, .{ .port = 8080, .live_reload = true });
 Content rendering is a three-phase pipeline:
 
 1. **Wig preprocess** -- resolve `{{ variable }}` interpolations in the Djot source. Uses Toupee's existing value resolution and transform system. Supports pipe-chained transforms: `{{ document.date | date:%B %e, %Y }}`.
-2. **zjot** -- parse the preprocessed Djot into HTML. Toupee `<t-*>` tags and `t-var:*` attribute bindings pass through as raw HTML.
-3. **Toupee** -- single render pass on the layout template with zjot's output slotted in via `<t-slot />`. Resolves all remaining template tags (`<t-var>`, `<t-if>`, `<t-for>`, `t-var:href`, etc.).
+2. **zjot** -- parse the preprocessed Djot into HTML. Toupee `<t-*>` tags inside ```` ``` =html ```` raw blocks pass through verbatim. Bare `<t-*>` tags outside a raw block are wrapped in `<p>` and HTML-escaped by zjot — they will not be processed.
+3. **Shortcode pass** -- Toupee render of the raw content HTML using the page's `StyleLoader`. Resolves `<t-var>`, `<t-raw>`, `<t-if>`, `<t-for>`, and `<t-include>` tags embedded in content. Template includes resolve against the page's style (and cross-style via `style:path` syntax).
+4. **Toupee** -- render the layout template with the shortcoded content slotted in via `<t-slot />`. Resolves all remaining template and attribute bindings (`<t-var>`, `<t-if>`, `<t-for>`, `t-var:href`, etc.).
 
 **Content authors** use `{{ }}` for value interpolation in Djot (e.g. links, inline values). **Template authors** use Toupee's `<t-*>` elements and attribute bindings in layout HTML.
 
-For Toupee tags in Djot content, use Djot's raw HTML passthrough:
-- Inline: `` `<t-include template="blocks/nav.html" />`{=html} ``
-- Block: bare `<t-include template="blocks/nav.html" />` on its own line (Djot auto-detects block HTML)
+Toupee shortcodes in Djot content require Djot raw block passthrough so zjot doesn't escape them:
+- **Block** (recommended): ```` ``` =html ```` fence around one or more Toupee tags — supports `<t-include>`, `<t-var>`, `<t-if>`, `<t-for>`, etc.
+- **Inline**: `` `<t-var name="site.title" />`{=html} `` — for simple data-access in running text
+
+`<t-include>` is block-level only; always use ```` ``` =html ```` fences for it. Cross-style includes (`style:path`) work in content exactly as they do in templates.
 
 ### Content parsers
 
@@ -830,7 +833,7 @@ Always under `<site_root>/zig-out/site/` (see `wig.output_paths`). Production bu
 - Module soft limit: ~800 lines.
 - CSS templates use `<t-raw>` for value output (prevents HTML escaping).
 - Content interpolation uses `{{ variable }}` syntax (resolved before zjot). Supports transforms: `{{ name | upper }}`.
-- Toupee tags in Djot content use raw HTML passthrough: `` `<t-include ...>`{=html} `` (inline) or bare tags on own line (block).
+- Toupee tags in Djot content require ```` ``` =html ```` raw fences for block-level shortcodes (including `<t-include>`); inline `` `<t-var .../>`{=html} `` for data-access in running text. zjot does **not** auto-detect bare `<t-*>` tags as block HTML — they are escaped.
 - Heading IDs: zjot puts IDs on `<section>` elements (case-preserving), not headings. `toc.zig` extracts accordingly.
 - `wig build` outputs HTML with content placed at slot depth but no internal re-indentation.
 - `wig build --pretty` applies full HTML-aware re-indentation to output.

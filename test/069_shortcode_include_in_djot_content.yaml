@@ -1,0 +1,121 @@
+test:
+  name: "<t-include> in Djot =html raw block includes style block template"
+  comment: >
+    The shortcode pass now uses a StyleLoader (not an empty resolver) so
+    <t-include> in a Djot =html raw block resolves against the page's style
+    templates. This enables embedding reusable block templates directly inside
+    content pages, e.g. for interactive components such as a code editor.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+          blocks:
+            greeting.html: |
+              <div class="greeting">Hello from block</div>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        ``` =html
+        <t-include template="blocks/greeting.html" />
+        ```
+output:
+  files:
+    index.html: |
+      <div class="greeting">Hello from block</div>
+---
+test:
+  name: "<t-include> in content receives context variables from the page"
+  comment: >
+    When a block template is included via <t-include> in Djot content, the
+    rendered template has access to site and document context (same context
+    as the shortcode pass itself).
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        title: Context Site
+        url: localhost
+      document.yaml: |
+        style: default
+        layout: page.html
+    styles:
+      default:
+        style.yaml: |
+          name: default
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+          blocks:
+            titled-box.html: |
+              <div class="box"><t-var name="site.title" /></div>
+    pages:
+      _index.dj: |
+        ---
+        ---
+        ``` =html
+        <t-include template="blocks/titled-box.html" />
+        ```
+output:
+  files:
+    index.html: |
+      <div class="box">Context Site</div>
+---
+test:
+  name: "<t-include> in content with cross-style template reference"
+  comment: >
+    Cross-style includes (style:path syntax) in Djot content resolve correctly,
+    allowing content pages to pull in templates from imported styles.
+  action:
+    wig: build
+input:
+  files:
+    data:
+      site.yaml: |
+        url: localhost
+      document.yaml: |
+        style: theme
+        layout: page.html
+    styles:
+      base:
+        style.yaml: |
+          name: base
+        templates:
+          blocks:
+            widget.html: |
+              <span class="widget">widget</span>
+      theme:
+        style.yaml: |
+          name: theme
+        templates:
+          layouts:
+            page.html: |
+              <t-slot />
+    pages:
+      _index.dj: |
+        ---
+        ---
+        ``` =html
+        <t-include template="base:blocks/widget.html" />
+        ```
+output:
+  files:
+    index.html: |
+      <span class="widget">widget</span>
