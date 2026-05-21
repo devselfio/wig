@@ -5,7 +5,6 @@ const pattern_loader = @import("pattern_loader.zig");
 const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
 const Pattern = pattern_loader.Pattern;
@@ -28,17 +27,18 @@ pub const ResolvedStyle = struct {
 /// as `style_cfgs` after dependency sorting.
 pub fn resolveAllStyles(
     a: Allocator,
+    io: std.Io,
     style_cfgs: []config.StyleConfig,
-    styles_dir: fs.Dir,
+    styles_dir: std.Io.Dir,
     style_ctx: *const toupee.Context,
 ) ![]const ResolvedStyle {
     config.sortByDependencyOrder(style_cfgs);
 
     var resolved_map = std.StringArrayHashMapUnmanaged(LoadResult){};
-    var results = std.ArrayListUnmanaged(ResolvedStyle){};
+    var results = std.ArrayListUnmanaged(ResolvedStyle).empty;
 
     for (style_cfgs) |style_cfg| {
-        var style_dir = styles_dir.openDir(style_cfg.name, .{ .iterate = true }) catch |err| switch (err) {
+        var style_dir = std.Io.Dir.openDir(styles_dir, io, style_cfg.name, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => {
                 const empty = LoadResult{ .categories = &.{}, .all = &.{} };
                 try resolved_map.put(a, style_cfg.name, empty);
@@ -47,9 +47,9 @@ pub fn resolveAllStyles(
             },
             else => return err,
         };
-        defer style_dir.close();
+        defer style_dir.close(io);
 
-        const local = try pattern_loader.loadStylePatterns(a, style_cfg.name, style_dir, style_ctx);
+        const local = try pattern_loader.loadStylePatterns(a, io, style_cfg.name, style_dir, style_ctx);
 
         const import_decls = try parseImports(a, style_cfg.raw);
 
@@ -113,7 +113,7 @@ pub fn parseImports(a: Allocator, raw: comb.Value) ![]const ImportDecl {
     const imports_val = raw.get("imports") orelse return &.{};
     if (imports_val != .object) return &.{};
 
-    var decls = std.ArrayListUnmanaged(ImportDecl){};
+    var decls = std.ArrayListUnmanaged(ImportDecl).empty;
 
     for (imports_val.object) |style_entry| {
         const upstream_name = switch (style_entry.key) {
@@ -124,7 +124,7 @@ pub fn parseImports(a: Allocator, raw: comb.Value) ![]const ImportDecl {
         if (style_entry.value != .object) continue;
 
         var pattern_spec: PatternSpec = .none;
-        var data_entries = std.ArrayListUnmanaged(DataEntry){};
+        var data_entries = std.ArrayListUnmanaged(DataEntry).empty;
 
         for (style_entry.value.object) |field_entry| {
             const field_name = switch (field_entry.key) {
@@ -141,7 +141,7 @@ pub fn parseImports(a: Allocator, raw: comb.Value) ![]const ImportDecl {
                             .string => |s| s,
                             else => continue,
                         };
-                        var items = std.ArrayListUnmanaged([]const u8){};
+                        var items = std.ArrayListUnmanaged([]const u8).empty;
                         if (data_entry.value == .array) {
                             for (data_entry.value.array) |item| {
                                 if (item == .string) try items.append(a, item.string);
@@ -173,7 +173,7 @@ fn parsePatternSpec(a: Allocator, val: comb.Value) !PatternSpec {
 
     if (val != .object) return .none;
 
-    var categories = std.ArrayListUnmanaged(CategorySpec){};
+    var categories = std.ArrayListUnmanaged(CategorySpec).empty;
     for (val.object) |cat_entry| {
         const cat_name = switch (cat_entry.key) {
             .string => |s| s,
@@ -185,7 +185,7 @@ fn parsePatternSpec(a: Allocator, val: comb.Value) !PatternSpec {
                 break :blk .all;
             }
             if (cat_entry.value == .array) {
-                var items = std.ArrayListUnmanaged([]const u8){};
+                var items = std.ArrayListUnmanaged([]const u8).empty;
                 for (cat_entry.value.array) |item| {
                     if (item == .string) try items.append(a, item.string);
                 }
@@ -206,8 +206,8 @@ fn filterPatterns(a: Allocator, upstream: LoadResult, spec: PatternSpec) !LoadRe
         .none => return LoadResult{ .categories = &.{}, .all = &.{} },
         .all => return upstream,
         .categories => |cats| {
-            var filtered_groups = std.ArrayListUnmanaged(CategoryGroup){};
-            var filtered_all = std.ArrayListUnmanaged(Pattern){};
+            var filtered_groups = std.ArrayListUnmanaged(CategoryGroup).empty;
+            var filtered_all = std.ArrayListUnmanaged(Pattern).empty;
 
             for (cats) |cat_spec| {
                 for (upstream.categories) |group| {
@@ -219,7 +219,7 @@ fn filterPatterns(a: Allocator, upstream: LoadResult, spec: PatternSpec) !LoadRe
                             for (group.patterns) |p| try filtered_all.append(a, p);
                         },
                         .specific => |names| {
-                            var selected = std.ArrayListUnmanaged(Pattern){};
+                            var selected = std.ArrayListUnmanaged(Pattern).empty;
                             for (group.patterns) |p| {
                                 for (names) |name| {
                                     if (std.mem.eql(u8, p.id, name)) {
@@ -260,19 +260,19 @@ fn mergePatterns(a: Allocator, local: LoadResult, imported: LoadResult) !LoadRes
 
     for (local.all) |p| {
         const gop = try category_map.getOrPut(a, p.category);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(a, p);
     }
 
     for (imported.all) |p| {
         if (local_slugs.contains(p.slug)) continue;
         const gop = try category_map.getOrPut(a, p.category);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(a, p);
     }
 
-    var groups = std.ArrayListUnmanaged(CategoryGroup){};
-    var all = std.ArrayListUnmanaged(Pattern){};
+    var groups = std.ArrayListUnmanaged(CategoryGroup).empty;
+    var all = std.ArrayListUnmanaged(Pattern).empty;
 
     for (pattern_loader.CUBE_CATEGORIES) |cat_name| {
         const list = category_map.getPtr(cat_name) orelse continue;
@@ -303,7 +303,7 @@ pub fn extractImportDependencies(a: Allocator, raw: comb.Value) ![]const []const
     const imports_val = raw.get("imports") orelse return &.{};
     if (imports_val != .object) return &.{};
 
-    var deps = std.ArrayListUnmanaged([]const u8){};
+    var deps = std.ArrayListUnmanaged([]const u8).empty;
     for (imports_val.object) |entry| {
         const name = switch (entry.key) {
             .string => |s| s,
@@ -318,13 +318,13 @@ pub fn extractImportDependencies(a: Allocator, raw: comb.Value) ![]const []const
 
 const testing = std.testing;
 
-fn createFile(dir: fs.Dir, path: []const u8, content: []const u8) !void {
+fn createFile(dir: std.Io.Dir, io: std.Io, path: []const u8, content: []const u8) !void {
     if (std.mem.lastIndexOfScalar(u8, path, '/')) |sep| {
-        dir.makePath(path[0..sep]) catch {};
+        std.Io.Dir.createDirPath(dir, io, path[0..sep]) catch {};
     }
-    var f = try dir.createFile(path, .{});
-    defer f.close();
-    try f.writeAll(content);
+    var f = try std.Io.Dir.createFile(dir, io, path, .{});
+    defer f.close(io);
+    try f.writeStreamingAll(io, content);
 }
 
 test "parseImports: no imports field" {

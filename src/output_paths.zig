@@ -1,11 +1,10 @@
 //! Single source of truth for build output locations under the site root.
 //!
 //! Convention: static site output lives at `<site_root>/zig-out/site/`. The parent
-//! `zig-out/` exists for Zig’s install layout and spec-test workspace paths.
+//! `zig-out/` exists for Zig's install layout and spec-test workspace paths.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 /// Directory name directly under the site root for Zig build/install artifacts.
 pub const zig_out_dir_name = "zig-out";
@@ -21,31 +20,31 @@ pub const default_test_workspace_rel = zig_out_dir_name ++ "/test";
 
 /// Returns owned path `<abs_site_root>/zig-out`. Caller frees with `allocator`.
 pub fn joinZigOutDirAbs(allocator: Allocator, abs_site_root: []const u8) ![]const u8 {
-    return fs.path.join(allocator, &.{ abs_site_root, zig_out_dir_name });
+    return std.fs.path.join(allocator, &.{ abs_site_root, zig_out_dir_name });
 }
 
 /// Returns owned path `<abs_site_root>/zig-out/site`. Caller frees with `allocator`.
 pub fn joinSiteOutputDirAbs(allocator: Allocator, abs_site_root: []const u8) ![]const u8 {
-    return fs.path.join(allocator, &.{ abs_site_root, zig_out_dir_name, site_output_dir_name });
+    return std.fs.path.join(allocator, &.{ abs_site_root, zig_out_dir_name, site_output_dir_name });
 }
 
 /// Ensures `zig-out/` and `zig-out/site/` exist under `abs_site_root`.
 /// If `clean`, deletes the site output tree first (full rebuild of output).
 /// Returns an open handle to `zig-out/site`. Caller must `close()` it.
-pub fn prepareSiteOutput(allocator: Allocator, abs_site_root: []const u8, clean: bool) !fs.Dir {
+pub fn prepareSiteOutput(allocator: Allocator, io: std.Io, abs_site_root: []const u8, clean: bool) !std.Io.Dir {
     const site_path = try joinSiteOutputDirAbs(allocator, abs_site_root);
     defer allocator.free(site_path);
     const parent_path = try joinZigOutDirAbs(allocator, abs_site_root);
     defer allocator.free(parent_path);
 
     if (clean) {
-        fs.deleteTreeAbsolute(site_path) catch {};
+        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, site_path) catch {};
     }
 
-    fs.makeDirAbsolute(parent_path) catch {};
-    fs.makeDirAbsolute(site_path) catch {};
+    std.Io.Dir.createDirAbsolute(io, parent_path, .default_dir) catch {};
+    std.Io.Dir.createDirAbsolute(io, site_path, .default_dir) catch {};
 
-    return try fs.openDirAbsolute(site_path, .{ .iterate = true });
+    return try std.Io.Dir.openDirAbsolute(io, site_path, .{ .iterate = true });
 }
 
 test "output_paths join absolute paths" {

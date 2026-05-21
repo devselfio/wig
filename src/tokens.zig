@@ -381,26 +381,25 @@ pub fn formatClamp(a: Allocator, min_size: f64, max_size: f64, min_vp: f64, max_
     const intercept = -(min_vp / d) * slope + min_size / d;
 
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w: std.Io.Writer = .fixed(&buf);
 
     try w.writeAll("clamp(");
-    try writeRoundedFloat(w, clamp_min / d);
+    try writeRoundedFloat(&w, clamp_min / d);
     try w.writeAll("rem, ");
-    try writeRoundedFloat(w, intercept);
+    try writeRoundedFloat(&w, intercept);
     try w.writeAll("rem + ");
-    try writeRoundedFloat(w, slope * 100.0);
+    try writeRoundedFloat(&w, slope * 100.0);
     try w.writeAll("vw, ");
-    try writeRoundedFloat(w, clamp_max / d);
+    try writeRoundedFloat(&w, clamp_max / d);
     try w.writeAll("rem)");
 
-    return try a.dupe(u8, fbs.getWritten());
+    return try a.dupe(u8, w.buffered());
 }
 
 fn writeRoundedFloat(writer: anytype, val: f64) !void {
     const rounded = @round(val * 10000.0) / 10000.0;
     if (rounded == @trunc(rounded)) {
-        try std.fmt.format(writer, "{d}", .{@as(i64, @intFromFloat(rounded))});
+        try writer.print("{d}", .{@as(i64, @intFromFloat(rounded))});
     } else {
         var float_buf: [32]u8 = undefined;
         const float_str = try std.fmt.bufPrint(&float_buf, "{d:.4}", .{rounded});
@@ -513,16 +512,16 @@ test "formatClamp: inverted sizes (min > max)" {
 
 test "writeRoundedFloat: integer values" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeRoundedFloat(fbs.writer(), 3.0);
-    try std.testing.expectEqualStrings("3", fbs.getWritten());
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeRoundedFloat(&w, 3.0);
+    try std.testing.expectEqualStrings("3", w.buffered());
 }
 
 test "writeRoundedFloat: decimal values with trailing zero trimming" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeRoundedFloat(fbs.writer(), 1.125);
-    try std.testing.expectEqualStrings("1.125", fbs.getWritten());
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeRoundedFloat(&w, 1.125);
+    try std.testing.expectEqualStrings("1.125", w.buffered());
 }
 
 test "compute: default params produce expected structure" {

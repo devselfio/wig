@@ -2,7 +2,6 @@ const std = @import("std");
 const skel = @import("skel.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 const project_dirs = [_][]const u8{ "data", "pages", "styles", "assets" };
 
@@ -25,8 +24,8 @@ const style_subdirs = [_][]const u8{
 };
 
 /// Scaffolds a new Wig project by extracting the embedded default skeleton (`src/skel/<term>.tar`).
-pub fn init(a: Allocator, target_path: []const u8) !void {
-    try skel.unpack(a, skel.default_init_term, target_path);
+pub fn init(a: Allocator, io: std.Io, target_path: []const u8) !void {
+    try skel.unpack(a, io, skel.default_init_term, target_path);
 }
 
 /// Installs a style from wig-stand or a git URL.
@@ -34,7 +33,7 @@ pub fn init(a: Allocator, target_path: []const u8) !void {
 /// **Deferred:** Requires HTTP client and tar/zip extraction, which depend
 /// on external networking not yet integrated. Currently returns
 /// `error.NotImplemented`.
-pub fn install(_: Allocator, _: []const u8, _: []const u8, _: InstallOptions) !void {
+pub fn install(_: Allocator, _: std.Io, _: []const u8, _: []const u8, _: InstallOptions) !void {
     return error.NotImplemented;
 }
 
@@ -47,16 +46,16 @@ pub const InstallOptions = struct {
 ///
 /// Writes `styles/{name}/style.yaml` with example content showing the
 /// expected manifest structure.
-pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
-    const style_path = try fs.path.join(a, &.{ styles_dir, name });
+pub fn addStyle(a: Allocator, io: std.Io, styles_dir: []const u8, name: []const u8) !void {
+    const style_path = try std.fs.path.join(a, &.{ styles_dir, name });
     defer a.free(style_path);
-    try fs.makeDirAbsolute(style_path);
+    try std.Io.Dir.createDirAbsolute(io, style_path, .default_dir);
 
-    const manifest_path = try fs.path.join(a, &.{ style_path, "style.yaml" });
+    const manifest_path = try std.fs.path.join(a, &.{ style_path, "style.yaml" });
     defer a.free(manifest_path);
     {
-        var f = try fs.createFileAbsolute(manifest_path, .{});
-        defer f.close();
+        var f = try std.Io.Dir.createFileAbsolute(io, manifest_path, .{});
+        defer f.close(io);
         const content = try std.fmt.allocPrint(a,
             \\# Style: {s}
             \\#
@@ -79,7 +78,7 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
             \\
         , .{name});
         defer a.free(content);
-        try f.writeAll(content);
+        try f.writeStreamingAll(io, content);
     }
 }
 
@@ -87,23 +86,23 @@ pub fn addStyle(a: Allocator, styles_dir: []const u8, name: []const u8) !void {
 ///
 /// Writes `css/blocks/{block}.css`, `templates/blocks/{block}.html`, and
 /// `patterns/blocks/{block}.html` under the style directory (CUBE convention).
-pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, block_name: []const u8) !void {
-    const style_path = try fs.path.join(a, &.{ styles_dir, style_name });
+pub fn addBlock(a: Allocator, io: std.Io, styles_dir: []const u8, style_name: []const u8, block_name: []const u8) !void {
+    const style_path = try std.fs.path.join(a, &.{ styles_dir, style_name });
     defer a.free(style_path);
 
     // css/blocks/NAME.css
-    var style_dir = try fs.openDirAbsolute(style_path, .{});
-    defer style_dir.close();
-    try style_dir.makePath("css/blocks");
-    const css_dir = try fs.path.join(a, &.{ style_path, "css", "blocks" });
+    var style_dir = try std.Io.Dir.openDirAbsolute(io, style_path, .{});
+    defer style_dir.close(io);
+    try std.Io.Dir.createDirPath(style_dir, io, "css/blocks");
+    const css_dir = try std.fs.path.join(a, &.{ style_path, "css", "blocks" });
     defer a.free(css_dir);
     const css_filename = try std.fmt.allocPrint(a, "{s}.css", .{block_name});
     defer a.free(css_filename);
-    const css_path = try fs.path.join(a, &.{ css_dir, css_filename });
+    const css_path = try std.fs.path.join(a, &.{ css_dir, css_filename });
     defer a.free(css_path);
     {
-        var f = try fs.createFileAbsolute(css_path, .{});
-        defer f.close();
+        var f = try std.Io.Dir.createFileAbsolute(io, css_path, .{});
+        defer f.close(io);
         const header = try std.fmt.allocPrint(a,
             \\/* {s}
             \\ *
@@ -117,20 +116,20 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
             \\
         , .{ block_name, block_name });
         defer a.free(header);
-        try f.writeAll(header);
+        try f.writeStreamingAll(io, header);
     }
 
     // templates/blocks/NAME.html
-    try style_dir.makePath("templates/blocks");
-    const tmpl_dir = try fs.path.join(a, &.{ style_path, "templates", "blocks" });
+    try std.Io.Dir.createDirPath(style_dir, io, "templates/blocks");
+    const tmpl_dir = try std.fs.path.join(a, &.{ style_path, "templates", "blocks" });
     defer a.free(tmpl_dir);
     const html_filename = try std.fmt.allocPrint(a, "{s}.html", .{block_name});
     defer a.free(html_filename);
-    const html_path = try fs.path.join(a, &.{ tmpl_dir, html_filename });
+    const html_path = try std.fs.path.join(a, &.{ tmpl_dir, html_filename });
     defer a.free(html_path);
     {
-        var f = try fs.createFileAbsolute(html_path, .{});
-        defer f.close();
+        var f = try std.Io.Dir.createFileAbsolute(io, html_path, .{});
+        defer f.close(io);
         const content = try std.fmt.allocPrint(a,
             \\<div class="{s}">
             \\  <t-slot />
@@ -138,20 +137,20 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
             \\
         , .{block_name});
         defer a.free(content);
-        try f.writeAll(content);
+        try f.writeStreamingAll(io, content);
     }
 
     // patterns/blocks/NAME.html
-    try style_dir.makePath("patterns/blocks");
-    const pat_dir = try fs.path.join(a, &.{ style_path, "patterns", "blocks" });
+    try std.Io.Dir.createDirPath(style_dir, io, "patterns/blocks");
+    const pat_dir = try std.fs.path.join(a, &.{ style_path, "patterns", "blocks" });
     defer a.free(pat_dir);
     const pat_filename = try std.fmt.allocPrint(a, "{s}.html", .{block_name});
     defer a.free(pat_filename);
-    const pat_path = try fs.path.join(a, &.{ pat_dir, pat_filename });
+    const pat_path = try std.fs.path.join(a, &.{ pat_dir, pat_filename });
     defer a.free(pat_path);
     {
-        var f = try fs.createFileAbsolute(pat_path, .{});
-        defer f.close();
+        var f = try std.Io.Dir.createFileAbsolute(io, pat_path, .{});
+        defer f.close(io);
         const content = try std.fmt.allocPrint(a,
             \\<div class="{s}">
             \\  Example content
@@ -159,7 +158,7 @@ pub fn addBlock(a: Allocator, styles_dir: []const u8, style_name: []const u8, bl
             \\
         , .{block_name});
         defer a.free(content);
-        try f.writeAll(content);
+        try f.writeStreamingAll(io, content);
     }
 }
 
@@ -170,84 +169,84 @@ const testing = std.testing;
 test "init: creates project directories and CUBE style structure" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
     const proj_name = "my-site";
-    try tmp.dir.makeDir(proj_name);
+    try std.Io.Dir.createDir(tmp.dir, io, proj_name, .{});
 
-    const abs = try tmp.dir.realpathAlloc(testing.allocator, proj_name);
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, proj_name, testing.allocator);
     defer testing.allocator.free(abs);
 
-    try init(testing.allocator, abs);
+    try init(testing.allocator, io, abs);
 
     for (project_dirs) |dir_name| {
-        const check_path = try fs.path.join(testing.allocator, &.{ abs, dir_name });
+        const check_path = try std.fs.path.join(testing.allocator, &.{ abs, dir_name });
         defer testing.allocator.free(check_path);
-        var dir = try fs.openDirAbsolute(check_path, .{});
-        dir.close();
+        var dir = try std.Io.Dir.openDirAbsolute(io, check_path, .{});
+        dir.close(io);
     }
 
-    const cfg_path = try fs.path.join(testing.allocator, &.{ abs, "data", "site.yaml" });
+    const cfg_path = try std.fs.path.join(testing.allocator, &.{ abs, "data", "site.yaml" });
     defer testing.allocator.free(cfg_path);
-    const cfg = try fs.openFileAbsolute(cfg_path, .{});
-    cfg.close();
+    const cfg = try std.Io.Dir.openFileAbsolute(io, cfg_path, .{});
+    cfg.close(io);
 
-    const layouts_path = try fs.path.join(testing.allocator, &.{ abs, "styles", "default", "templates", "layouts" });
+    const layouts_path = try std.fs.path.join(testing.allocator, &.{ abs, "styles", "default", "templates", "layouts" });
     defer testing.allocator.free(layouts_path);
-    var layouts_dir = try fs.openDirAbsolute(layouts_path, .{});
-    layouts_dir.close();
+    var layouts_dir = try std.Io.Dir.openDirAbsolute(io, layouts_path, .{});
+    layouts_dir.close(io);
 
-    const core_manifest = try fs.path.join(testing.allocator, &.{ abs, "styles", "_core", "style.yaml" });
+    const core_manifest = try std.fs.path.join(testing.allocator, &.{ abs, "styles", "_core", "style.yaml" });
     defer testing.allocator.free(core_manifest);
-    const cm = try fs.openFileAbsolute(core_manifest, .{});
-    cm.close();
+    const cm = try std.Io.Dir.openFileAbsolute(io, core_manifest, .{});
+    cm.close(io);
 }
 
 test "addStyle: creates manifest with correct name" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makeDir("styles");
+    try std.Io.Dir.createDir(tmp.dir, io, "styles", .{});
 
-    const abs = try tmp.dir.realpathAlloc(testing.allocator, "styles");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, "styles", testing.allocator);
     defer testing.allocator.free(abs);
 
-    try addStyle(testing.allocator, abs, "modern");
+    try addStyle(testing.allocator, io, abs, "modern");
 
-    const manifest_path = try fs.path.join(testing.allocator, &.{ abs, "modern", "style.yaml" });
+    const manifest_path = try std.fs.path.join(testing.allocator, &.{ abs, "modern", "style.yaml" });
     defer testing.allocator.free(manifest_path);
-    const content = try fs.openFileAbsolute(manifest_path, .{});
-    defer content.close();
-    var buf: [512]u8 = undefined;
-    const len = try content.readAll(&buf);
-    const text = buf[0..len];
+    const text = try std.Io.Dir.readFileAlloc(std.Io.Dir.cwd(), io, manifest_path, testing.allocator, .limited(512));
+    defer testing.allocator.free(text);
     try testing.expect(std.mem.indexOf(u8, text, "# Style: modern") != null);
 }
 
 test "addBlock: creates CSS, template, and pattern files (CUBE)" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("styles/default");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/default");
 
-    const abs = try tmp.dir.realpathAlloc(testing.allocator, "styles");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, "styles", testing.allocator);
     defer testing.allocator.free(abs);
 
-    try addBlock(testing.allocator, abs, "default", "card");
+    try addBlock(testing.allocator, io, abs, "default", "card");
 
-    const css_path = try fs.path.join(testing.allocator, &.{ abs, "default", "css", "blocks", "card.css" });
+    const css_path = try std.fs.path.join(testing.allocator, &.{ abs, "default", "css", "blocks", "card.css" });
     defer testing.allocator.free(css_path);
-    const css_f = try fs.openFileAbsolute(css_path, .{});
-    css_f.close();
+    const css_f = try std.Io.Dir.openFileAbsolute(io, css_path, .{});
+    css_f.close(io);
 
-    const html_path = try fs.path.join(testing.allocator, &.{ abs, "default", "templates", "blocks", "card.html" });
+    const html_path = try std.fs.path.join(testing.allocator, &.{ abs, "default", "templates", "blocks", "card.html" });
     defer testing.allocator.free(html_path);
-    const html_f = try fs.openFileAbsolute(html_path, .{});
-    html_f.close();
+    const html_f = try std.Io.Dir.openFileAbsolute(io, html_path, .{});
+    html_f.close(io);
 
-    const pat_path = try fs.path.join(testing.allocator, &.{ abs, "default", "patterns", "blocks", "card.html" });
+    const pat_path = try std.fs.path.join(testing.allocator, &.{ abs, "default", "patterns", "blocks", "card.html" });
     defer testing.allocator.free(pat_path);
-    const pat_f = try fs.openFileAbsolute(pat_path, .{});
-    pat_f.close();
+    const pat_f = try std.Io.Dir.openFileAbsolute(io, pat_path, .{});
+    pat_f.close(io);
 }
 
 test "install: returns NotImplemented" {

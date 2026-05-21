@@ -3,7 +3,6 @@ const toupee = @import("toupee");
 const pattern_loader = @import("pattern_loader.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 const LoadResult = pattern_loader.LoadResult;
 
@@ -25,9 +24,10 @@ pub const AutoBundleResult = struct {
 /// Returns the web path, hash, and content. Returns null if no patterns have CSS.
 pub fn generateBundle(
     a: Allocator,
+    io: std.Io,
     style_name: []const u8,
     resolved: LoadResult,
-    output_dir: fs.Dir,
+    output_dir: std.Io.Dir,
     style_ctx: *const toupee.Context,
 ) !?AutoBundleResult {
     var has_any_css = false;
@@ -49,12 +49,12 @@ pub fn generateBundle(
 
     const filename = try std.fmt.allocPrint(a, "{s}.{s}.css", .{ style_name, hash });
     const subdir = "assets/css/styles";
-    output_dir.makePath(subdir) catch {};
+    std.Io.Dir.createDirPath(output_dir, io, subdir) catch {};
 
     const out_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ subdir, filename });
-    var out_file = try output_dir.createFile(out_path, .{});
-    defer out_file.close();
-    try out_file.writeAll(content);
+    var out_file = try std.Io.Dir.createFile(output_dir, io, out_path, .{});
+    defer out_file.close(io);
+    try out_file.writeStreamingAll(io, content);
 
     const web_path = try std.fmt.allocPrint(a, "/{s}", .{out_path});
 
@@ -86,12 +86,12 @@ pub fn buildLayeredCss(
     }
     var resolver: toupee.Resolver = .{};
 
-    var parts = std.ArrayListUnmanaged([]const u8){};
+    var parts = std.ArrayListUnmanaged([]const u8).empty;
 
     try parts.append(a, "@layer tokens, resets, globals, fonts, compositions, utilities, blocks, exceptions;\n");
 
     for (resolved.categories) |group| {
-        var cat_css = std.ArrayListUnmanaged([]const u8){};
+        var cat_css = std.ArrayListUnmanaged([]const u8).empty;
         for (group.patterns) |p| {
             if (p.resources.get("css")) |entry| {
                 const raw = std.mem.trim(u8, entry.content, " \t\r\n");

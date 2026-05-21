@@ -50,7 +50,7 @@ pub const Failure = struct {
 /// Accumulates failure details for the report file. Best-effort; append failures are logged but not fatal.
 pub const Report = struct {
     allocator: Allocator,
-    buffer: std.ArrayListUnmanaged(u8) = .{},
+    buffer: std.ArrayListUnmanaged(u8) = .empty,
     last_test_name: ?[]const u8 = null,
     header_written: bool = false,
 
@@ -186,7 +186,7 @@ pub const Reporter = struct {
 };
 
 fn formatUnifiedDiff(a: Allocator, expected: []const u8, actual: []const u8) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8){};
+    var list = std.ArrayListUnmanaged(u8).empty;
     defer list.deinit(a);
     try list.appendSlice(a, "--- expected\n");
     try list.appendSlice(a, "+++ actual\n");
@@ -196,7 +196,7 @@ fn formatUnifiedDiff(a: Allocator, expected: []const u8, actual: []const u8) ![]
     var act_line = act_iter.next();
     var exp_ln: usize = 1;
     var act_ln: usize = 1;
-    var hunk = std.ArrayListUnmanaged(u8){};
+    var hunk = std.ArrayListUnmanaged(u8).empty;
     defer hunk.deinit(a);
     var hunk_exp_count: usize = 0;
     var hunk_act_count: usize = 0;

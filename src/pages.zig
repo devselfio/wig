@@ -10,7 +10,6 @@ const diagnostics_mod = @import("diagnostics.zig");
 
 const Allocator = std.mem.Allocator;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
-const fs = std.fs;
 
 pub const ContentParser = *const fn (Allocator, []const u8) anyerror![]const u8;
 
@@ -136,7 +135,7 @@ fn renderPage(
         }
     }
 
-    var ancestors_list = std.ArrayListUnmanaged(toupee.Value){};
+    var ancestors_list = std.ArrayListUnmanaged(toupee.Value).empty;
     var current_url = entry.url_path;
     while (scan_result.parent_map.get(current_url)) |parent_opt| {
         const parent_page = parent_opt orelse break;
@@ -353,7 +352,8 @@ pub fn renderAll(
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
     content_parsers: []const ContentParserEntry,
     transform_registry: *const toupee.transform.Registry,
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
     diags: *diagnostics_mod.Collector,
 ) ![]RenderResult {
     const all_pages = scan_result.pages;
@@ -366,10 +366,10 @@ pub fn renderAll(
             const cfg = paginate_cfg.?;
             const items = resolveCollectionForPage(a, base_ctx, cfg.collection, page, scan_result) orelse {
                 results[i] = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
-                output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
-                var f = try output_dir.createFile(page.output_file, .{});
-                defer f.close();
-                try f.writeAll(results[i].output_html);
+                std.Io.Dir.createDirPath(output_dir, io, std.fs.path.dirname(page.output_file) orelse ".") catch {};
+                var f = try std.Io.Dir.createFile(output_dir, io, page.output_file, .{});
+                defer f.close(io);
+                try f.writeStreamingAll(io, results[i].output_html);
                 continue;
             };
 
@@ -386,10 +386,10 @@ pub fn renderAll(
             const has_index = cfg.slug != null and cfg.layout != null;
             if (has_index) {
                 const index_result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
-                output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
-                var idx_f = try output_dir.createFile(page.output_file, .{});
-                defer idx_f.close();
-                try idx_f.writeAll(index_result.output_html);
+                std.Io.Dir.createDirPath(output_dir, io, std.fs.path.dirname(page.output_file) orelse ".") catch {};
+                var idx_f = try std.Io.Dir.createFile(output_dir, io, page.output_file, .{});
+                defer idx_f.close(io);
+                try idx_f.writeStreamingAll(io, index_result.output_html);
                 results[i] = index_result;
             }
 
@@ -398,10 +398,10 @@ pub fn renderAll(
                 const result = try renderPage(a, page, chunk, cfg.layout, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
                 const file_path = try paginateUrlPathToFile(a, chunk.output_path);
                 defer a.free(file_path);
-                output_dir.makePath(std.fs.path.dirname(file_path) orelse ".") catch {};
-                var f = try output_dir.createFile(file_path, .{});
-                defer f.close();
-                try f.writeAll(result.output_html);
+                std.Io.Dir.createDirPath(output_dir, io, std.fs.path.dirname(file_path) orelse ".") catch {};
+                var f = try std.Io.Dir.createFile(output_dir, io, file_path, .{});
+                defer f.close(io);
+                try f.writeStreamingAll(io, result.output_html);
                 if (first_result == null) first_result = result;
             }
             if (!has_index) {
@@ -409,10 +409,10 @@ pub fn renderAll(
             }
         } else {
             const result = try renderOne(a, page, engine, base_ctx, template_map, content_parsers, transform_registry, scan_result, diags);
-            output_dir.makePath(std.fs.path.dirname(page.output_file) orelse ".") catch {};
-            var f = try output_dir.createFile(page.output_file, .{});
-            defer f.close();
-            try f.writeAll(result.output_html);
+            std.Io.Dir.createDirPath(output_dir, io, std.fs.path.dirname(page.output_file) orelse ".") catch {};
+            var f = try std.Io.Dir.createFile(output_dir, io, page.output_file, .{});
+            defer f.close(io);
+            try f.writeStreamingAll(io, result.output_html);
             results[i] = result;
         }
     }
@@ -432,7 +432,7 @@ fn resolveInterpolations(
     source_path: []const u8,
     diags: *diagnostics_mod.Collector,
 ) ![]const u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     defer out.deinit(a);
     var pos: usize = 0;
 

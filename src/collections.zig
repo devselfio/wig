@@ -48,7 +48,7 @@ pub fn buildCollections(
         if (page.is_section) continue;
 
         const key = page.collection_key;
-        var list = if (buckets.get(key)) |l| l else std.ArrayListUnmanaged(toupee.Value){};
+        var list = if (buckets.get(key)) |l| l else std.ArrayListUnmanaged(toupee.Value).empty;
 
         const page_val = try buildPageValue(a, &page);
         try list.append(a, page_val);
@@ -80,7 +80,7 @@ pub fn buildCollections(
         try pages_root.put(a, try a.dupe(u8, slug), page_val);
     }
 
-    var nested_keys = std.ArrayListUnmanaged([]const u8){};
+    var nested_keys = std.ArrayListUnmanaged([]const u8).empty;
     defer nested_keys.deinit(a);
     {
         var bit = buckets.iterator();
@@ -263,7 +263,7 @@ pub fn buildChildrenMap(a: Allocator, pages: []const PageEntry) !std.StringArray
         const dir = scanner_mod.pagesParentDir(p.source_path);
         var list = children_lists.getPtr(dir) orelse blk: {
             const key = try a.dupe(u8, dir);
-            const new_list = std.ArrayListUnmanaged(*const PageEntry){};
+            const new_list = std.ArrayListUnmanaged(*const PageEntry).empty;
             try children_lists.put(a, key, new_list);
             break :blk children_lists.getPtr(key).?;
         };

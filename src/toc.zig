@@ -20,7 +20,7 @@ pub const TocEntry = struct {
 ///
 /// Returned entries borrow strings from `html`.
 pub fn extract(a: Allocator, html: []const u8) ![]TocEntry {
-    var entries: std.ArrayListUnmanaged(TocEntry) = .{};
+    var entries: std.ArrayListUnmanaged(TocEntry) = .empty;
 
     var pos: usize = 0;
     while (pos < html.len) {

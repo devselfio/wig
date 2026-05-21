@@ -11,7 +11,7 @@ pub const Diagnostic = struct {
     pub const Kind = enum { err, warning };
 
     pub fn format(self: *const Diagnostic, a: Allocator) ![]const u8 {
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         const w = buf.writer(a);
         const prefix: []const u8 = switch (self.kind) {
             .err => "error",
@@ -26,7 +26,7 @@ pub const Diagnostic = struct {
 };
 
 pub const Collector = struct {
-    items: std.ArrayListUnmanaged(Diagnostic) = .{},
+    items: std.ArrayListUnmanaged(Diagnostic) = .empty,
 
     pub fn err(self: *Collector, a: Allocator, msg: []const u8) !void {
         try self.items.append(a, .{ .kind = .err, .message = msg });

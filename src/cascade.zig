@@ -73,7 +73,7 @@ pub fn applyCascadeToContext(
     var merged_doc = ValueMap{};
     var merged_site = ValueMap{};
 
-    var ancestors: std.ArrayListUnmanaged(*const scanner_mod.PageEntry) = .{};
+    var ancestors: std.ArrayListUnmanaged(*const scanner_mod.PageEntry) = .empty;
     defer ancestors.deinit(a);
     var current_url = entry.url_path;
     while (scan_result.parent_map.get(current_url)) |parent_opt| {

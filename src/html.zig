@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 /// Used by excerpt extraction (pages.zig), ToC heading text (toc.zig),
 /// and search index body content (search.zig).
 pub fn stripTags(a: Allocator, html: []const u8) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     var i: usize = 0;

@@ -62,7 +62,7 @@ pub const App = struct {
         if (result) |r| {
             defer self.allocator.free(r.params);
             const context_params = blk: {
-                var p: std.ArrayListUnmanaged(handler_mod.Context.Param) = .{};
+                var p: std.ArrayListUnmanaged(handler_mod.Context.Param) = .empty;
                 defer p.deinit(self.allocator);
                 for (r.params) |rp| {
                     try p.append(self.allocator, .{ .name = rp.name, .value = rp.value });

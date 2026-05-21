@@ -4,7 +4,6 @@ const config_mod = @import("config.zig");
 const page_meta_mod = @import("page_meta.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 /// Generates an Atom feed XML for a named feed from a collection of pages.
 /// `rendered_content` maps page source paths to their rendered HTML content bodies.
@@ -15,10 +14,11 @@ pub fn generateAtom(
     site_url: []const u8,
     site_title: []const u8,
     site_author: []const u8,
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
     rendered_content: ?std.StringArrayHashMapUnmanaged([]const u8),
 ) !void {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -51,7 +51,7 @@ pub fn generateAtom(
     try appendXmlEscaped(&buf, a, if (site_author.len > 0) site_author else site_title);
     try buf.appendSlice(a, "</name></author>\n");
 
-    var feed_pages = std.ArrayListUnmanaged(*const scanner_mod.PageEntry){};
+    var feed_pages = std.ArrayListUnmanaged(*const scanner_mod.PageEntry).empty;
     for (pages) |*page| {
         if (!matchesFeed(page.*, feed_config)) continue;
         if (page.is_section) continue;
@@ -117,22 +117,21 @@ pub fn generateAtom(
 
     try buf.appendSlice(a, "</feed>\n");
 
-    output_dir.makePath("feeds") catch {};
+    std.Io.Dir.createDirPath(output_dir, io, "feeds") catch {};
     const out_path = try std.fmt.allocPrint(a, "feeds/{s}.xml", .{feed_config.name});
     defer a.free(out_path);
 
-    var f = try output_dir.createFile(out_path, .{});
-    defer f.close();
-    try f.writeAll(buf.items);
+    try std.Io.Dir.writeFile(output_dir, io, .{ .sub_path = out_path, .data = buf.items });
 }
 
 /// Generates sitemap.xml from all rendered pages.
 pub fn generateSitemap(
     a: Allocator,
     pages: []const scanner_mod.PageEntry,
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
 ) !void {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try buf.appendSlice(a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -162,9 +161,7 @@ pub fn generateSitemap(
 
     try buf.appendSlice(a, "</urlset>\n");
 
-    var f = try output_dir.createFile("sitemap.xml", .{});
-    defer f.close();
-    try f.writeAll(buf.items);
+    try std.Io.Dir.writeFile(output_dir, io, .{ .sub_path = "sitemap.xml", .data = buf.items });
 }
 
 fn matchesFeed(page: scanner_mod.PageEntry, feed_config: config_mod.FeedConfig) bool {
@@ -227,9 +224,10 @@ test "generateAtom: produces valid Atom XML" {
         .title = "Blog Feed",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", "My Site", tmp.dir, null);
+    const io = testing.io;
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "My Site", "My Site", io, tmp.dir, null);
 
-    const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
+    const content = try std.Io.Dir.readFileAlloc(tmp.dir, io, "feeds/blog.xml", a, .limited(64 * 1024));
     try testing.expect(std.mem.indexOf(u8, content, "<feed xmlns=") != null);
     try testing.expect(std.mem.indexOf(u8, content, "First Post") != null);
     try testing.expect(std.mem.indexOf(u8, content, "<updated>2026-03-01</updated>") != null);
@@ -280,9 +278,10 @@ test "generateAtom: filters by collection" {
         .title = "Blog",
     };
 
-    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", "Site", tmp.dir, null);
+    const io = testing.io;
+    try generateAtom(a, feed_cfg, &pages, "https://example.com", "Site", "Site", io, tmp.dir, null);
 
-    const content = try tmp.dir.readFileAlloc(a, "feeds/blog.xml", 64 * 1024);
+    const content = try std.Io.Dir.readFileAlloc(tmp.dir, io, "feeds/blog.xml", a, .limited(64 * 1024));
     try testing.expect(std.mem.indexOf(u8, content, "Post") != null);
     try testing.expect(std.mem.indexOf(u8, content, "Tutorial") == null);
 }
@@ -311,9 +310,10 @@ test "generateSitemap: produces valid XML" {
         },
     };
 
-    try generateSitemap(a, &pages, tmp.dir);
+    const io = testing.io;
+    try generateSitemap(a, &pages, io, tmp.dir);
 
-    const content = try tmp.dir.readFileAlloc(a, "sitemap.xml", 64 * 1024);
+    const content = try std.Io.Dir.readFileAlloc(tmp.dir, io, "sitemap.xml", a, .limited(64 * 1024));
     try testing.expect(std.mem.indexOf(u8, content, "<urlset xmlns=") != null);
     try testing.expect(std.mem.indexOf(u8, content, "https://example.com/about/") != null);
 }
@@ -323,9 +323,10 @@ test "generateSitemap: empty pages" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try generateSitemap(a, &.{}, tmp.dir);
+    const io = testing.io;
+    try generateSitemap(a, &.{}, io, tmp.dir);
 
-    const content = try tmp.dir.readFileAlloc(a, "sitemap.xml", 64 * 1024);
+    const content = try std.Io.Dir.readFileAlloc(tmp.dir, io, "sitemap.xml", a, .limited(64 * 1024));
     defer a.free(content);
     try testing.expect(std.mem.indexOf(u8, content, "<urlset") != null);
     try testing.expect(std.mem.indexOf(u8, content, "</urlset>") != null);
@@ -333,7 +334,7 @@ test "generateSitemap: empty pages" {
 
 test "appendXmlEscaped: escapes special chars" {
     const a = testing.allocator;
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try appendXmlEscaped(&buf, a, "a & b < c > d \"e\"");

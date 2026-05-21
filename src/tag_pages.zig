@@ -7,7 +7,6 @@ const pages = @import("pages.zig");
 const template_loader = @import("template_loader.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 const StyleLoader = template_loader.StyleLoader;
 
@@ -77,7 +76,8 @@ pub fn render(
     engine: *toupee.Engine,
     base_ctx: *toupee.Context,
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
 ) !void {
     var want_tags = false;
     for (site_cfg.tags) |t| {
@@ -106,7 +106,7 @@ pub fn render(
         tag_pages: []const toupee.Value,
     };
 
-    var tag_infos: std.ArrayListUnmanaged(TagInfo) = .{};
+    var tag_infos: std.ArrayListUnmanaged(TagInfo) = .empty;
     var tit = tags_root.map.iterator();
     while (tit.next()) |e| {
         if (e.value_ptr.* != .map) continue;
@@ -147,10 +147,10 @@ pub fn render(
         try ctx.put("tag", .{ .map = wrap });
         const html_out = try engine.render(ba, tmpl_index, &ctx, sl.loader(), .{});
         defer ba.free(html_out);
-        output_dir.makePath("tags") catch {};
-        var f = try output_dir.createFile("tags/index.html", .{});
-        defer f.close();
-        try f.writeAll(html_out);
+        std.Io.Dir.createDirPath(output_dir, io, "tags") catch {};
+        var f = try std.Io.Dir.createFile(output_dir, io, "tags/index.html", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, html_out);
     }
 
     for (tag_infos.items) |info| {
@@ -193,12 +193,12 @@ pub fn render(
         defer ba.free(html_out);
         const dir = try std.fmt.allocPrint(ba, "tags/{s}", .{info.slug});
         defer ba.free(dir);
-        output_dir.makePath(dir) catch {};
+        std.Io.Dir.createDirPath(output_dir, io, dir) catch {};
         const file_path = try std.fmt.allocPrint(ba, "{s}/index.html", .{dir});
         defer ba.free(file_path);
-        var f = try output_dir.createFile(file_path, .{});
-        defer f.close();
-        try f.writeAll(html_out);
+        var f = try std.Io.Dir.createFile(output_dir, io, file_path, .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, html_out);
     }
 
     var pair_seen = std.StringArrayHashMapUnmanaged(void){};
@@ -207,7 +207,7 @@ pub fn render(
     for (scan_result.pages) |*page| {
         if (page.is_section) continue;
         const terms = taxonomies.getTerms(page.raw_frontmatter, "tags") orelse continue;
-        var slug_buf: std.ArrayListUnmanaged([]const u8) = .{};
+        var slug_buf: std.ArrayListUnmanaged([]const u8) = .empty;
         defer slug_buf.deinit(ba);
         for (terms) |t| {
             const raw = switch (t) {
@@ -240,7 +240,7 @@ pub fn render(
         const a_slug = key[0..mid];
         const b_slug = key[mid + 1 ..];
 
-        var match_pages: std.ArrayListUnmanaged(toupee.Value) = .{};
+        var match_pages: std.ArrayListUnmanaged(toupee.Value) = .empty;
         for (scan_result.pages) |*sp| {
             if (sp.is_section) continue;
             if (!try pageHasBothTagSlugs(sp.raw_frontmatter, a_slug, b_slug, ba)) continue;
@@ -275,12 +275,12 @@ pub fn render(
         defer ba.free(html2);
         const dir2 = try std.fmt.allocPrint(ba, "tags/{s}/{s}", .{ a_slug, b_slug });
         defer ba.free(dir2);
-        output_dir.makePath(dir2) catch {};
+        std.Io.Dir.createDirPath(output_dir, io, dir2) catch {};
         const fp2 = try std.fmt.allocPrint(ba, "{s}/index.html", .{dir2});
         defer ba.free(fp2);
-        var f2 = try output_dir.createFile(fp2, .{});
-        defer f2.close();
-        try f2.writeAll(html2);
+        var f2 = try std.Io.Dir.createFile(output_dir, io, fp2, .{});
+        defer f2.close(io);
+        try f2.writeStreamingAll(io, html2);
     }
 }
 

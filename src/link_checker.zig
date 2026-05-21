@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 pub const Link = struct {
     url: []const u8,
@@ -20,13 +19,13 @@ const SourceMap = std.StringArrayHashMapUnmanaged([]const u8);
 /// Walks all `.html` files in `output_dir`, extracts internal links, and
 /// checks each against the output tree. Returns a list of broken-link issues.
 /// `source_map` maps output file paths to source content paths for diagnostics.
-pub fn checkSite(a: Allocator, output_dir: fs.Dir, source_map: SourceMap) ![]Issue {
-    var issues: std.ArrayListUnmanaged(Issue) = .{};
-    var html_files: std.ArrayListUnmanaged([]const u8) = .{};
-    try collectHtmlFiles(a, output_dir, "", &html_files);
+pub fn checkSite(a: Allocator, io: std.Io, output_dir: std.Io.Dir, source_map: SourceMap) ![]Issue {
+    var issues: std.ArrayListUnmanaged(Issue) = .empty;
+    var html_files: std.ArrayListUnmanaged([]const u8) = .empty;
+    try collectHtmlFiles(a, io, output_dir, "", &html_files);
 
     for (html_files.items) |rel_path| {
-        const html = output_dir.readFileAlloc(a, rel_path, 16 * 1024 * 1024) catch continue;
+        const html = std.Io.Dir.readFileAlloc(output_dir, io, rel_path, a, .limited(16 * 1024 * 1024)) catch continue;
         const links = extractLinks(a, html);
         const src = source_map.get(rel_path);
 
@@ -50,7 +49,7 @@ pub fn checkSite(a: Allocator, output_dir: fs.Dir, source_map: SourceMap) ![]Iss
             }
 
             const resolved = resolvePath(a, rel_path, path_part) catch continue;
-            if (!fileExists(output_dir, resolved)) {
+            if (!fileExists(output_dir, io, resolved)) {
                 try issues.append(a, .{
                     .output_path = rel_path,
                     .source_path = src,
@@ -61,7 +60,7 @@ pub fn checkSite(a: Allocator, output_dir: fs.Dir, source_map: SourceMap) ![]Iss
             }
 
             if (fragment) |frag| {
-                const target_html = output_dir.readFileAlloc(a, resolved, 16 * 1024 * 1024) catch continue;
+                const target_html = std.Io.Dir.readFileAlloc(output_dir, io, resolved, a, .limited(16 * 1024 * 1024)) catch continue;
                 if (!hasAnchorId(target_html, frag)) {
                     try issues.append(a, .{
                         .output_path = rel_path,
@@ -80,7 +79,7 @@ pub fn checkSite(a: Allocator, output_dir: fs.Dir, source_map: SourceMap) ![]Iss
 /// Extracts internal `href` and `src` attribute values from HTML.
 /// Skips external URLs, empty hrefs, and fragment-only anchors are kept.
 pub fn extractLinks(a: Allocator, html: []const u8) []Link {
-    var links: std.ArrayListUnmanaged(Link) = .{};
+    var links: std.ArrayListUnmanaged(Link) = .empty;
     const patterns = [_][]const u8{ "href=\"", "src=\"" };
 
     var pos: usize = 0;
@@ -168,14 +167,14 @@ fn resolvePath(a: Allocator, from_file: []const u8, path: []const u8) ![]const u
     return resolved;
 }
 
-fn fileExists(dir: fs.Dir, path: []const u8) bool {
-    dir.access(path, .{}) catch return false;
+fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
+    std.Io.Dir.access(dir, io, path, .{}) catch return false;
     return true;
 }
 
-fn collectHtmlFiles(a: Allocator, dir: fs.Dir, prefix: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+fn collectHtmlFiles(a: Allocator, io: std.Io, dir: std.Io.Dir, prefix: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         const rel = if (prefix.len > 0)
             try std.fmt.allocPrint(a, "{s}/{s}", .{ prefix, entry.name })
         else
@@ -188,9 +187,9 @@ fn collectHtmlFiles(a: Allocator, dir: fs.Dir, prefix: []const u8, out: *std.Arr
                 }
             },
             .directory => {
-                var sub = dir.openDir(entry.name, .{ .iterate = true }) catch continue;
-                defer sub.close();
-                try collectHtmlFiles(a, sub, rel, out);
+                var sub = std.Io.Dir.openDir(dir, io, entry.name, .{ .iterate = true }) catch continue;
+                defer sub.close(io);
+                try collectHtmlFiles(a, io, sub, rel, out);
             },
             else => {},
         }

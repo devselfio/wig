@@ -6,7 +6,6 @@ const frontmatter = @import("frontmatter.zig");
 const context_mod = @import("context.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
 /// Fixed CUBE CSS category order. Determines `@layer` priority and display order.
@@ -87,19 +86,20 @@ fn isReservedDir(name: []const u8) bool {
 /// `style_ctx` provides the rendering context for front-matter preprocessing.
 pub fn loadStylePatterns(
     a: Allocator,
+    io: std.Io,
     style_name: []const u8,
-    style_dir: fs.Dir,
+    style_dir: std.Io.Dir,
     style_ctx: *const toupee.Context,
 ) !LoadResult {
     // Always duplicate with `{ .iterate = true }` so top-level enumeration works even
     // when callers hand us a `Dir` opened without iterate (e.g. `testing.tmpDir` on Linux).
-    var root = try style_dir.openDir(".", .{ .iterate = true });
-    defer root.close();
+    var root = try std.Io.Dir.openDir(style_dir, io, ".", .{ .iterate = true });
+    defer root.close(io);
 
-    var categories = std.ArrayListUnmanaged(CategoryGroup){};
-    var all_patterns = std.ArrayListUnmanaged(Pattern){};
+    var categories = std.ArrayListUnmanaged(CategoryGroup).empty;
+    var all_patterns = std.ArrayListUnmanaged(Pattern).empty;
 
-    var patterns_dir = root.openDir("patterns", .{ .iterate = true }) catch |err| switch (err) {
+    var patterns_dir = std.Io.Dir.openDir(root, io, "patterns", .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return .{
             .categories = &.{},
             .all = &.{},
@@ -108,21 +108,21 @@ pub fn loadStylePatterns(
         },
         else => return err,
     };
-    defer patterns_dir.close();
+    defer patterns_dir.close(io);
 
     // Build a slug set for pattern-matching resources later.
     var slug_set = std.StringArrayHashMapUnmanaged(void){};
 
     for (CUBE_CATEGORIES) |category| {
-        var cat_dir = patterns_dir.openDir(category, .{ .iterate = true }) catch |err| switch (err) {
+        var cat_dir = std.Io.Dir.openDir(patterns_dir, io, category, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound, error.NotDir => continue,
             else => return err,
         };
-        defer cat_dir.close();
+        defer cat_dir.close(io);
 
-        var names = std.ArrayListUnmanaged([]const u8){};
+        var names = std.ArrayListUnmanaged([]const u8).empty;
         var it = cat_dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ".html")) continue;
             try names.append(a, try a.dupe(u8, entry.name));
@@ -135,16 +135,16 @@ pub fn loadStylePatterns(
 
         if (names.items.len == 0) continue;
 
-        var cat_patterns = std.ArrayListUnmanaged(Pattern){};
+        var cat_patterns = std.ArrayListUnmanaged(Pattern).empty;
         for (names.items) |filename| {
             const id = filename[0 .. filename.len - ".html".len];
             const rel_path = try std.fmt.allocPrint(a, "patterns/{s}/{s}", .{ category, filename });
 
-            const source = try root.readFileAlloc(a, rel_path, 4 * 1024 * 1024);
+            const source = try std.Io.Dir.readFileAlloc(root, io, rel_path, a, .limited(4 * 1024 * 1024));
             const parsed = try pattern_parser.parsePatternFile(a, source);
 
-            const template_source = readRawResourceFile(a, root, "templates", category, id);
-            const file_paths = discoverFiles(a, root, category, id);
+            const template_source = readRawResourceFile(a, io, root, "templates", category, id);
+            const file_paths = discoverFiles(a, io, root, category, id);
             const slug = try std.fmt.allocPrint(a, "{s}/{s}", .{ category, id });
             try slug_set.put(a, slug, {});
 
@@ -172,12 +172,12 @@ pub fn loadStylePatterns(
     }
 
     // Discover generic resource directories (non-reserved subdirectories).
-    var standalone = std.ArrayListUnmanaged(StandaloneResource){};
-    var cmd_paths = std.ArrayListUnmanaged([]const u8){};
-    var resource_dirs = std.ArrayListUnmanaged([]const u8){};
+    var standalone = std.ArrayListUnmanaged(StandaloneResource).empty;
+    var cmd_paths = std.ArrayListUnmanaged([]const u8).empty;
+    var resource_dirs = std.ArrayListUnmanaged([]const u8).empty;
     {
         var top_it = root.iterate();
-        while (try top_it.next()) |entry| {
+        while (try top_it.next(io)) |entry| {
             if (entry.kind != .directory) continue;
             if (isReservedDir(entry.name)) continue;
             try resource_dirs.append(a, try a.dupe(u8, entry.name));
@@ -190,17 +190,17 @@ pub fn loadStylePatterns(
     }.cmp);
 
     for (resource_dirs.items) |res_type| {
-        var res_dir = root.openDir(res_type, .{ .iterate = true }) catch continue;
-        defer res_dir.close();
+        var res_dir = std.Io.Dir.openDir(root, io, res_type, .{ .iterate = true }) catch continue;
+        defer res_dir.close(io);
 
-        try discoverResourcesRecursive(a, root, res_type, res_dir, "", &slug_set, all_patterns.items, style_ctx, &standalone, &cmd_paths);
+        try discoverResourcesRecursive(a, io, root, res_type, res_dir, "", &slug_set, all_patterns.items, style_ctx, &standalone, &cmd_paths);
     }
 
     // Re-dupe patterns since we mutated resources maps on the items.
     const final_all = try a.dupe(Pattern, all_patterns.items);
-    var final_categories = std.ArrayListUnmanaged(CategoryGroup){};
+    var final_categories = std.ArrayListUnmanaged(CategoryGroup).empty;
     for (categories.items) |group| {
-        var updated = std.ArrayListUnmanaged(Pattern){};
+        var updated = std.ArrayListUnmanaged(Pattern).empty;
         for (group.patterns) |gp| {
             for (final_all) |*fp| {
                 if (std.mem.eql(u8, fp.slug, gp.slug)) {
@@ -228,9 +228,10 @@ pub fn loadStylePatterns(
 /// map. Standalone resources are collected separately.
 fn discoverResourcesRecursive(
     a: Allocator,
-    style_dir: fs.Dir,
+    io: std.Io,
+    style_dir: std.Io.Dir,
     res_type: []const u8,
-    dir: fs.Dir,
+    dir: std.Io.Dir,
     prefix: []const u8,
     slug_set: *const std.StringArrayHashMapUnmanaged(void),
     patterns: []Pattern,
@@ -239,7 +240,7 @@ fn discoverResourcesRecursive(
     cmd_paths: *std.ArrayListUnmanaged([]const u8),
 ) !void {
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         switch (entry.kind) {
             .file => {
                 const name = try a.dupe(u8, entry.name);
@@ -258,7 +259,7 @@ fn discoverResourcesRecursive(
                 const full_path = try std.fmt.allocPrint(a, "{s}/{s}", .{ res_type, rel_in_type });
 
                 if (std.mem.eql(u8, res_type, "css")) {
-                    const css_loaded = loadCssStylesheet(a, style_dir, full_path) orelse continue;
+                    const css_loaded = loadCssStylesheet(a, io, style_dir, full_path) orelse continue;
                     if (isCommandSentinel(css_loaded.body)) {
                         try cmd_paths.append(a, full_path);
                         continue;
@@ -285,7 +286,7 @@ fn discoverResourcesRecursive(
                     continue;
                 }
 
-                const content = readResourceFileGeneric(a, style_dir, full_path, style_ctx) orelse continue;
+                const content = readResourceFileGeneric(a, io, style_dir, full_path, style_ctx) orelse continue;
                 if (isCommandSentinel(content)) {
                     try cmd_paths.append(a, full_path);
                     continue;
@@ -316,9 +317,9 @@ fn discoverResourcesRecursive(
                 else
                     try a.dupe(u8, entry.name);
 
-                var sub_dir = dir.openDir(entry.name, .{ .iterate = true }) catch continue;
-                defer sub_dir.close();
-                try discoverResourcesRecursive(a, style_dir, res_type, sub_dir, sub_prefix, slug_set, patterns, style_ctx, standalone, cmd_paths);
+                var sub_dir = std.Io.Dir.openDir(dir, io, entry.name, .{ .iterate = true }) catch continue;
+                defer sub_dir.close(io);
+                try discoverResourcesRecursive(a, io, style_dir, res_type, sub_dir, sub_prefix, slug_set, patterns, style_ctx, standalone, cmd_paths);
             },
             else => {},
         }
@@ -330,13 +331,14 @@ fn discoverResourcesRecursive(
 /// Returns `"command"` sentinel body when deferred `command:` is present.
 fn loadCssStylesheet(
     a: Allocator,
-    style_dir: fs.Dir,
+    io: std.Io,
+    style_dir: std.Io.Dir,
     rel_path: []const u8,
 ) ?struct {
     body: []const u8,
     stylesheet_fm_overlay: toupee.Value,
 } {
-    const source = style_dir.readFileAlloc(a, rel_path, 4 * 1024 * 1024) catch return null;
+    const source = std.Io.Dir.readFileAlloc(style_dir, io, rel_path, a, .limited(4 * 1024 * 1024)) catch return null;
 
     var fm_result = frontmatter.parse(a, source) catch {
         return .{ .body = source, .stylesheet_fm_overlay = .nil };
@@ -363,11 +365,12 @@ fn loadCssStylesheet(
 /// returns an error (deferred feature). Returns null if the file doesn't exist.
 fn readResourceFileGeneric(
     a: Allocator,
-    style_dir: fs.Dir,
+    io: std.Io,
+    style_dir: std.Io.Dir,
     rel_path: []const u8,
     style_ctx: *const toupee.Context,
 ) ?[]const u8 {
-    const source = style_dir.readFileAlloc(a, rel_path, 4 * 1024 * 1024) catch return null;
+    const source = std.Io.Dir.readFileAlloc(style_dir, io, rel_path, a, .limited(4 * 1024 * 1024)) catch return null;
 
     var fm_result = frontmatter.parse(a, source) catch return source;
     if (fm_result) |*fm| {
@@ -409,36 +412,37 @@ pub fn isCommandSentinel(content: []const u8) bool {
 /// Reads a raw resource file without rendering. Returns null if the file doesn't exist.
 fn readRawResourceFile(
     a: Allocator,
-    style_dir: fs.Dir,
+    io: std.Io,
+    style_dir: std.Io.Dir,
     resource_type: []const u8,
     category: []const u8,
     id: []const u8,
 ) ?[]const u8 {
     const ext: []const u8 = if (std.mem.eql(u8, resource_type, "js")) ".js" else ".html";
     const rel_path = std.fmt.allocPrint(a, "{s}/{s}/{s}{s}", .{ resource_type, category, id, ext }) catch return null;
-    return style_dir.readFileAlloc(a, rel_path, 4 * 1024 * 1024) catch return null;
+    return std.Io.Dir.readFileAlloc(style_dir, io, rel_path, a, .limited(4 * 1024 * 1024)) catch return null;
 }
 
 /// Discovers files at `files/{category}/{id}/` and returns web paths.
 fn discoverFiles(
     a: Allocator,
-    style_dir: fs.Dir,
+    io: std.Io,
+    style_dir: std.Io.Dir,
     category: []const u8,
     id: []const u8,
 ) []const []const u8 {
     const dir_path = std.fmt.allocPrint(a, "files/{s}/{s}", .{ category, id }) catch return &.{};
 
-    var asset_dir = style_dir.openDir(dir_path, .{ .iterate = true }) catch return &.{};
-    defer asset_dir.close();
+    var asset_dir = std.Io.Dir.openDir(style_dir, io, dir_path, .{ .iterate = true }) catch return &.{};
+    defer asset_dir.close(io);
 
-    var paths = std.ArrayListUnmanaged([]const u8){};
+    var paths = std.ArrayListUnmanaged([]const u8).empty;
     var it = asset_dir.iterate();
-    while (it.next()) |entry_opt| {
-        const entry = entry_opt orelse break;
+    while (it.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
         const full = std.fmt.allocPrint(a, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
         paths.append(a, full) catch continue;
-    } else |_| {}
+    }
 
     std.mem.sort([]const u8, paths.items, {}, struct {
         fn cmp(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -466,7 +470,7 @@ pub fn buildPatternContext(
 
     for (result.categories) |group| {
         var cat_map = ValueMap{};
-        var items = std.ArrayListUnmanaged(toupee.Value){};
+        var items = std.ArrayListUnmanaged(toupee.Value).empty;
 
         for (group.patterns) |pattern| {
             const pat_val = try patternToValue(a, pattern, example_overrides);
@@ -478,7 +482,7 @@ pub fn buildPatternContext(
         try root.put(a, group.name, .{ .map = cat_map });
     }
 
-    var all_items = std.ArrayListUnmanaged(toupee.Value){};
+    var all_items = std.ArrayListUnmanaged(toupee.Value).empty;
     for (result.all) |pattern| {
         try all_items.append(a, try patternToValue(a, pattern, example_overrides));
     }
@@ -510,7 +514,7 @@ fn patternToValue(
         }
     }
 
-    var variant_list = std.ArrayListUnmanaged(toupee.Value){};
+    var variant_list = std.ArrayListUnmanaged(toupee.Value).empty;
     for (pattern.variants) |v| {
         var v_map = ValueMap{};
         try v_map.put(a, "name", .{ .string = v.name });
@@ -526,7 +530,7 @@ fn patternToValue(
     if (pattern.template_source) |tmpl| try map.put(a, "template_source", .{ .string = tmpl });
 
     if (pattern.file_paths.len > 0) {
-        var file_list = std.ArrayListUnmanaged(toupee.Value){};
+        var file_list = std.ArrayListUnmanaged(toupee.Value).empty;
         for (pattern.file_paths) |rel_path| {
             const web_path = try std.fmt.allocPrint(a, "/assets/styles/{s}/{s}", .{
                 pattern.source_style, rel_path[("files/".len)..],
@@ -543,13 +547,13 @@ fn patternToValue(
 
 const testing = std.testing;
 
-fn createFile(dir: fs.Dir, path: []const u8, content: []const u8) !void {
+fn createFile(dir: std.Io.Dir, io: std.Io, path: []const u8, content: []const u8) !void {
     if (std.mem.lastIndexOfScalar(u8, path, '/')) |sep| {
-        dir.makePath(path[0..sep]) catch {};
+        std.Io.Dir.createDirPath(dir, io, path[0..sep]) catch {};
     }
-    var f = try dir.createFile(path, .{});
-    defer f.close();
-    try f.writeAll(content);
+    var f = try std.Io.Dir.createFile(dir, io, path, .{});
+    defer f.close(io);
+    try f.writeStreamingAll(io, content);
 }
 
 test "loadStylePatterns: empty patterns directory" {
@@ -560,10 +564,11 @@ test "loadStylePatterns: empty patterns directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("patterns");
+    const io = std.testing.io;
+    try std.Io.Dir.createDirPath(tmp.dir, io, "patterns");
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 0), result.categories.len);
     try testing.expectEqual(@as(usize, 0), result.all.len);
@@ -576,9 +581,10 @@ test "loadStylePatterns: no patterns directory" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 0), result.categories.len);
     try testing.expectEqual(@as(usize, 0), result.all.len);
@@ -591,20 +597,21 @@ test "loadStylePatterns: single pattern with CSS" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         \\---
         \\name: Button
         \\description: A clickable button
         \\---
         \\<button class="button">Click me</button>
     );
-    try createFile(tmp.dir, "css/blocks/button.css",
+    try createFile(tmp.dir, io, "css/blocks/button.css",
         \\.button { display: inline-flex; }
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 1), result.categories.len);
     try testing.expectEqualStrings("blocks", result.categories[0].name);
@@ -628,19 +635,20 @@ test "loadStylePatterns: front-matter-only pattern" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/resets/reset.html",
+    try createFile(tmp.dir, io, "patterns/resets/reset.html",
         \\---
         \\name: Reset
         \\description: CSS reset
         \\---
     );
-    try createFile(tmp.dir, "css/resets/reset.css",
+    try createFile(tmp.dir, io, "css/resets/reset.css",
         \\* { margin: 0; }
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 1), result.categories.len);
     try testing.expectEqualStrings("resets", result.categories[0].name);
@@ -656,8 +664,9 @@ test "loadStylePatterns: pattern with variants" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         \\---
         \\name: Button
         \\---
@@ -668,7 +677,7 @@ test "loadStylePatterns: pattern with variants" {
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     const p = result.all[0];
     try testing.expectEqual(@as(usize, 1), p.variants.len);
@@ -682,19 +691,20 @@ test "loadStylePatterns: CUBE category ordering" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         "---\nname: Button\n---\n<button>B</button>"
     );
-    try createFile(tmp.dir, "patterns/resets/reset.html",
+    try createFile(tmp.dir, io, "patterns/resets/reset.html",
         "---\nname: Reset\n---"
     );
-    try createFile(tmp.dir, "patterns/compositions/stack.html",
+    try createFile(tmp.dir, io, "patterns/compositions/stack.html",
         "---\nname: Stack\n---\n<div>S</div>"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 3), result.categories.len);
     try testing.expectEqualStrings("resets", result.categories[0].name);
@@ -714,19 +724,20 @@ test "loadStylePatterns: alphabetical within category" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/tag.html",
+    try createFile(tmp.dir, io, "patterns/blocks/tag.html",
         "---\nname: Tag\n---\n<span>T</span>"
     );
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         "---\nname: Button\n---\n<button>B</button>"
     );
-    try createFile(tmp.dir, "patterns/blocks/card.html",
+    try createFile(tmp.dir, io, "patterns/blocks/card.html",
         "---\nname: Card\n---\n<div>C</div>"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqual(@as(usize, 3), result.categories[0].patterns.len);
     try testing.expectEqualStrings("button", result.categories[0].patterns[0].id);
@@ -741,13 +752,14 @@ test "loadStylePatterns: missing resources are null" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/minimal.html",
+    try createFile(tmp.dir, io, "patterns/blocks/minimal.html",
         "---\nname: Minimal\n---\n<div>M</div>"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     const p = result.all[0];
     try testing.expectEqual(@as(usize, 0), p.resources.count());
@@ -762,16 +774,17 @@ test "loadStylePatterns: template source read raw" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         "---\nname: Button\n---\n<button>B</button>"
     );
-    try createFile(tmp.dir, "templates/blocks/button.html",
+    try createFile(tmp.dir, io, "templates/blocks/button.html",
         "<button class=\"button\"><t-slot /></button>"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     const p = result.all[0];
     try testing.expect(p.template_source != null);
@@ -785,16 +798,17 @@ test "loadStylePatterns: CSS with front-matter is stored raw for per-consumer bu
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/tokens/colors.html",
+    try createFile(tmp.dir, io, "patterns/tokens/colors.html",
         "---\nname: Colors\n---"
     );
-    try createFile(tmp.dir, "css/tokens/colors.css",
+    try createFile(tmp.dir, io, "css/tokens/colors.css",
         "---\ncolor: red\n---\n:root { --accent: <t-raw name=\"color\" />; }"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     const p = result.all[0];
     try testing.expect(p.resources.get("css") != null);
@@ -808,16 +822,17 @@ test "loadStylePatterns: CSS without front-matter passed through" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/tag.html",
+    try createFile(tmp.dir, io, "patterns/blocks/tag.html",
         "---\nname: Tag\n---\n<span>T</span>"
     );
-    try createFile(tmp.dir, "css/blocks/tag.css",
+    try createFile(tmp.dir, io, "css/blocks/tag.css",
         ".tag { display: inline-block; }"
     );
 
     var ctx = toupee.Context.init(a);
-    const result = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const result = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
 
     try testing.expectEqualStrings(".tag { display: inline-block; }", result.all[0].resources.get("css").?.content);
 }
@@ -829,16 +844,17 @@ test "buildPatternContext: creates correct tree structure" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try createFile(tmp.dir, "patterns/blocks/button.html",
+    try createFile(tmp.dir, io, "patterns/blocks/button.html",
         "---\nname: Button\ndescription: A button\n---\n<button>B</button>\n\n<!-- variant: primary -->\n<button data-variant=\"primary\">P</button>"
     );
-    try createFile(tmp.dir, "css/blocks/button.css",
+    try createFile(tmp.dir, io, "css/blocks/button.css",
         ".button { display: flex; }"
     );
 
     var ctx = toupee.Context.init(a);
-    const load = try loadStylePatterns(a, "test", tmp.dir, &ctx);
+    const load = try loadStylePatterns(a, io, "test", tmp.dir, &ctx);
     var no_overrides = std.StringArrayHashMapUnmanaged([]const u8){};
     const tree = try buildPatternContext(a, load, &no_overrides);
 

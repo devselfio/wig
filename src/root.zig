@@ -4,7 +4,6 @@ pub const comb = @import("comb");
 pub const zjot = @import("zjot");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 pub const config = @import("config.zig");
 pub const context = @import("context.zig");
@@ -69,6 +68,7 @@ const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
 fn buildPhase_styleTokensSiteData(
     ba: Allocator,
+    io: std.Io,
     abs_root: []const u8,
     site_cfg: *const config.SiteConfig,
     style_cfgs: []config.StyleConfig,
@@ -100,7 +100,7 @@ fn buildPhase_styleTokensSiteData(
 
         // Load style-scoped data directory (styles/{name}/data/) into the style namespace.
         const style_data_path = try std.fs.path.join(ba, &.{ abs_root, "styles", style_cfg.name, "data" });
-        var style_data = try config.loadDataDir(ba, style_data_path);
+        var style_data = try config.loadDataDir(ba, io, style_data_path);
         var sd_it = style_data.iterator();
         while (sd_it.next()) |sd_entry| {
             const ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.{s}", .{ style_cfg.name, sd_entry.key_ptr.* });
@@ -154,7 +154,7 @@ fn ensureHighlightsPairDefaultSources(a: Allocator, style_map: *ValueMap) !void 
     else
         "highlights";
 
-    var keys = std.ArrayListUnmanaged([]const u8){};
+    var keys = std.ArrayListUnmanaged([]const u8).empty;
     defer keys.deinit(a);
 
     var scan_it = avail_ptr.map.iterator();
@@ -197,7 +197,7 @@ fn synthesizeItemsLists(a: Allocator, parent: *ValueMap) !void {
         }
         if (!all_maps or inner.count() == 0) continue;
 
-        var items = std.ArrayListUnmanaged(toupee.Value){};
+        var items = std.ArrayListUnmanaged(toupee.Value).empty;
         var stem_it = inner.iterator();
         while (stem_it.next()) |stem_entry| {
             var item_map = try cloneValueMap(a, stem_entry.value_ptr.*.map);
@@ -224,20 +224,22 @@ const PatternsResult = struct {
 
 fn buildPhase_patternsAndBundle(
     ba: Allocator,
+    io: std.Io,
     abs_root: []const u8,
     style_cfgs: []config.StyleConfig,
     style_ctx: *const toupee.Context,
-    output_dir: fs.Dir,
+    output_dir: std.Io.Dir,
     diags: *diagnostics_mod.Collector,
 ) !PatternsResult {
-    const styles_path = try fs.path.join(ba, &.{ abs_root, "styles" });
+    const styles_path = try std.fs.path.join(ba, &.{ abs_root, "styles" });
 
-    var styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch
+    var styles_dir = std.Io.Dir.openDirAbsolute(io, styles_path, .{ .iterate = true }) catch
         return .{ .resolved = &.{}, .bundle_paths = .{} };
-    defer styles_dir.close();
+    defer styles_dir.close(io);
 
     const resolved = try import_resolver.resolveAllStyles(
         ba,
+        io,
         style_cfgs,
         styles_dir,
         style_ctx,
@@ -251,7 +253,7 @@ fn buildPhase_patternsAndBundle(
 
     var bundle_paths = std.StringArrayHashMapUnmanaged(?[]const u8){};
     for (resolved) |rs| {
-        const bundle = try auto_bundler.generateBundle(ba, rs.name, rs.result, output_dir, style_ctx);
+        const bundle = try auto_bundler.generateBundle(ba, io, rs.name, rs.result, output_dir, style_ctx);
         try bundle_paths.put(ba, rs.name, if (bundle) |b| b.path else null);
     }
 
@@ -291,6 +293,7 @@ fn renderPatternExamples(
 
 fn buildPhase_patternContext(
     ba: Allocator,
+    io: std.Io,
     abs_root: []const u8,
     patterns_result: PatternsResult,
     example_overrides: *const std.StringArrayHashMapUnmanaged([]const u8),
@@ -310,11 +313,11 @@ fn buildPhase_patternContext(
         }
 
         // Build style file tree at styles.{name}.files
-        const files_dir_path = try fs.path.join(ba, &.{ abs_root, "styles", rs.name, "files" });
-        var files_dir = fs.openDirAbsolute(files_dir_path, .{ .iterate = true }) catch continue;
-        defer files_dir.close();
+        const files_dir_path = try std.fs.path.join(ba, &.{ abs_root, "styles", rs.name, "files" });
+        var files_dir = std.Io.Dir.openDirAbsolute(io, files_dir_path, .{ .iterate = true }) catch continue;
+        defer files_dir.close(io);
 
-        const file_tree = try buildStyleFileTree(ba, files_dir, rs.name, "", diags);
+        const file_tree = try buildStyleFileTree(ba, io, files_dir, rs.name, "", diags);
         const files_ctx_key = try std.fmt.allocPrint(ba, "styles.{s}.files", .{rs.name});
         try style_ctx.putAt(files_ctx_key, file_tree);
     }
@@ -326,17 +329,18 @@ fn buildPhase_patternContext(
 /// Stem collisions (two files with same stem, different extensions) are errors.
 fn buildStyleFileTree(
     a: Allocator,
-    dir: fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     style_name: []const u8,
     prefix: []const u8,
     diags: *diagnostics_mod.Collector,
 ) !toupee.Value {
     var map = ValueMap{};
-    var items = std.ArrayListUnmanaged(toupee.Value){};
+    var items = std.ArrayListUnmanaged(toupee.Value).empty;
     var stem_exts = std.StringArrayHashMapUnmanaged([]const u8){};
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         switch (entry.kind) {
             .file => {
                 const name = try a.dupe(u8, entry.name);
@@ -370,9 +374,9 @@ fn buildStyleFileTree(
                 else
                     dir_name;
 
-                var sub_dir = dir.openDir(dir_name, .{ .iterate = true }) catch continue;
-                defer sub_dir.close();
-                const sub_tree = try buildStyleFileTree(a, sub_dir, style_name, sub_prefix, diags);
+                var sub_dir = std.Io.Dir.openDir(dir, io, dir_name, .{ .iterate = true }) catch continue;
+                defer sub_dir.close(io);
+                const sub_tree = try buildStyleFileTree(a, io, sub_dir, style_name, sub_prefix, diags);
                 try map.put(a, dir_name, sub_tree);
             },
             else => {},
@@ -402,27 +406,29 @@ fn buildStyleFileTree(
 fn buildPhase_scanAndTaxonomies(
     ba: Allocator,
     a: Allocator,
+    io: std.Io,
     abs_root: []const u8,
     site_cfg: *const config.SiteConfig,
     site: *Site,
     style_ctx: *toupee.Context,
     data_result: *const config.DataResult,
 ) !scanner.ScanResult {
-    const pages_path = try fs.path.join(a, &.{ abs_root, "pages" });
+    const pages_path = try std.fs.path.join(a, &.{ abs_root, "pages" });
     defer a.free(pages_path);
 
-    var registered_exts: std.ArrayListUnmanaged([]const u8) = .{};
+    var registered_exts: std.ArrayListUnmanaged([]const u8) = .empty;
     defer registered_exts.deinit(a);
     for (site.options.content_parsers) |p| try registered_exts.append(a, p.extension);
 
-    var pages_dir = fs.openDirAbsolute(pages_path, .{ .iterate = true }) catch
+    var pages_dir = std.Io.Dir.openDirAbsolute(io, pages_path, .{ .iterate = true }) catch
         return error.BuildFailed;
-    defer pages_dir.close();
+    defer pages_dir.close(io);
 
     const default_slugify = extractDefaultSlugify(data_result);
 
     var scan_result = try scanner.scanWithOptions(
         ba,
+        io,
         pages_dir,
         site_cfg.url,
         site.options.draft,
@@ -445,16 +451,17 @@ const buildPhase_loadTemplates = template_loader.loadTemplates;
 
 fn buildPhase_generatedArtifacts(
     ba: Allocator,
+    io: std.Io,
     site_cfg: config.SiteConfig,
     style_cfgs: []config.StyleConfig,
     scan_result: *const scanner.ScanResult,
     engine: *toupee.Engine,
     style_ctx: *toupee.Context,
     template_map: *const std.StringArrayHashMapUnmanaged([]const u8),
-    output_dir: fs.Dir,
+    output_dir: std.Io.Dir,
     render_results: []const pages.RenderResult,
 ) !void {
-    var search_entries = std.ArrayListUnmanaged(search.SearchEntry){};
+    var search_entries = std.ArrayListUnmanaged(search.SearchEntry).empty;
     for (scan_result.pages, render_results) |*page, result| {
         if (page.meta.draft) continue;
         if (!page.meta.search) continue;
@@ -464,7 +471,7 @@ fn buildPhase_generatedArtifacts(
         const content_plain: []const u8 = if (title.len > 0 and trimmed.len > title.len and std.mem.startsWith(u8, trimmed, title)) cp: {
             const after = trimmed[title.len..];
             if (after.len > 0 and after[0] != ' ' and after[0] != '\t' and after[0] != '\n' and after[0] != '\r') {
-                const rest = std.mem.trimLeft(u8, after, " \t\n\r");
+                const rest = std.mem.trimStart(u8, after, " \t\n\r");
                 break :cp try std.fmt.allocPrint(ba, "{s}\n{s}", .{ title, rest });
             }
             break :cp try ba.dupe(u8, trimmed);
@@ -489,7 +496,7 @@ fn buildPhase_generatedArtifacts(
             return std.mem.order(u8, lhs.url, rhs.url) == .lt;
         }
     }.lessThan);
-    try search.generateSearchJson(ba, entries_slice, output_dir);
+    try search.generateSearchJson(ba, entries_slice, io, output_dir);
 
     var rendered_map = std.StringArrayHashMapUnmanaged([]const u8){};
     for (scan_result.pages, render_results) |*page, result| {
@@ -498,10 +505,10 @@ fn buildPhase_generatedArtifacts(
     }
 
     for (site_cfg.feeds) |feed_cfg| {
-        try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, output_dir, rendered_map);
+        try feeds.generateAtom(ba, feed_cfg, scan_result.pages, site_cfg.url, site_cfg.title, site_cfg.author, io, output_dir, rendered_map);
     }
 
-    try feeds.generateSitemap(ba, scan_result.pages, output_dir);
+    try feeds.generateSitemap(ba, scan_result.pages, io, output_dir);
 
     try tag_pages.render(
         ba,
@@ -511,6 +518,7 @@ fn buildPhase_generatedArtifacts(
         engine,
         style_ctx,
         template_map,
+        io,
         output_dir,
     );
 }
@@ -561,20 +569,22 @@ pub const CheckOptions = struct {
 /// `buildAll()`.
 pub const Site = struct {
     allocator: Allocator,
+    io: std.Io,
     options: SiteOptions,
-    root_dir: fs.Dir,
+    root_dir: std.Io.Dir,
     site_config: ?config.SiteConfig = null,
     style_configs: ?[]config.StyleConfig = null,
     data_result: ?config.DataResult = null,
     engine: ?toupee.Engine = null,
     build_arena: ?std.heap.ArenaAllocator = null,
 
-    pub fn init(a: Allocator, options: SiteOptions) !Site {
-        const root_dir = fs.cwd().openDir(options.root, .{ .iterate = true }) catch
+    pub fn init(a: Allocator, io: std.Io, options: SiteOptions) !Site {
+        const root_dir = std.Io.Dir.openDir(std.Io.Dir.cwd(), io, options.root, .{ .iterate = true }) catch
             return error.MissingConfig;
 
         return .{
             .allocator = a,
+            .io = io,
             .options = options,
             .root_dir = root_dir,
         };
@@ -589,23 +599,25 @@ pub const Site = struct {
             self.allocator.free(cfgs);
         }
         if (self.site_config) |*c| c.deinit();
-        self.root_dir.close();
+        self.root_dir.close(self.io);
     }
 
     /// Opens the built site output directory (`zig-out/site` under the project root).
     /// Call after a successful `buildAll()`. Caller must `close()` the returned handle.
-    pub fn openBuiltOutputDir(self: *Site) !fs.Dir {
+    pub fn openBuiltOutputDir(self: *Site) !std.Io.Dir {
         const a = self.allocator;
-        const abs_root = try self.root_dir.realpathAlloc(a, ".");
+        const io = self.io;
+        const abs_root = try std.Io.Dir.realPathFileAlloc(self.root_dir, io, ".", a);
         defer a.free(abs_root);
         const site_path = try output_paths.joinSiteOutputDirAbs(a, abs_root);
         defer a.free(site_path);
-        return try fs.openDirAbsolute(site_path, .{});
+        return try std.Io.Dir.openDirAbsolute(io, site_path, .{});
     }
 
     pub fn buildAll(self: *Site, options: BuildOptions) !BuildResult {
         const a = self.allocator;
-        const abs_root = try self.root_dir.realpathAlloc(a, ".");
+        const io = self.io;
+        const abs_root = try std.Io.Dir.realPathFileAlloc(self.root_dir, io, ".", a);
         defer a.free(abs_root);
 
         if (self.build_arena) |*ba| ba.deinit();
@@ -616,33 +628,33 @@ pub const Site = struct {
         var diags = diagnostics_mod.Collector{};
 
         // --- Phase: load config ---
-        var site_cfg = try config.loadSiteConfig(a, abs_root);
+        var site_cfg = try config.loadSiteConfig(a, io, abs_root);
         errdefer site_cfg.deinit();
 
-        const style_cfgs = try config.loadStyleConfigs(a, abs_root);
-        var data_result = try config.loadDataFiles(a, abs_root);
+        const style_cfgs = try config.loadStyleConfigs(a, io, abs_root);
+        var data_result = try config.loadDataFiles(a, io, abs_root);
         errdefer data_result.deinit();
 
         // --- Phase: ensure output tree ---
-        var output_dir = try output_paths.prepareSiteOutput(a, abs_root, options.clean);
-        defer output_dir.close();
+        var output_dir = try output_paths.prepareSiteOutput(a, io, abs_root, options.clean);
+        defer output_dir.close(io);
 
         // --- Phase: style context, tokens, site + data YAML ---
-        var style_ctx = try buildPhase_styleTokensSiteData(ba, abs_root, &site_cfg, style_cfgs, &data_result);
+        var style_ctx = try buildPhase_styleTokensSiteData(ba, io, abs_root, &site_cfg, style_cfgs, &data_result);
 
         // --- Phase: pattern loading, import resolution, @layer auto-bundling ---
-        const patterns_result = try buildPhase_patternsAndBundle(ba, abs_root, style_cfgs, &style_ctx, output_dir, &diags);
+        const patterns_result = try buildPhase_patternsAndBundle(ba, io, abs_root, style_cfgs, &style_ctx, output_dir, &diags);
 
         // --- Phase: Toupee engine + template map (main allocator) ---
         var engine = try toupee.Engine.init(a);
         var template_map = std.StringArrayHashMapUnmanaged([]const u8){};
-        try buildPhase_loadTemplates(ba, a, abs_root, style_cfgs, &engine, &template_map);
+        try buildPhase_loadTemplates(ba, io, a, abs_root, style_cfgs, &engine, &template_map);
 
         // --- Phase: render pattern examples through Toupee ---
         var example_overrides = try renderPatternExamples(ba, patterns_result, &template_map, &style_ctx);
 
         // --- Phase: build pattern context + style file tree ---
-        try buildPhase_patternContext(ba, abs_root, patterns_result, &example_overrides, &style_ctx, &diags);
+        try buildPhase_patternContext(ba, io, abs_root, patterns_result, &example_overrides, &style_ctx, &diags);
 
         var transform_reg = toupee.transform.Registry{};
         try transform_reg.registerBuiltins(ba);
@@ -667,7 +679,7 @@ pub const Site = struct {
         for (ctx.hooks.pre_scan) |hook| try hook(&ctx);
 
         // --- Phase: scan pages, tags, `pages` context ---
-        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, abs_root, &site_cfg, self, &style_ctx, &data_result);
+        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, io, abs_root, &site_cfg, self, &style_ctx, &data_result);
         ctx.scan_result = &scan_result;
 
         // --- Hook: post_scan ---
@@ -685,6 +697,7 @@ pub const Site = struct {
             &template_map,
             self.options.content_parsers,
             &transform_reg,
+            io,
             output_dir,
             &diags,
         );
@@ -695,6 +708,7 @@ pub const Site = struct {
         // --- Phase: search, feeds, sitemap, tag pages ---
         try buildPhase_generatedArtifacts(
             ba,
+            io,
             site_cfg,
             style_cfgs,
             &scan_result,
@@ -706,10 +720,10 @@ pub const Site = struct {
         );
 
         // --- Phase: copy static files ---
-        try checkSiteStyleCollision(self.root_dir, &diags, ba);
-        try copyFiles(a, self.root_dir, output_dir);
-        try copyStyleFiles(a, self.root_dir, output_dir, style_cfgs);
-        try writeStyleResources(a, patterns_result, output_dir);
+        try checkSiteStyleCollision(io, self.root_dir, &diags, ba);
+        try copyFiles(a, io, self.root_dir, output_dir);
+        try copyStyleFiles(a, io, self.root_dir, output_dir, style_cfgs);
+        try writeStyleResources(a, io, patterns_result, output_dir);
 
         // --- Phase: link checking ---
         {
@@ -717,7 +731,7 @@ pub const Site = struct {
             for (scan_result.pages) |page| {
                 try source_map.put(ba, page.output_file, page.source_path);
             }
-            const link_issues = try link_checker.checkSite(ba, output_dir, source_map);
+            const link_issues = try link_checker.checkSite(ba, io, output_dir, source_map);
             for (link_issues) |issue| {
                 const kind_str: []const u8 = switch (issue.kind) {
                     .broken_path => "broken link",
@@ -767,13 +781,14 @@ pub const Site = struct {
     pub fn check(self: *Site, options: CheckOptions) ![]const Diagnostic {
         const a = self.allocator;
 
-        var diags: std.ArrayListUnmanaged(Diagnostic) = .{};
+        var diags: std.ArrayListUnmanaged(Diagnostic) = .empty;
 
-        const abs_root = self.root_dir.realpathAlloc(a, ".") catch
+        const io = self.io;
+        const abs_root = std.Io.Dir.realPathFileAlloc(self.root_dir, io, ".", a) catch
             return error.MissingConfig;
         defer a.free(abs_root);
 
-        var site_cfg = config.loadSiteConfig(a, abs_root) catch |err| {
+        var site_cfg = config.loadSiteConfig(a, io, abs_root) catch |err| {
             try diags.append(a, .{ .kind = .err, .message = switch (err) {
                 error.MissingConfig => "Missing site config: create data/site.yaml",
                 error.DualConfig => "Found both site.yaml and site.json -- use exactly one",
@@ -784,7 +799,7 @@ pub const Site = struct {
         };
         defer site_cfg.deinit();
 
-        const style_cfgs = config.loadStyleConfigs(a, abs_root) catch {
+        const style_cfgs = config.loadStyleConfigs(a, io, abs_root) catch {
             try diags.append(a, .{ .kind = .warning, .message = "Could not scan styles directory" });
             return try diags.toOwnedSlice(a);
         };
@@ -804,7 +819,7 @@ pub const Site = struct {
         defer engine.deinit();
 
         var validate_template_map: std.StringArrayHashMapUnmanaged([]const u8) = .{};
-        template_loader.loadTemplates(a, a, abs_root, style_cfgs, &engine, &validate_template_map) catch {
+        template_loader.loadTemplates(a, io, a, abs_root, style_cfgs, &engine, &validate_template_map) catch {
             try diags.append(a, .{ .kind = .warning, .message = "Could not load templates; template validation may be incomplete" });
         };
 
@@ -855,20 +870,20 @@ fn sectionFromUrl(a: Allocator, url_path: []const u8) !?[]const u8 {
 }
 
 /// Copies style-level `files/` directories to output at `/assets/styles/{name}/`.
-fn copyStyleFiles(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir, style_cfgs: []config.StyleConfig) !void {
+fn copyStyleFiles(a: Allocator, io: std.Io, root_dir: std.Io.Dir, output_dir: std.Io.Dir, style_cfgs: []config.StyleConfig) !void {
     for (style_cfgs) |style_cfg| {
         const src_path = try std.fmt.allocPrint(a, "styles/{s}/files", .{style_cfg.name});
         defer a.free(src_path);
-        var src_dir = root_dir.openDir(src_path, .{ .iterate = true }) catch continue;
-        defer src_dir.close();
+        var src_dir = std.Io.Dir.openDir(root_dir, io, src_path, .{ .iterate = true }) catch continue;
+        defer src_dir.close(io);
 
         const dst_path = try std.fmt.allocPrint(a, "assets/styles/{s}", .{style_cfg.name});
         defer a.free(dst_path);
-        output_dir.makePath(dst_path) catch {};
-        var dst_dir = try output_dir.openDir(dst_path, .{});
-        defer dst_dir.close();
+        std.Io.Dir.createDirPath(output_dir, io, dst_path) catch {};
+        var dst_dir = try std.Io.Dir.openDir(output_dir, io, dst_path, .{});
+        defer dst_dir.close(io);
 
-        try copyDirRecursive(a, src_dir, dst_dir);
+        try copyDirRecursive(a, io, src_dir, dst_dir);
     }
 }
 
@@ -876,8 +891,9 @@ fn copyStyleFiles(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir, style_cfgs
 /// (handled by the auto-bundler). All other resources are individually output.
 fn writeStyleResources(
     a: Allocator,
+    io: std.Io,
     patterns_result: PatternsResult,
-    output_dir: fs.Dir,
+    output_dir: std.Io.Dir,
 ) !void {
     for (patterns_result.resolved) |rs| {
         // Pattern-matched non-CSS resources.
@@ -892,10 +908,10 @@ fn writeStyleResources(
                 defer a.free(out_path);
 
                 const dir_part = std.fs.path.dirname(out_path) orelse "";
-                output_dir.makePath(dir_part) catch {};
-                var f = try output_dir.createFile(out_path, .{});
-                defer f.close();
-                try f.writeAll(entry.value_ptr.content);
+                std.Io.Dir.createDirPath(output_dir, io, dir_part) catch {};
+                var f = try std.Io.Dir.createFile(output_dir, io, out_path, .{});
+                defer f.close(io);
+                try f.writeStreamingAll(io, entry.value_ptr.content);
             }
         }
 
@@ -907,48 +923,48 @@ fn writeStyleResources(
             defer a.free(out_path);
 
             const dir_part = std.fs.path.dirname(out_path) orelse "";
-            output_dir.makePath(dir_part) catch {};
-            var f = try output_dir.createFile(out_path, .{});
-            defer f.close();
-            try f.writeAll(res.content);
+            std.Io.Dir.createDirPath(output_dir, io, dir_part) catch {};
+            var f = try std.Io.Dir.createFile(output_dir, io, out_path, .{});
+            defer f.close(io);
+            try f.writeStreamingAll(io, res.content);
         }
     }
 }
 
 /// Checks for collision between site-level `files/assets/styles/` and style file output.
-fn checkSiteStyleCollision(root_dir: fs.Dir, diags: *diagnostics_mod.Collector, ba: Allocator) !void {
-    var check_dir = root_dir.openDir("files/assets/styles", .{}) catch return;
-    check_dir.close();
+fn checkSiteStyleCollision(io: std.Io, root_dir: std.Io.Dir, diags: *diagnostics_mod.Collector, ba: Allocator) !void {
+    var check_dir = std.Io.Dir.openDir(root_dir, io, "files/assets/styles", .{}) catch return;
+    check_dir.close(io);
     try diags.err(ba, "site files/assets/styles/ collides with style file output path; move site files elsewhere");
 }
 
 /// Recursively copies `files/` to the output root directory.
 /// `files/robots.txt` → `/robots.txt`, `files/assets/img.png` → `/assets/img.png`.
-fn copyFiles(a: Allocator, root_dir: fs.Dir, output_dir: fs.Dir) !void {
-    var files_dir = root_dir.openDir("files", .{ .iterate = true }) catch return;
-    defer files_dir.close();
+fn copyFiles(a: Allocator, io: std.Io, root_dir: std.Io.Dir, output_dir: std.Io.Dir) !void {
+    var files_dir = std.Io.Dir.openDir(root_dir, io, "files", .{ .iterate = true }) catch return;
+    defer files_dir.close(io);
 
-    try copyDirRecursive(a, files_dir, output_dir);
+    try copyDirRecursive(a, io, files_dir, output_dir);
 }
 
-fn copyDirRecursive(a: Allocator, src: fs.Dir, dst: fs.Dir) !void {
+fn copyDirRecursive(a: Allocator, io: std.Io, src: std.Io.Dir, dst: std.Io.Dir) !void {
     var it = src.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         switch (entry.kind) {
             .file => {
-                const content = try src.readFileAlloc(a, entry.name, 64 * 1024 * 1024);
-                defer a.free(content);
-                var f = try dst.createFile(entry.name, .{});
-                defer f.close();
-                try f.writeAll(content);
+                const data = try std.Io.Dir.readFileAlloc(src, io, entry.name, a, .limited(64 * 1024 * 1024));
+                defer a.free(data);
+                var f = try std.Io.Dir.createFile(dst, io, entry.name, .{});
+                defer f.close(io);
+                try f.writeStreamingAll(io, data);
             },
             .directory => {
-                dst.makePath(entry.name) catch {};
-                var sub_src = try src.openDir(entry.name, .{ .iterate = true });
-                defer sub_src.close();
-                var sub_dst = try dst.openDir(entry.name, .{});
-                defer sub_dst.close();
-                try copyDirRecursive(a, sub_src, sub_dst);
+                std.Io.Dir.createDirPath(dst, io, entry.name) catch {};
+                var sub_src = try std.Io.Dir.openDir(src, io, entry.name, .{ .iterate = true });
+                defer sub_src.close(io);
+                var sub_dst = try std.Io.Dir.openDir(dst, io, entry.name, .{});
+                defer sub_dst.close(io);
+                try copyDirRecursive(a, io, sub_src, sub_dst);
             },
             else => {},
         }
@@ -993,25 +1009,26 @@ test "E2E: data pipeline loads config, computes tokens, renders template" {
     var arena = std.heap.ArenaAllocator.init(testing_alloc);
     defer arena.deinit();
     const a = arena.allocator();
+    const io = std.testing.io;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("data");
-    try tmp.dir.makePath("styles/default");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/default");
 
     {
-        var dir = try tmp.dir.openDir("data", .{});
-        defer dir.close();
-        var f = try dir.createFile("site.yaml", .{});
-        try f.writeAll("url: https://example.com\ntitle: E2E Test");
-        f.close();
+        var dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+        defer dir.close(io);
+        var f = try std.Io.Dir.createFile(dir, io, "site.yaml", .{});
+        try f.writeStreamingAll(io, "url: https://example.com\ntitle: E2E Test");
+        f.close(io);
     }
     {
-        var dir = try tmp.dir.openDir("styles/default", .{});
-        defer dir.close();
-        var f = try dir.createFile("style.yaml", .{});
-        try f.writeAll(
+        var dir = try std.Io.Dir.openDir(tmp.dir, io, "styles/default", .{});
+        defer dir.close(io);
+        var f = try std.Io.Dir.createFile(dir, io, "style.yaml", .{});
+        try f.writeStreamingAll(io,
             \\viewport:
             \\  min: 320
             \\  max: 1240
@@ -1026,15 +1043,15 @@ test "E2E: data pipeline loads config, computes tokens, renders template" {
             \\    above: 2
             \\    below: 1
         );
-        f.close();
+        f.close(io);
     }
 
-    const abs = try tmp.dir.realpathAlloc(a, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", a);
 
-    var site_cfg = try config.loadSiteConfig(a, abs);
+    var site_cfg = try config.loadSiteConfig(a, io, abs);
     defer site_cfg.deinit();
 
-    const style_cfgs = try config.loadStyleConfigs(a, abs);
+    const style_cfgs = try config.loadStyleConfigs(a, io, abs);
     try std.testing.expect(style_cfgs.len == 1);
 
     const params = try tokens.extractParams(style_cfgs[0].raw, a);
@@ -1068,45 +1085,46 @@ test "E2E: data pipeline loads config, computes tokens, renders template" {
 
 test "copyFiles: copies files/ to output root recursively" {
     const a = std.testing.allocator;
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("files/assets/images");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "files/assets/images");
     {
-        var files = try tmp.dir.openDir("files", .{});
-        defer files.close();
-        var f = try files.createFile("robots.txt", .{});
-        try f.writeAll("User-agent: *");
-        f.close();
+        var files = try std.Io.Dir.openDir(tmp.dir, io, "files", .{});
+        defer files.close(io);
+        var f = try std.Io.Dir.createFile(files, io, "robots.txt", .{});
+        try f.writeStreamingAll(io, "User-agent: *");
+        f.close(io);
 
-        var assets_dir = try files.openDir("assets", .{});
-        defer assets_dir.close();
-        var css = try assets_dir.createFile("style.css", .{});
-        try css.writeAll("body{}");
-        css.close();
+        var assets_dir = try std.Io.Dir.openDir(files, io, "assets", .{});
+        defer assets_dir.close(io);
+        var css = try std.Io.Dir.createFile(assets_dir, io, "style.css", .{});
+        try css.writeStreamingAll(io, "body{}");
+        css.close(io);
 
-        var images = try assets_dir.openDir("images", .{});
-        defer images.close();
-        var img = try images.createFile("logo.png", .{});
-        try img.writeAll("PNG");
-        img.close();
+        var images = try std.Io.Dir.openDir(assets_dir, io, "images", .{});
+        defer images.close(io);
+        var img = try std.Io.Dir.createFile(images, io, "logo.png", .{});
+        try img.writeStreamingAll(io, "PNG");
+        img.close(io);
     }
 
-    try tmp.dir.makePath("output");
-    var output = try tmp.dir.openDir("output", .{});
-    defer output.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "output");
+    var output = try std.Io.Dir.openDir(tmp.dir, io, "output", .{});
+    defer output.close(io);
 
-    try copyFiles(a, tmp.dir, output);
+    try copyFiles(a, io, tmp.dir, output);
 
-    const robots = try output.readFileAlloc(a, "robots.txt", 4096);
+    const robots = try std.Io.Dir.readFileAlloc(output, io, "robots.txt", a, .limited(4096));
     defer a.free(robots);
     try std.testing.expectEqualStrings("User-agent: *", robots);
 
-    const css = try output.readFileAlloc(a, "assets/style.css", 4096);
+    const css = try std.Io.Dir.readFileAlloc(output, io, "assets/style.css", a, .limited(4096));
     defer a.free(css);
     try std.testing.expectEqualStrings("body{}", css);
 
-    const img = try output.readFileAlloc(a, "assets/images/logo.png", 4096);
+    const img = try std.Io.Dir.readFileAlloc(output, io, "assets/images/logo.png", a, .limited(4096));
     defer a.free(img);
     try std.testing.expectEqualStrings("PNG", img);
 }

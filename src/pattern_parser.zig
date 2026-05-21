@@ -40,7 +40,7 @@ pub fn parsePatternFile(a: Allocator, source: []const u8) !PatternFile {
     }
 
     var example_end: usize = body.len;
-    var variants = std.ArrayListUnmanaged(Variant){};
+    var variants = std.ArrayListUnmanaged(Variant).empty;
 
     var line_start: usize = 0;
     var current_variant_name: ?[]const u8 = null;
@@ -86,7 +86,7 @@ fn parseVariantDelimiter(raw_line: []const u8) ?[]const u8 {
     const prefix = "<!-- variant: ";
     const suffix = " -->";
     if (!std.mem.startsWith(u8, raw_line, prefix)) return null;
-    const trimmed_end = std.mem.trimRight(u8, raw_line, " \t\r");
+    const trimmed_end = std.mem.trimEnd(u8, raw_line, " \t\r");
     if (!std.mem.endsWith(u8, trimmed_end, suffix)) return null;
     const name = trimmed_end[prefix.len .. trimmed_end.len - suffix.len];
     if (name.len == 0) return null;

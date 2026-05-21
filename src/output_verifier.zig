@@ -5,7 +5,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const comb = @import("comb");
-const fs = std.fs;
 const test_report = @import("test_report.zig");
 
 const Reporter = test_report.Reporter;
@@ -24,7 +23,8 @@ fn getStringKey(entry: comb.Entry) ?[]const u8 {
 /// Glob patterns (keys containing `*`) support `*` only. Content is compared after HTML normalization.
 pub fn verify(
     a: Allocator,
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
     prefix: []const u8,
     spec: comb.Value,
     reporter: *Reporter,
@@ -43,13 +43,13 @@ pub fn verify(
             try a.dupe(u8, key);
 
         if (std.mem.indexOf(u8, full_path, "*") != null) {
-            try verifyGlobPath(a, output_dir, full_path, entry.value, reporter);
+            try verifyGlobPath(a, io, output_dir, full_path, entry.value, reporter);
             continue;
         }
 
         switch (entry.value) {
             .string => |expected| {
-                const actual = output_dir.readFileAlloc(a, full_path, 4 * 1024 * 1024) catch {
+                const actual = std.Io.Dir.readFileAlloc(output_dir, io, full_path, a, .limited(4 * 1024 * 1024)) catch {
                     reporter.failWithFailure(a, .{ .kind = .missing_file, .path = full_path });
                     continue;
                 };
@@ -68,7 +68,7 @@ pub fn verify(
                 }
             },
             .boolean => |b| {
-                const exists = output_dir.access(full_path, .{}) != error.FileNotFound;
+                const exists = std.Io.Dir.access(output_dir, io, full_path, .{}) != error.FileNotFound;
                 if (b and !exists) {
                     reporter.failWithFailure(a, .{ .kind = .file_should_exist, .path = full_path });
                 } else if (!b and exists) {
@@ -78,7 +78,7 @@ pub fn verify(
                 }
             },
             .object => {
-                try verify(a, output_dir, full_path, entry.value, reporter);
+                try verify(a, io, output_dir, full_path, entry.value, reporter);
             },
             else => {},
         }
@@ -87,7 +87,8 @@ pub fn verify(
 
 fn verifyGlobPath(
     a: Allocator,
-    output_dir: fs.Dir,
+    io: std.Io,
+    output_dir: std.Io.Dir,
     pattern: []const u8,
     value: comb.Value,
     reporter: *Reporter,
@@ -101,19 +102,19 @@ fn verifyGlobPath(
     else
         pattern;
 
-    var sub_dir = output_dir.openDir(dir_part, .{ .iterate = true }) catch {
+    var sub_dir = std.Io.Dir.openDir(output_dir, io, dir_part, .{ .iterate = true }) catch {
         reporter.failWithFailure(a, .{ .kind = .glob_directory_not_found, .pattern = dir_part });
         return;
     };
-    defer sub_dir.close();
+    defer sub_dir.close(io);
 
     var it = sub_dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (globMatch(file_pattern, entry.name)) {
             switch (value) {
                 .string => |expected| {
-                    const actual = try sub_dir.readFileAlloc(a, entry.name, 4 * 1024 * 1024);
+                    const actual = try std.Io.Dir.readFileAlloc(sub_dir, io, entry.name, a, .limited(4 * 1024 * 1024));
                     if (!normalizedEql(a, actual, expected)) {
                         const full = try std.fmt.allocPrint(a, "{s}/{s}", .{ dir_part, entry.name });
                         const exp_trimmed = std.mem.trim(u8, expected, " \t\r\n");

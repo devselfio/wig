@@ -2,20 +2,11 @@
     .name = .wig,
     .version = "0.2.0",
     .fingerprint = 0xc91683d260cf52ca, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .toupee = .{
-            .url = "git+https://github.com/QuiteClose/toupee.git#9647932a0af09fd9933ea3cb763ec960a9c996e9",
-            .hash = "toupee-0.3.1-5-xKvEEnBwBDRvIwvK_ytYFlKZp7Vv3sVn8l4tthz0iY",
-        },
-        .comb = .{
-            .url = "git+https://github.com/QuiteClose/comb.git#v1.0.0",
-            .hash = "12207e3984e090599ba497f8ed6191c0c04de544359dd4224613436622b575d2ff1b",
-        },
-        .zjot = .{
-            .url = "git+https://github.com/QuiteClose/zjot.git#v1.0.0",
-            .hash = "12205fa0d1b904b33f0567d59a4cb2ad222a811af08bb0ee60f1bfe89e5a3ccd7eef",
-        },
+        .toupee = .{ .path = "../toupee" },
+        .comb = .{ .path = "../comb" },
+        .zjot = .{ .path = "../zjot" },
     },
     .paths = .{
         "build.zig",

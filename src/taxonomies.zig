@@ -39,7 +39,7 @@ pub fn buildIndex(
                 if (!gop.found_existing) {
                     gop.value_ptr.* = .{
                         .display_name = raw_term,
-                        .pages = .{},
+                        .pages = .empty,
                     };
                 }
 

@@ -2,10 +2,11 @@ const std = @import("std");
 const wig = @import("wig");
 const options = @import("options");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     const a = std.heap.page_allocator;
-    var args = std.process.args();
-    _ = args.next(); // skip executable name
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var args = std.process.Args.Iterator.init(init.args);
+    _ = args.skip(); // skip executable name
 
     const command = args.next() orelse {
         printUsage();
@@ -19,10 +20,10 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, command, "init")) {
         const path = args.next() orelse ".";
-        try wig.scaffold.init(a, path);
+        try wig.scaffold.init(a, io, path);
     } else if (std.mem.eql(u8, command, "build")) {
         const opts = parseBuildArgs(&args);
-        var site = try wig.Site.init(a, .{ .root = opts.path });
+        var site = try wig.Site.init(a, io, .{ .root = opts.path });
         defer site.deinit();
         const result = site.buildAll(.{
             .clean = opts.clean,
@@ -37,7 +38,7 @@ pub fn main() !void {
         if (result.diagnostics.hasErrors()) std.process.exit(1);
     } else if (std.mem.eql(u8, command, "check")) {
         const v = parseCheckArgs(&args);
-        var site = try wig.Site.init(a, .{ .root = v.path });
+        var site = try wig.Site.init(a, io, .{ .root = v.path });
         defer site.deinit();
         const diags = try site.check(.{ .external_links = v.external });
         defer site.allocator.free(diags);
@@ -50,7 +51,7 @@ pub fn main() !void {
         };
         const force = hasFlag(&args, "--force");
         const pages = hasFlag(&args, "--pages");
-        wig.scaffold.install(a, name_or_url, ".", .{ .force = force, .include_pages = pages }) catch |err| {
+        wig.scaffold.install(a, io, name_or_url, ".", .{ .force = force, .include_pages = pages }) catch |err| {
             if (err == error.NotImplemented) {
                 std.debug.print("wig install: not available in v0.1.0 (planned for a future release)\n", .{});
                 std.process.exit(2);
@@ -67,7 +68,7 @@ pub fn main() !void {
                 std.debug.print("wig add style: missing style name\n", .{});
                 return;
             };
-            try wig.scaffold.addStyle(a, "styles", name);
+            try wig.scaffold.addStyle(a, io, "styles", name);
         } else if (std.mem.eql(u8, sub, "block")) {
             const style = args.next() orelse {
                 std.debug.print("wig add block: missing style name\n", .{});
@@ -77,15 +78,15 @@ pub fn main() !void {
                 std.debug.print("wig add block: missing block name\n", .{});
                 return;
             };
-            try wig.scaffold.addBlock(a, "styles", style, block);
+            try wig.scaffold.addBlock(a, io, "styles", style, block);
         } else {
             std.debug.print("wig add: unknown subcommand '{s}'\n", .{sub});
         }
     } else if (std.mem.eql(u8, command, "serve")) {
         const opts = parseServeArgs(&args);
-        var site = try wig.Site.init(a, .{ .root = opts.path });
+        var site = try wig.Site.init(a, io, .{ .root = opts.path });
         defer site.deinit();
-        wig.serve_mod.DevServer.run(a, &site, .{
+        wig.serve_mod.DevServer.run(a, io, &site, .{
             .host = opts.host,
             .port = opts.port,
             .live_reload = opts.live_reload,
@@ -167,7 +168,7 @@ const BuildArgs = struct {
 
 /// Parses optional `[path]`, `--clean`, `--pretty`, `--strict-links`,
 /// `--external-links` in any order after the subcommand.
-fn parseBuildArgs(args: *std.process.ArgIterator) BuildArgs {
+fn parseBuildArgs(args: *std.process.Args.Iterator) BuildArgs {
     var path: ?[]const u8 = null;
     var clean = false;
     var pretty = false;
@@ -198,7 +199,7 @@ const CheckArgs = struct {
 };
 
 /// Parses optional `[path]` and `--external` in any order after `check`.
-fn parseCheckArgs(args: *std.process.ArgIterator) CheckArgs {
+fn parseCheckArgs(args: *std.process.Args.Iterator) CheckArgs {
     var path: ?[]const u8 = null;
     var external = false;
     while (args.next()) |arg| {
@@ -222,7 +223,7 @@ const ServeArgs = struct {
     live_reload: bool,
 };
 
-fn parseServeArgs(args: *std.process.ArgIterator) ServeArgs {
+fn parseServeArgs(args: *std.process.Args.Iterator) ServeArgs {
     var path: ?[]const u8 = null;
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 8080;
@@ -255,7 +256,7 @@ fn parseServeArgs(args: *std.process.ArgIterator) ServeArgs {
     return .{ .path = path orelse ".", .host = host, .port = port, .live_reload = live_reload };
 }
 
-fn hasFlag(args: *std.process.ArgIterator, flag: []const u8) bool {
+fn hasFlag(args: *std.process.Args.Iterator, flag: []const u8) bool {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, flag)) return true;
     }

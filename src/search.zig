@@ -2,7 +2,6 @@ const std = @import("std");
 const html = @import("html.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 pub const SearchEntry = struct {
     url: []const u8,
@@ -15,8 +14,8 @@ pub const SearchEntry = struct {
 };
 
 /// Generates `search.json` in spec format (multi-line, 4-space field indent).
-pub fn generateSearchJson(a: Allocator, entries: []const SearchEntry, output_dir: fs.Dir) !void {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+pub fn generateSearchJson(a: Allocator, entries: []const SearchEntry, io: std.Io, output_dir: std.Io.Dir) !void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try buf.appendSlice(a, "[\n");
@@ -41,9 +40,7 @@ pub fn generateSearchJson(a: Allocator, entries: []const SearchEntry, output_dir
     }
     try buf.appendSlice(a, "\n]\n");
 
-    var f = try output_dir.createFile("search.json", .{});
-    defer f.close();
-    try f.writeAll(buf.items);
+    try std.Io.Dir.writeFile(output_dir, io, .{ .sub_path = "search.json", .data = buf.items });
 }
 
 fn writeJsonObjectFieldLine(buf: *std.ArrayListUnmanaged(u8), a: Allocator, indent: []const u8, key: []const u8, val: []const u8) !void {

@@ -68,8 +68,9 @@ fn skelStepMake(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !voi
         std.log.err("skel: build root path unavailable", .{});
         return error.MakeFailed;
     };
+    const io = std.Io.Threaded.global_single_threaded.io();
     for (skel.terms) |term| {
-        skel.repack(gpa, root, term) catch |err| {
+        skel.repack(gpa, io, root, term) catch |err| {
             std.log.err("skel repack '{s}': {s}", .{ term, @errorName(err) });
             return error.MakeFailed;
         };

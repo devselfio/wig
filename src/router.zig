@@ -73,7 +73,7 @@ pub fn match(a: Allocator, routes: []const Route, method: []const u8, path: []co
 /// Attempts to match a route pattern against a concrete path.
 /// Returns extracted parameters on success.
 fn tryMatch(a: Allocator, pattern: []const u8, path: []const u8) ![]const Param {
-    var params: std.ArrayListUnmanaged(Param) = .{};
+    var params: std.ArrayListUnmanaged(Param) = .empty;
     errdefer params.deinit(a);
 
     var pat_it = splitPath(pattern);

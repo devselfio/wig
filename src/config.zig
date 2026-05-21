@@ -4,7 +4,6 @@ const context_mod = @import("context.zig");
 const toupee = @import("toupee");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 
@@ -148,7 +147,7 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
                 break :blk items[0..count];
             },
             .array => |arr| {
-                var items = std.ArrayListUnmanaged(FeedConfig){};
+                var items = std.ArrayListUnmanaged(FeedConfig).empty;
                 for (arr) |item| {
                     const name = switch (item) {
                         .string => |s| s,
@@ -176,24 +175,24 @@ fn extractConfig(val: comb.Value, a: Allocator) !ExtractedConfig {
     };
 }
 
-pub fn loadSiteConfig(a: Allocator, root: []const u8) !SiteConfig {
-    const data_path = try fs.path.join(a, &.{ root, "data" });
+pub fn loadSiteConfig(a: Allocator, io: std.Io, root: []const u8) !SiteConfig {
+    const data_path = try std.fs.path.join(a, &.{ root, "data" });
     defer a.free(data_path);
 
-    var data_dir = fs.openDirAbsolute(data_path, .{}) catch |err| switch (err) {
+    var data_dir = std.Io.Dir.openDirAbsolute(io, data_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.MissingConfig,
         else => return err,
     };
-    defer data_dir.close();
+    defer data_dir.close(io);
 
-    const has_yaml = fileExists(data_dir, "site.yaml");
-    const has_json = fileExists(data_dir, "site.json");
+    const has_yaml = fileExists(data_dir, io, "site.yaml");
+    const has_json = fileExists(data_dir, io, "site.json");
 
     if (has_yaml and has_json) return error.DualConfig;
     if (!has_yaml and !has_json) return error.MissingConfig;
 
     const filename: []const u8 = if (has_yaml) "site.yaml" else "site.json";
-    const contents = try data_dir.readFileAlloc(a, filename, 1024 * 1024);
+    const contents = try std.Io.Dir.readFileAlloc(data_dir, io, filename, a, .limited(1024 * 1024));
     errdefer a.free(contents);
 
     var parsed = comb.parse(a, contents) catch
@@ -215,15 +214,15 @@ pub fn loadSiteConfig(a: Allocator, root: []const u8) !SiteConfig {
     };
 }
 
-pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
-    const styles_path = try fs.path.join(a, &.{ root, "styles" });
+pub fn loadStyleConfigs(a: Allocator, io: std.Io, root: []const u8) ![]StyleConfig {
+    const styles_path = try std.fs.path.join(a, &.{ root, "styles" });
     defer a.free(styles_path);
 
-    var styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch |err| switch (err) {
+    var styles_dir = std.Io.Dir.openDirAbsolute(io, styles_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return &[_]StyleConfig{},
         else => return err,
     };
-    defer styles_dir.close();
+    defer styles_dir.close(io);
 
     var configs: std.ArrayListUnmanaged(StyleConfig) = .empty;
     errdefer {
@@ -232,15 +231,15 @@ pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
     }
 
     var it = styles_dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .directory) continue;
 
-        var sub_dir = styles_dir.openDir(entry.name, .{}) catch continue;
-        defer sub_dir.close();
+        var sub_dir = std.Io.Dir.openDir(styles_dir, io, entry.name, .{}) catch continue;
+        defer sub_dir.close(io);
 
-        if (!fileExists(sub_dir, "style.yaml")) continue;
+        if (!fileExists(sub_dir, io, "style.yaml")) continue;
 
-        const contents = sub_dir.readFileAlloc(a, "style.yaml", 1024 * 1024) catch continue;
+        const contents = std.Io.Dir.readFileAlloc(sub_dir, io, "style.yaml", a, .limited(1024 * 1024)) catch continue;
         errdefer a.free(contents);
 
         var parsed = comb.parse(a, contents) catch {
@@ -250,7 +249,7 @@ pub fn loadStyleConfigs(a: Allocator, root: []const u8) ![]StyleConfig {
         errdefer parsed.deinit();
 
         const depends = dep_blk: {
-            var dep_list = std.ArrayListUnmanaged([]const u8){};
+            var dep_list = std.ArrayListUnmanaged([]const u8).empty;
             defer dep_list.deinit(a);
 
             if (parsed.value.get("imports")) |imports_val| {
@@ -327,8 +326,8 @@ fn allDepsPlaced(placed: []const StyleConfig, deps: []const []const u8) bool {
 
 /// Loads all data files from `data/` into a nested Toupee value namespace.
 /// Both `.yaml`/`.yml` and `.json` files are parsed via Comb.
-pub fn loadDataFiles(a: Allocator, root: []const u8) !DataResult {
-    const data_path = try fs.path.join(a, &.{ root, "data" });
+pub fn loadDataFiles(a: Allocator, io: std.Io, root: []const u8) !DataResult {
+    const data_path = try std.fs.path.join(a, &.{ root, "data" });
     defer a.free(data_path);
 
     var namespace = ValueMap{};
@@ -345,7 +344,7 @@ pub fn loadDataFiles(a: Allocator, root: []const u8) !DataResult {
         files.deinit(a);
     }
 
-    var data_dir = fs.openDirAbsolute(data_path, .{ .iterate = true }) catch |err| switch (err) {
+    var data_dir = std.Io.Dir.openDirAbsolute(io, data_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return .{
             .value = .{ .map = namespace },
             ._files = files,
@@ -354,9 +353,9 @@ pub fn loadDataFiles(a: Allocator, root: []const u8) !DataResult {
         },
         else => return err,
     };
-    defer data_dir.close();
+    defer data_dir.close(io);
 
-    try scanDataDir(a, data_dir, &namespace, &files, &owned_keys, true);
+    try scanDataDir(a, io, data_dir, &namespace, &files, &owned_keys, true);
 
     return .{
         .value = .{ .map = namespace },
@@ -370,17 +369,18 @@ pub fn loadDataFiles(a: Allocator, root: []const u8) !DataResult {
 /// `is_root` controls whether site config files (site.yaml/json) are skipped.
 fn scanDataDir(
     a: Allocator,
-    dir: fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     namespace: *ValueMap,
     files: *std.ArrayListUnmanaged(ParsedFile),
     owned_keys: *std.ArrayListUnmanaged([]const u8),
     is_root: bool,
 ) !void {
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         switch (entry.kind) {
             .file => {
-                const ext = fs.path.extension(entry.name);
+                const ext = std.fs.path.extension(entry.name);
                 const is_data_file = std.mem.eql(u8, ext, ".yaml") or
                     std.mem.eql(u8, ext, ".yml") or
                     std.mem.eql(u8, ext, ".json");
@@ -391,7 +391,7 @@ fn scanDataDir(
                 const stem = entry.name[0 .. entry.name.len - ext.len];
                 if (namespace.contains(stem)) return error.PathCollision;
 
-                const contents = try dir.readFileAlloc(a, entry.name, 1024 * 1024);
+                const contents = try std.Io.Dir.readFileAlloc(dir, io, entry.name, a, .limited(1024 * 1024));
                 errdefer a.free(contents);
 
                 var parsed = try comb.parse(a, contents);
@@ -416,10 +416,10 @@ fn scanDataDir(
                 var sub_map = ValueMap{};
                 errdefer freeValueMap(a, &sub_map);
 
-                var sub_dir = try dir.openDir(entry.name, .{ .iterate = true });
-                defer sub_dir.close();
+                var sub_dir = try std.Io.Dir.openDir(dir, io, entry.name, .{ .iterate = true });
+                defer sub_dir.close(io);
 
-                try scanDataDir(a, sub_dir, &sub_map, files, owned_keys, false);
+                try scanDataDir(a, io, sub_dir, &sub_map, files, owned_keys, false);
                 try namespace.put(a, key, .{ .map = sub_map });
             },
             else => {},
@@ -430,18 +430,18 @@ fn scanDataDir(
 /// Loads all YAML/JSON files from a directory into a `ValueMap`, suitable for
 /// arena-allocated contexts (no `DataResult` wrapper needed). Subdirectories
 /// create nested maps. Returns an empty map if the directory does not exist.
-pub fn loadDataDir(a: Allocator, dir_path: []const u8) !ValueMap {
+pub fn loadDataDir(a: Allocator, io: std.Io, dir_path: []const u8) !ValueMap {
     var namespace = ValueMap{};
     var files: std.ArrayListUnmanaged(ParsedFile) = .empty;
     var owned_keys: std.ArrayListUnmanaged([]const u8) = .empty;
 
-    var data_dir = fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var data_dir = std.Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return namespace,
         else => return err,
     };
-    defer data_dir.close();
+    defer data_dir.close(io);
 
-    try scanDataDir(a, data_dir, &namespace, &files, &owned_keys, false);
+    try scanDataDir(a, io, data_dir, &namespace, &files, &owned_keys, false);
     return namespace;
 }
 
@@ -451,8 +451,8 @@ fn isSiteConfigFile(name: []const u8) bool {
         std.mem.eql(u8, name, "site.yml");
 }
 
-fn fileExists(dir: fs.Dir, name: []const u8) bool {
-    dir.access(name, .{}) catch return false;
+fn fileExists(dir: std.Io.Dir, io: std.Io, name: []const u8) bool {
+    std.Io.Dir.access(dir, io, name, .{}) catch return false;
     return true;
 }
 
@@ -552,47 +552,50 @@ test "extractConfig: feeds with default title" {
 }
 
 test "loadSiteConfig: missing data directory" {
-    const result = loadSiteConfig(std.testing.allocator, "/nonexistent/path");
+    const io = std.testing.io;
+    const result = loadSiteConfig(std.testing.allocator, io, "/nonexistent/path");
     try std.testing.expectError(error.MissingConfig, result);
 }
 
 test "loadSiteConfig: dual config error" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
-    var data_dir = try tmp.dir.openDir("data", .{});
-    defer data_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    var data_dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+    defer data_dir.close(io);
 
-    var f1 = try data_dir.createFile("site.yaml", .{});
-    try f1.writeAll("url: https://example.com");
+    var f1 = try std.Io.Dir.createFile(data_dir, io, "site.yaml", .{});
+    try f1.writeStreamingAll(io, "url: https://example.com");
     f1.close();
-    var f2 = try data_dir.createFile("site.json", .{});
-    try f2.writeAll("{\"url\": \"https://example.com\"}");
+    var f2 = try std.Io.Dir.createFile(data_dir, io, "site.json", .{});
+    try f2.writeStreamingAll(io, "{\"url\": \"https://example.com\"}");
     f2.close();
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    const result = loadSiteConfig(std.testing.allocator, abs);
+    const result = loadSiteConfig(std.testing.allocator, io, abs);
     try std.testing.expectError(error.DualConfig, result);
 }
 
 test "loadSiteConfig: loads YAML" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
-    var data_dir = try tmp.dir.openDir("data", .{});
-    defer data_dir.close();
-    var f = try data_dir.createFile("site.yaml", .{});
-    try f.writeAll("url: https://example.com\ntitle: Test Site");
-    f.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    var data_dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+    defer data_dir.close(io);
+    var f = try std.Io.Dir.createFile(data_dir, io, "site.yaml", .{});
+    try f.writeStreamingAll(io, "url: https://example.com\ntitle: Test Site");
+    f.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var cfg = try loadSiteConfig(std.testing.allocator, abs);
+    var cfg = try loadSiteConfig(std.testing.allocator, io, abs);
     defer cfg.deinit();
 
     try std.testing.expectEqualStrings("https://example.com", cfg.url);
@@ -602,18 +605,19 @@ test "loadSiteConfig: loads YAML" {
 test "loadSiteConfig: loads JSON" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
-    var data_dir = try tmp.dir.openDir("data", .{});
-    defer data_dir.close();
-    var f = try data_dir.createFile("site.json", .{});
-    try f.writeAll("{\"url\": \"https://example.com\", \"title\": \"JSON\"}");
-    f.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    var data_dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+    defer data_dir.close(io);
+    var f = try std.Io.Dir.createFile(data_dir, io, "site.json", .{});
+    try f.writeStreamingAll(io, "{\"url\": \"https://example.com\", \"title\": \"JSON\"}");
+    f.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var cfg = try loadSiteConfig(std.testing.allocator, abs);
+    var cfg = try loadSiteConfig(std.testing.allocator, io, abs);
     defer cfg.deinit();
 
     try std.testing.expectEqualStrings("https://example.com", cfg.url);
@@ -623,20 +627,21 @@ test "loadSiteConfig: loads JSON" {
 test "loadStyleConfigs: discovers style directories" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("styles/_core");
-    try tmp.dir.makePath("styles/default");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/_core");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/default");
 
-    var default_dir = try tmp.dir.openDir("styles/default", .{});
-    defer default_dir.close();
-    var f = try default_dir.createFile("style.yaml", .{});
-    try f.writeAll("name: Default\ntokens:\n  viewport:\n    min: 320");
-    f.close();
+    var default_dir = try std.Io.Dir.openDir(tmp.dir, io, "styles/default", .{});
+    defer default_dir.close(io);
+    var f = try std.Io.Dir.createFile(default_dir, io, "style.yaml", .{});
+    try f.writeStreamingAll(io, "name: Default\ntokens:\n  viewport:\n    min: 320");
+    f.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    const configs = try loadStyleConfigs(std.testing.allocator, abs);
+    const configs = try loadStyleConfigs(std.testing.allocator, io, abs);
     defer {
         for (configs) |*c| @constCast(c).deinit();
         std.testing.allocator.free(configs);
@@ -649,14 +654,15 @@ test "loadStyleConfigs: discovers style directories" {
 test "loadStyleConfigs: skips directories without style.yaml" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("styles/_core");
-    try tmp.dir.makePath("styles/empty");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/_core");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/empty");
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    const configs = try loadStyleConfigs(std.testing.allocator, abs);
+    const configs = try loadStyleConfigs(std.testing.allocator, io, abs);
     defer std.testing.allocator.free(configs);
 
     try std.testing.expectEqual(@as(usize, 0), configs.len);
@@ -665,19 +671,20 @@ test "loadStyleConfigs: skips directories without style.yaml" {
 test "loadDataFiles: loads nested namespace" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data/colors");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data/colors");
 
-    var colors_dir = try tmp.dir.openDir("data/colors", .{});
-    defer colors_dir.close();
-    var cf = try colors_dir.createFile("solarized.yaml", .{});
-    try cf.writeAll("name: Solarized\ntype: dark");
-    cf.close();
+    var colors_dir = try std.Io.Dir.openDir(tmp.dir, io, "data/colors", .{});
+    defer colors_dir.close(io);
+    var cf = try std.Io.Dir.createFile(colors_dir, io, "solarized.yaml", .{});
+    try cf.writeStreamingAll(io, "name: Solarized\ntype: dark");
+    cf.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var result = try loadDataFiles(std.testing.allocator, abs);
+    var result = try loadDataFiles(std.testing.allocator, io, abs);
     defer result.deinit();
 
     const colors_val = result.value.map.get("colors") orelse
@@ -692,23 +699,24 @@ test "loadDataFiles: loads nested namespace" {
 test "loadDataFiles: skips site.yaml" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
-    var data_dir = try tmp.dir.openDir("data", .{});
-    defer data_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    var data_dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+    defer data_dir.close(io);
 
-    var sf = try data_dir.createFile("site.yaml", .{});
-    try sf.writeAll("url: https://example.com");
-    sf.close();
+    var sf = try std.Io.Dir.createFile(data_dir, io, "site.yaml", .{});
+    try sf.writeStreamingAll(io, "url: https://example.com");
+    sf.close(io);
 
-    var af = try data_dir.createFile("authors.yaml", .{});
-    try af.writeAll("name: Alice");
-    af.close();
+    var af = try std.Io.Dir.createFile(data_dir, io, "authors.yaml", .{});
+    try af.writeStreamingAll(io, "name: Alice");
+    af.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var result = try loadDataFiles(std.testing.allocator, abs);
+    var result = try loadDataFiles(std.testing.allocator, io, abs);
     defer result.deinit();
 
     try std.testing.expect(result.value.map.get("site") == null);
@@ -718,20 +726,22 @@ test "loadDataFiles: skips site.yaml" {
 test "loadDataFiles: empty data directory" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var result = try loadDataFiles(std.testing.allocator, abs);
+    var result = try loadDataFiles(std.testing.allocator, io, abs);
     defer result.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), result.value.map.count());
 }
 
 test "loadDataFiles: missing data directory returns empty" {
-    var result = try loadDataFiles(std.testing.allocator, "/nonexistent/path");
+    const io = std.testing.io;
+    var result = try loadDataFiles(std.testing.allocator, io, "/nonexistent/path");
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 0), result.value.map.count());
 }
@@ -739,19 +749,20 @@ test "loadDataFiles: missing data directory returns empty" {
 test "loadDataFiles: loads JSON files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("data");
-    var data_dir = try tmp.dir.openDir("data", .{});
-    defer data_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "data");
+    var data_dir = try std.Io.Dir.openDir(tmp.dir, io, "data", .{});
+    defer data_dir.close(io);
 
-    var jf = try data_dir.createFile("authors.json", .{});
-    try jf.writeAll("{\"name\": \"Alice\"}");
-    jf.close();
+    var jf = try std.Io.Dir.createFile(data_dir, io, "authors.json", .{});
+    try jf.writeStreamingAll(io, "{\"name\": \"Alice\"}");
+    jf.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    var result = try loadDataFiles(std.testing.allocator, abs);
+    var result = try loadDataFiles(std.testing.allocator, io, abs);
     defer result.deinit();
 
     const authors = result.value.map.get("authors") orelse
@@ -762,26 +773,27 @@ test "loadDataFiles: loads JSON files" {
 test "loadStyleConfigs: extracts dependencies from imports" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("styles/cube");
-    try tmp.dir.makePath("styles/highlights");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/cube");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/highlights");
 
-    var cube_dir = try tmp.dir.openDir("styles/cube", .{});
-    defer cube_dir.close();
-    var cf = try cube_dir.createFile("style.yaml", .{});
-    try cf.writeAll("name: cube");
-    cf.close();
+    var cube_dir = try std.Io.Dir.openDir(tmp.dir, io, "styles/cube", .{});
+    defer cube_dir.close(io);
+    var cf = try std.Io.Dir.createFile(cube_dir, io, "style.yaml", .{});
+    try cf.writeStreamingAll(io, "name: cube");
+    cf.close(io);
 
-    var hl_dir = try tmp.dir.openDir("styles/highlights", .{});
-    defer hl_dir.close();
-    var hf = try hl_dir.createFile("style.yaml", .{});
-    try hf.writeAll("name: highlights\nimports:\n  cube:\n    patterns: \"**\"");
-    hf.close();
+    var hl_dir = try std.Io.Dir.openDir(tmp.dir, io, "styles/highlights", .{});
+    defer hl_dir.close(io);
+    var hf = try std.Io.Dir.createFile(hl_dir, io, "style.yaml", .{});
+    try hf.writeStreamingAll(io, "name: highlights\nimports:\n  cube:\n    patterns: \"**\"");
+    hf.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    const configs = try loadStyleConfigs(std.testing.allocator, abs);
+    const configs = try loadStyleConfigs(std.testing.allocator, io, abs);
     defer {
         for (configs) |*c| @constCast(c).deinit();
         std.testing.allocator.free(configs);
@@ -806,18 +818,19 @@ test "loadStyleConfigs: extracts dependencies from imports" {
 test "loadStyleConfigs: missing dependency returns error" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("styles/orphan");
-    var orphan_dir = try tmp.dir.openDir("styles/orphan", .{});
-    defer orphan_dir.close();
-    var f = try orphan_dir.createFile("style.yaml", .{});
-    try f.writeAll("name: orphan\nimports:\n  nonexistent:\n    patterns: \"**\"");
-    f.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "styles/orphan");
+    var orphan_dir = try std.Io.Dir.openDir(tmp.dir, io, "styles/orphan", .{});
+    defer orphan_dir.close(io);
+    var f = try std.Io.Dir.createFile(orphan_dir, io, "style.yaml", .{});
+    try f.writeStreamingAll(io, "name: orphan\nimports:\n  nonexistent:\n    patterns: \"**\"");
+    f.close(io);
 
-    const abs = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);
 
-    const result = loadStyleConfigs(std.testing.allocator, abs);
+    const result = loadStyleConfigs(std.testing.allocator, io, abs);
     try std.testing.expectError(error.MissingDependency, result);
 }
 

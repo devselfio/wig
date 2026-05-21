@@ -20,7 +20,7 @@ const testing = std.testing;
 
 test "appendXmlEscaped: special chars" {
     const a = testing.allocator;
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try appendXmlEscaped(&buf, a, "a & b < c > d \"e\"");
@@ -29,7 +29,7 @@ test "appendXmlEscaped: special chars" {
 
 test "appendXmlEscaped: plain text" {
     const a = testing.allocator;
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try appendXmlEscaped(&buf, a, "hello world");
@@ -38,7 +38,7 @@ test "appendXmlEscaped: plain text" {
 
 test "appendXmlEscaped: empty" {
     const a = testing.allocator;
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(a);
 
     try appendXmlEscaped(&buf, a, "");

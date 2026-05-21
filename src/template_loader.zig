@@ -3,7 +3,6 @@ const toupee = @import("toupee");
 const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 /// Resolves template names relative to a style during rendering.
 /// Explicit paths: `layouts/X.html`, `blocks/X.html` resolve within the current style.
@@ -55,30 +54,30 @@ pub const StyleLoader = struct {
 /// Used by both `buildAll` and `validate` to avoid duplicating directory-walking logic.
 pub fn loadTemplates(
     ba: Allocator,
+    io: std.Io,
     a: Allocator,
     abs_root: []const u8,
     style_cfgs: []config.StyleConfig,
     engine: *toupee.Engine,
     template_map: *std.StringArrayHashMapUnmanaged([]const u8),
 ) !void {
-    const styles_path = try fs.path.join(a, &.{ abs_root, "styles" });
+    const styles_path = try std.fs.path.join(a, &.{ abs_root, "styles" });
     defer a.free(styles_path);
 
-    const styles_dir = fs.openDirAbsolute(styles_path, .{ .iterate = true }) catch return;
-    var dir = styles_dir;
-    defer dir.close();
+    var dir = std.Io.Dir.openDirAbsolute(io, styles_path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
 
     for (style_cfgs) |style_cfg| {
         for ([_][]const u8{ "templates/layouts", "templates/blocks" }) |subdir| {
             const style_subdir = try std.fmt.allocPrint(ba, "{s}/{s}", .{ style_cfg.name, subdir });
-            if (dir.openDir(style_subdir, .{ .iterate = true })) |sd| {
+            if (std.Io.Dir.openDir(dir, io, style_subdir, .{ .iterate = true })) |sd| {
                 var tmpl_dir = sd;
-                defer tmpl_dir.close();
+                defer tmpl_dir.close(io);
                 var tit = tmpl_dir.iterate();
-                while (try tit.next()) |entry| {
+                while (try tit.next(io)) |entry| {
                     if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".html")) continue;
                     const tmpl_name = try std.fmt.allocPrint(ba, "{s}/{s}/{s}", .{ style_cfg.name, subdir, entry.name });
-                    const content = try tmpl_dir.readFileAlloc(ba, entry.name, 4 * 1024 * 1024);
+                    const content = try std.Io.Dir.readFileAlloc(tmpl_dir, io, entry.name, ba, .limited(4 * 1024 * 1024));
                     try engine.addTemplate(tmpl_name, content);
                     try template_map.put(ba, tmpl_name, content);
                 }

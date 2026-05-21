@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 const wig = @import("root.zig");
 const mime = @import("mime.zig");
 const Watcher = @import("watcher.zig").Watcher;
@@ -19,23 +18,25 @@ pub const Options = struct {
 
 pub const DevServer = struct {
     allocator: Allocator,
+    io: std.Io,
     site: *wig.Site,
     options: Options,
 
-    build_lock: std.Thread.RwLock = .{},
+    build_lock: std.Io.RwLock = .init,
     output_path: ?[]const u8 = null,
 
-    ws_mutex: std.Thread.Mutex = .{},
-    ws_clients: std.ArrayListUnmanaged(std.http.Server.WebSocket) = .{},
+    ws_mutex: std.Io.Mutex = .init,
+    ws_clients: std.ArrayListUnmanaged(std.http.Server.WebSocket) = .empty,
 
-    pub fn run(allocator: Allocator, site: *wig.Site, options: Options) !void {
+    pub fn run(allocator: Allocator, io: std.Io, site: *wig.Site, options: Options) !void {
         var self = DevServer{
             .allocator = allocator,
+            .io = io,
             .site = site,
             .options = options,
         };
 
-        const abs_root = try site.root_dir.realpathAlloc(allocator, ".");
+        const abs_root = try std.Io.Dir.realPathFileAlloc(site.root_dir, io, ".", allocator);
         defer allocator.free(abs_root);
 
         std.debug.print("wig serve: building site...\n", .{});
@@ -50,6 +51,7 @@ pub const DevServer = struct {
 
         var watcher = Watcher.init(
             allocator,
+            io,
             abs_root,
             watch_dirs,
             200 * std.time.ns_per_ms,
@@ -69,9 +71,9 @@ pub const DevServer = struct {
             watcher.waitForChange();
 
             std.debug.print("wig serve: change detected, rebuilding...\n", .{});
-            self.build_lock.lock();
+            self.build_lock.lockUncancelable(self.io);
             self.rebuild();
-            self.build_lock.unlock();
+            self.build_lock.unlock(self.io);
 
             if (options.live_reload) {
                 self.broadcastReload();
@@ -88,17 +90,19 @@ pub const DevServer = struct {
         std.debug.print("wig serve: ok ({d} pages)\n", .{result.page_count});
 
         if (self.output_path == null) {
-            const path = self.site.root_dir.realpathAlloc(
-                self.allocator,
+            const path = std.Io.Dir.realPathFileAlloc(
+                self.site.root_dir,
+                self.io,
                 "zig-out/site",
+                self.allocator,
             ) catch return;
             self.output_path = path;
         }
     }
 
     fn broadcastReload(self: *DevServer) void {
-        self.ws_mutex.lock();
-        defer self.ws_mutex.unlock();
+        self.ws_mutex.lockUncancelable(self.io);
+        defer self.ws_mutex.unlock(self.io);
 
         var i: usize = 0;
         while (i < self.ws_clients.items.len) {
@@ -112,8 +116,8 @@ pub const DevServer = struct {
     }
 
     fn broadcastError(self: *DevServer, msg: []const u8) void {
-        self.ws_mutex.lock();
-        defer self.ws_mutex.unlock();
+        self.ws_mutex.lockUncancelable(self.io);
+        defer self.ws_mutex.unlock(self.io);
 
         var buf: [512]u8 = undefined;
         const json = std.fmt.bufPrint(&buf, "{{\"command\":\"error\",\"message\":\"{s}\"}}", .{msg}) catch return;
@@ -130,39 +134,39 @@ pub const DevServer = struct {
     }
 
     fn httpAcceptLoop(self: *DevServer) void {
-        const address = std.net.Address.resolveIp(self.options.host, self.options.port) catch |err| {
+        const address = std.Io.net.IpAddress.resolve(self.io, self.options.host, self.options.port) catch |err| {
             std.debug.print("wig serve: failed to resolve address: {s}\n", .{@errorName(err)});
             return;
         };
 
-        var tcp = address.listen(.{ .reuse_address = true }) catch |err| {
+        var tcp = address.listen(self.io, .{ .reuse_address = true }) catch |err| {
             std.debug.print("wig serve: failed to bind port {d}: {s}\n", .{ self.options.port, @errorName(err) });
             return;
         };
-        defer tcp.deinit();
+        defer tcp.deinit(self.io);
 
         while (true) {
-            const conn = tcp.accept() catch |err| {
+            const conn = tcp.accept(self.io) catch |err| {
                 log.debug("accept error: {s}", .{@errorName(err)});
                 continue;
             };
             const t = std.Thread.spawn(.{}, handleConnection, .{ self, conn }) catch {
-                conn.stream.close();
+                conn.close(self.io);
                 continue;
             };
             t.detach();
         }
     }
 
-    fn handleConnection(self: *DevServer, conn: std.net.Server.Connection) void {
-        defer conn.stream.close();
+    fn handleConnection(self: *DevServer, conn: std.Io.net.Stream) void {
+        defer conn.close(self.io);
 
         var read_buf: [8192]u8 = undefined;
-        var in = conn.stream.reader(&read_buf);
+        var in = conn.reader(self.io, &read_buf);
         var write_buf: [4096]u8 = undefined;
-        var out = conn.stream.writer(&write_buf);
+        var out = conn.writer(self.io, &write_buf);
 
-        var http = std.http.Server.init(in.interface(), &out.interface);
+        var http = std.http.Server.init(&in.interface, &out.interface);
 
         while (true) {
             var request = http.receiveHead() catch return;
@@ -207,8 +211,8 @@ pub const DevServer = struct {
 
         const serve_path = if (path.len > 0 and path[0] == '/') path[1..] else path;
 
-        self.build_lock.lockShared();
-        defer self.build_lock.unlockShared();
+        self.build_lock.lockSharedUncancelable(self.io);
+        defer self.build_lock.unlockShared(self.io);
 
         const out_path = self.output_path orelse {
             try req.respond("Site not built yet", .{
@@ -220,7 +224,8 @@ pub const DevServer = struct {
             return;
         };
 
-        var dir = fs.openDirAbsolute(out_path, .{}) catch {
+        const io = self.io;
+        var dir = std.Io.Dir.openDirAbsolute(io, out_path, .{}) catch {
             try req.respond("Output directory not found", .{
                 .status = .internal_server_error,
                 .extra_headers = &.{
@@ -229,9 +234,9 @@ pub const DevServer = struct {
             });
             return;
         };
-        defer dir.close();
+        defer dir.close(io);
 
-        const content = dir.readFileAlloc(self.allocator, serve_path, 64 * 1024 * 1024) catch {
+        const content = std.Io.Dir.readFileAlloc(dir, io, serve_path, self.allocator, .limited(64 * 1024 * 1024)) catch {
             try req.respond("Not Found", .{
                 .status = .not_found,
                 .extra_headers = &.{
@@ -292,15 +297,15 @@ pub const DevServer = struct {
         var ws = req.respondWebSocket(.{ .key = key }) catch return;
 
         {
-            self.ws_mutex.lock();
-            defer self.ws_mutex.unlock();
+            self.ws_mutex.lockUncancelable(self.io);
+            defer self.ws_mutex.unlock(self.io);
             self.ws_clients.append(self.allocator, ws) catch return;
         }
 
         while (true) {
             _ = ws.readSmallMessage() catch {
-                self.ws_mutex.lock();
-                defer self.ws_mutex.unlock();
+                self.ws_mutex.lockUncancelable(self.io);
+                defer self.ws_mutex.unlock(self.io);
                 for (self.ws_clients.items, 0..) |*c, i| {
                     if (c.key.ptr == ws.key.ptr) {
                         _ = self.ws_clients.swapRemove(i);

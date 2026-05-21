@@ -8,7 +8,6 @@ const slug_mod = @import("slug.zig");
 const collections = @import("collections.zig");
 
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
 
 const ValueMap = std.StringArrayHashMapUnmanaged(toupee.Value);
 pub const PageMeta = page_meta_mod.PageMeta;
@@ -70,18 +69,20 @@ pub const ScanResult = struct {
 /// Files without `---` frontmatter are an error.
 pub fn scan(
     backing: Allocator,
-    pages_dir: fs.Dir,
+    io: std.Io,
+    pages_dir: std.Io.Dir,
     base_url: []const u8,
     site_draft: bool,
     site_debug: bool,
     registered_extensions: []const []const u8,
 ) !ScanResult {
-    return scanWithOptions(backing, pages_dir, base_url, site_draft, site_debug, registered_extensions, false);
+    return scanWithOptions(backing, io, pages_dir, base_url, site_draft, site_debug, registered_extensions, false);
 }
 
 pub fn scanWithOptions(
     backing: Allocator,
-    pages_dir: fs.Dir,
+    io: std.Io,
+    pages_dir: std.Io.Dir,
     base_url: []const u8,
     site_draft: bool,
     site_debug: bool,
@@ -92,11 +93,11 @@ pub fn scanWithOptions(
     errdefer arena.deinit();
     const a = arena.allocator();
 
-    var entries: std.ArrayListUnmanaged(PageEntry) = .{};
+    var entries: std.ArrayListUnmanaged(PageEntry) = .empty;
     var output_paths = std.StringArrayHashMapUnmanaged([]const u8){};
     var gated_dirs = std.StringArrayHashMapUnmanaged(void){};
 
-    try walkDir(a, pages_dir, "", base_url, site_draft, site_debug, registered_extensions, &entries, &output_paths, &gated_dirs, default_slugify);
+    try walkDir(a, io, pages_dir, "", base_url, site_draft, site_debug, registered_extensions, &entries, &output_paths, &gated_dirs, default_slugify);
 
     var colls = ValueMap{};
     try collections.buildCollections(a, entries.items, &colls);
@@ -115,7 +116,8 @@ pub fn scanWithOptions(
 
 fn walkDir(
     a: Allocator,
-    dir: fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     rel_prefix: []const u8,
     base_url: []const u8,
     site_draft: bool,
@@ -132,15 +134,15 @@ fn walkDir(
     var section_entry: ?PageEntry = null;
     {
         var it = dir.iterate();
-        while (try it.next()) |entry| {
-            if (!isRegularFile(dir, entry)) continue;
+        while (try it.next(io)) |entry| {
+            if (!isRegularFile(io, dir, entry)) continue;
             if (isHidden(entry.name)) continue;
-            const ext = fs.path.extension(entry.name);
+            const ext = std.fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (!isSection(stem)) continue;
             if (!isValidExtension(ext, registered_extensions)) return error.UnrecognisedExtension;
 
-            const page = try parsePageFile(a, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
+            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
             if (page.meta.draft and !site_draft or page.meta.debug and !site_debug) {
                 try gated_dirs.put(a, rel_prefix, {});
                 return;
@@ -153,15 +155,15 @@ fn walkDir(
     // Pass 2: process non-section files.
     {
         var it = dir.iterate();
-        while (try it.next()) |entry| {
-            if (!isRegularFile(dir, entry)) continue;
+        while (try it.next(io)) |entry| {
+            if (!isRegularFile(io, dir, entry)) continue;
             if (isHidden(entry.name)) continue;
-            const ext = fs.path.extension(entry.name);
+            const ext = std.fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (isSection(stem)) continue;
             if (!isValidExtension(ext, registered_extensions)) return error.UnrecognisedExtension;
 
-            const page = try parsePageFile(a, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
+            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
             if (page.meta.draft and !site_draft) continue;
             if (page.meta.debug and !site_debug) continue;
 
@@ -181,7 +183,7 @@ fn walkDir(
     // Pass 3: recurse into subdirectories.
     {
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(io)) |entry| {
             if (entry.kind != .directory and entry.kind != .sym_link) continue;
             if (isHidden(entry.name)) continue;
 
@@ -190,22 +192,22 @@ fn walkDir(
             else
                 try a.dupe(u8, entry.name);
 
-            var sub_dir = dir.openDir(entry.name, .{ .iterate = true }) catch continue;
-            defer sub_dir.close();
+            var sub_dir = std.Io.Dir.openDir(dir, io, entry.name, .{ .iterate = true }) catch continue;
+            defer sub_dir.close(io);
 
-            try walkDir(a, sub_dir, sub_prefix, base_url, site_draft, site_debug, registered_extensions, entries, output_paths, gated_dirs, default_slugify);
+            try walkDir(a, io, sub_dir, sub_prefix, base_url, site_draft, site_debug, registered_extensions, entries, output_paths, gated_dirs, default_slugify);
         }
     }
 }
 
 /// Returns true when the entry represents a regular file, following symlinks.
 /// A symlink to a directory returns false (handled by pass 3 instead).
-fn isRegularFile(dir: fs.Dir, entry: fs.Dir.Entry) bool {
+fn isRegularFile(io: std.Io, dir: std.Io.Dir, entry: std.Io.Dir.Entry) bool {
     return switch (entry.kind) {
         .file => true,
         .sym_link => {
-            var d = dir.openDir(entry.name, .{}) catch return true;
-            d.close();
+            var d = std.Io.Dir.openDir(dir, io, entry.name, .{}) catch return true;
+            d.close(io);
             return false;
         },
         else => false,
@@ -214,7 +216,8 @@ fn isRegularFile(dir: fs.Dir, entry: fs.Dir.Entry) bool {
 
 fn parsePageFile(
     a: Allocator,
-    dir: fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     filename: []const u8,
     rel_prefix: []const u8,
     ext: []const u8,
@@ -224,7 +227,7 @@ fn parsePageFile(
 ) !PageEntry {
     _ = registered_extensions;
 
-    const source = try dir.readFileAlloc(a, filename, 4 * 1024 * 1024);
+    const source = try std.Io.Dir.readFileAlloc(dir, io, filename, a, .limited(4 * 1024 * 1024));
     const fm_result = try frontmatter.parse(a, source);
     if (fm_result == null) return error.MissingFrontmatter;
     const fm = fm_result.?;
@@ -360,7 +363,7 @@ pub fn deriveOutputPath(a: Allocator, source_path: []const u8) ![]const u8 {
     else
         source_path;
 
-    const ext = fs.path.extension(filename);
+    const ext = std.fs.path.extension(filename);
     const stem = filename[0 .. filename.len - ext.len];
 
     // _404, _500, etc. -> 404.html, 500.html
@@ -509,21 +512,22 @@ test "deriveUrlPath: 404" {
 test "scan: basic pages directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f1 = try pages_dir.createFile("index.dj", .{});
-    try f1.writeAll("---\ntitle: Home\n---\nWelcome");
-    f1.close();
+    var f1 = try std.Io.Dir.createFile(pages_dir, io, "index.dj", .{});
+    try f1.writeStreamingAll(io, "---\ntitle: Home\n---\nWelcome");
+    f1.close(io);
 
-    var f2 = try pages_dir.createFile("about.dj", .{});
-    try f2.writeAll("---\ntitle: About\n---\nAbout us");
-    f2.close();
+    var f2 = try std.Io.Dir.createFile(pages_dir, io, "about.dj", .{});
+    try f2.writeStreamingAll(io, "---\ntitle: About\n---\nAbout us");
+    f2.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     try testing.expectEqual(@as(usize, 2), result.pages.len);
@@ -532,23 +536,24 @@ test "scan: basic pages directory" {
 test "scan: collection building" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/posts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/posts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f1 = try pages_dir.createFile("index.dj", .{});
-    try f1.writeAll("---\ntitle: Home\n---\nhome");
-    f1.close();
+    var f1 = try std.Io.Dir.createFile(pages_dir, io, "index.dj", .{});
+    try f1.writeStreamingAll(io, "---\ntitle: Home\n---\nhome");
+    f1.close(io);
 
-    var posts_dir = try pages_dir.openDir("posts", .{});
-    defer posts_dir.close();
-    var f2 = try posts_dir.createFile("first.dj", .{});
-    try f2.writeAll("---\ntitle: First Post\n---\ncontent");
-    f2.close();
+    var posts_dir = try std.Io.Dir.openDir(pages_dir, io, "posts", .{});
+    defer posts_dir.close(io);
+    var f2 = try std.Io.Dir.createFile(posts_dir, io, "first.dj", .{});
+    try f2.writeStreamingAll(io, "---\ntitle: First Post\n---\ncontent");
+    f2.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     const pages_root = result.collections.get("pages") orelse return error.TestUnexpectedResult;
@@ -563,55 +568,58 @@ test "scan: collection building" {
 test "scan: missing frontmatter is an error" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f = try pages_dir.createFile("bad.dj", .{});
-    try f.writeAll("No frontmatter here");
-    f.close();
+    var f = try std.Io.Dir.createFile(pages_dir, io, "bad.dj", .{});
+    try f.writeStreamingAll(io, "No frontmatter here");
+    f.close(io);
 
     const exts = [_][]const u8{".dj"};
-    const result = scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    const result = scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     try testing.expectError(error.MissingFrontmatter, result);
 }
 
 test "scan: invalid page frontmatter root is an error" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f = try pages_dir.createFile("bad.dj", .{});
-    try f.writeAll("---\n42\n---\nbody");
-    f.close();
+    var f = try std.Io.Dir.createFile(pages_dir, io, "bad.dj", .{});
+    try f.writeStreamingAll(io, "---\n42\n---\nbody");
+    f.close(io);
 
     const exts = [_][]const u8{".dj"};
-    const result = scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    const result = scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     try testing.expectError(error.InvalidWigPageFrontmatter, result);
 }
 
 test "scan: draft pages excluded when site.draft is false" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f1 = try pages_dir.createFile("visible.dj", .{});
-    try f1.writeAll("---\ntitle: Visible\n---\nyes");
-    f1.close();
+    var f1 = try std.Io.Dir.createFile(pages_dir, io, "visible.dj", .{});
+    try f1.writeStreamingAll(io, "---\ntitle: Visible\n---\nyes");
+    f1.close(io);
 
-    var f2 = try pages_dir.createFile("hidden.dj", .{});
-    try f2.writeAll("---\ntitle: Hidden\ndraft: true\n---\nno");
-    f2.close();
+    var f2 = try std.Io.Dir.createFile(pages_dir, io, "hidden.dj", .{});
+    try f2.writeStreamingAll(io, "---\ntitle: Hidden\ndraft: true\n---\nno");
+    f2.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     try testing.expectEqual(@as(usize, 1), result.pages.len);
@@ -621,17 +629,18 @@ test "scan: draft pages excluded when site.draft is false" {
 test "scan: draft pages included when site.draft is true" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f = try pages_dir.createFile("draft-post.dj", .{});
-    try f.writeAll("---\ntitle: Draft\ndraft: true\n---\nwip");
-    f.close();
+    var f = try std.Io.Dir.createFile(pages_dir, io, "draft-post.dj", .{});
+    try f.writeStreamingAll(io, "---\ntitle: Draft\ndraft: true\n---\nwip");
+    f.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", true, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", true, false, &exts);
     defer result.deinit();
 
     try testing.expectEqual(@as(usize, 1), result.pages.len);
@@ -640,24 +649,25 @@ test "scan: draft pages included when site.draft is true" {
 test "scan: section _index detection" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/posts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/posts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var posts_dir = try pages_dir.openDir("posts", .{});
-    defer posts_dir.close();
+    var posts_dir = try std.Io.Dir.openDir(pages_dir, io, "posts", .{});
+    defer posts_dir.close(io);
 
-    var idx = try posts_dir.createFile("_index.dj", .{});
-    try idx.writeAll("---\ntitle: All Posts\n---\nlisting");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(posts_dir, io, "_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\ntitle: All Posts\n---\nlisting");
+    idx.close(io);
 
-    var p = try posts_dir.createFile("first.dj", .{});
-    try p.writeAll("---\ntitle: First\n---\ncontent");
-    p.close();
+    var p = try std.Io.Dir.createFile(posts_dir, io, "first.dj", .{});
+    try p.writeStreamingAll(io, "---\ntitle: First\n---\ncontent");
+    p.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     var section_count: usize = 0;
@@ -678,28 +688,29 @@ test "scan: section _index detection" {
 test "scan: children_map groups leaves by pages parent directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/posts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/posts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var posts_dir = try pages_dir.openDir("posts", .{});
-    defer posts_dir.close();
+    var posts_dir = try std.Io.Dir.openDir(pages_dir, io, "posts", .{});
+    defer posts_dir.close(io);
 
-    var idx = try posts_dir.createFile("_index.dj", .{});
-    try idx.writeAll("---\ntitle: Hub\n---\nhub");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(posts_dir, io, "_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\ntitle: Hub\n---\nhub");
+    idx.close(io);
 
-    var a = try posts_dir.createFile("a.dj", .{});
-    try a.writeAll("---\ntitle: A\n---\na");
-    a.close();
+    var a = try std.Io.Dir.createFile(posts_dir, io, "a.dj", .{});
+    try a.writeStreamingAll(io, "---\ntitle: A\n---\na");
+    a.close(io);
 
-    var b = try posts_dir.createFile("b.dj", .{});
-    try b.writeAll("---\ntitle: B\n---\nb");
-    b.close();
+    var b = try std.Io.Dir.createFile(posts_dir, io, "b.dj", .{});
+    try b.writeStreamingAll(io, "---\ntitle: B\n---\nb");
+    b.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     const children = result.children_map.get("posts") orelse {
@@ -711,32 +722,33 @@ test "scan: children_map groups leaves by pages parent directory" {
 test "scan: children_map matches spec 13 style slugs" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/posts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/posts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var root_idx = try pages_dir.createFile("_index.dj", .{});
-    try root_idx.writeAll("---\ntitle: Root\n---\nroot");
-    root_idx.close();
+    var root_idx = try std.Io.Dir.createFile(pages_dir, io, "_index.dj", .{});
+    try root_idx.writeStreamingAll(io, "---\ntitle: Root\n---\nroot");
+    root_idx.close(io);
 
-    var posts_dir = try pages_dir.openDir("posts", .{});
-    defer posts_dir.close();
+    var posts_dir = try std.Io.Dir.openDir(pages_dir, io, "posts", .{});
+    defer posts_dir.close(io);
 
-    var idx = try posts_dir.createFile("_index.dj", .{});
-    try idx.writeAll("---\ntitle: Post List\n---\nWelcome.");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(posts_dir, io, "_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\ntitle: Post List\n---\nWelcome.");
+    idx.close(io);
 
-    var first = try posts_dir.createFile("001_first.dj", .{});
-    try first.writeAll("---\ntitle: First Post\n---\nBody.");
-    first.close();
+    var first = try std.Io.Dir.createFile(posts_dir, io, "001_first.dj", .{});
+    try first.writeStreamingAll(io, "---\ntitle: First Post\n---\nBody.");
+    first.close(io);
 
-    var second = try posts_dir.createFile("002_second.dj", .{});
-    try second.writeAll("---\ntitle: Second Post\n---\nBody.");
-    second.close();
+    var second = try std.Io.Dir.createFile(posts_dir, io, "002_second.dj", .{});
+    try second.writeStreamingAll(io, "---\ntitle: Second Post\n---\nBody.");
+    second.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     const children = result.children_map.get("posts") orelse {
@@ -754,24 +766,25 @@ test "scan: children_map matches spec 13 style slugs" {
 test "scan: gated section excludes entire directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/drafts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/drafts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var drafts_dir = try pages_dir.openDir("drafts", .{});
-    defer drafts_dir.close();
+    var drafts_dir = try std.Io.Dir.openDir(pages_dir, io, "drafts", .{});
+    defer drafts_dir.close(io);
 
-    var idx = try drafts_dir.createFile("_index.dj", .{});
-    try idx.writeAll("---\ntitle: Drafts\ndraft: true\n---\nlisting");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(drafts_dir, io, "_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\ntitle: Drafts\ndraft: true\n---\nlisting");
+    idx.close(io);
 
-    var p = try drafts_dir.createFile("secret.dj", .{});
-    try p.writeAll("---\ntitle: Secret\n---\nhidden");
-    p.close();
+    var p = try std.Io.Dir.createFile(drafts_dir, io, "secret.dj", .{});
+    try p.writeStreamingAll(io, "---\ntitle: Secret\n---\nhidden");
+    p.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     try testing.expectEqual(@as(usize, 0), result.pages.len);
@@ -780,17 +793,18 @@ test "scan: gated section excludes entire directory" {
 test "scan: absolute URL construction" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f = try pages_dir.createFile("about.dj", .{});
-    try f.writeAll("---\ntitle: About\n---\ncontent");
-    f.close();
+    var f = try std.Io.Dir.createFile(pages_dir, io, "about.dj", .{});
+    try f.writeStreamingAll(io, "---\ntitle: About\n---\ncontent");
+    f.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     try testing.expectEqualStrings("/about/", result.pages[0].url_path);
@@ -800,28 +814,29 @@ test "scan: absolute URL construction" {
 test "scan: collections sorted by filename descending" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages/posts");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages/posts");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var posts_dir = try pages_dir.openDir("posts", .{});
-    defer posts_dir.close();
+    var posts_dir = try std.Io.Dir.openDir(pages_dir, io, "posts", .{});
+    defer posts_dir.close(io);
 
-    var f1 = try posts_dir.createFile("260101-alpha.dj", .{});
-    try f1.writeAll("---\ntitle: Alpha\n---\na");
-    f1.close();
+    var f1 = try std.Io.Dir.createFile(posts_dir, io, "260101-alpha.dj", .{});
+    try f1.writeStreamingAll(io, "---\ntitle: Alpha\n---\na");
+    f1.close(io);
 
-    var f2 = try posts_dir.createFile("260303-gamma.dj", .{});
-    try f2.writeAll("---\ntitle: Gamma\n---\nc");
-    f2.close();
+    var f2 = try std.Io.Dir.createFile(posts_dir, io, "260303-gamma.dj", .{});
+    try f2.writeStreamingAll(io, "---\ntitle: Gamma\n---\nc");
+    f2.close(io);
 
-    var f3 = try posts_dir.createFile("260202-beta.dj", .{});
-    try f3.writeAll("---\ntitle: Beta\n---\nb");
-    f3.close();
+    var f3 = try std.Io.Dir.createFile(posts_dir, io, "260202-beta.dj", .{});
+    try f3.writeStreamingAll(io, "---\ntitle: Beta\n---\nb");
+    f3.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     const pages_root = result.collections.get("pages") orelse return error.TestUnexpectedResult;
@@ -839,17 +854,18 @@ test "scan: collections sorted by filename descending" {
 test "scan: unrecognised extension is an error" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
-    var f = try pages_dir.createFile("page.rst", .{});
-    try f.writeAll("---\ntitle: RST\n---\ncontent");
-    f.close();
+    var f = try std.Io.Dir.createFile(pages_dir, io, "page.rst", .{});
+    try f.writeStreamingAll(io, "---\ntitle: RST\n---\ncontent");
+    f.close(io);
 
     const exts = [_][]const u8{".dj"};
-    const result = scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    const result = scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     try testing.expectError(error.UnrecognisedExtension, result);
 }
 
@@ -891,28 +907,29 @@ test "dotPath: empty string" {
 test "scan: symlinked file is scanned" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    try tmp.dir.makePath("shared");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "shared");
 
     // Create a real file outside pages/.
-    var f = try tmp.dir.createFile("shared/about.dj", .{});
-    try f.writeAll("---\ntitle: About\n---\nabout content");
-    f.close();
+    var f = try std.Io.Dir.createFile(tmp.dir, io, "shared/about.dj", .{});
+    try f.writeStreamingAll(io, "---\ntitle: About\n---\nabout content");
+    f.close(io);
 
     // Create a section index.
-    var idx = try tmp.dir.createFile("pages/_index.dj", .{});
-    try idx.writeAll("---\n---\nroot");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(tmp.dir, io, "pages/_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\n---\nroot");
+    idx.close(io);
 
     // Symlink the file into pages/.
-    try tmp.dir.symLink("../shared/about.dj", "pages/about.dj", .{});
+    try std.Io.Dir.symLink(tmp.dir, io, "../shared/about.dj", "pages/about.dj", .{});
 
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     // Should find both the section index and the symlinked about page.
@@ -928,32 +945,33 @@ test "scan: symlinked file is scanned" {
 test "scan: symlinked directory is scanned" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
-    try tmp.dir.makePath("pages");
-    try tmp.dir.makePath("shared/demo");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "pages");
+    try std.Io.Dir.createDirPath(tmp.dir, io, "shared/demo");
 
     // Create files inside the shared directory.
-    var f1 = try tmp.dir.createFile("shared/demo/_index.dj", .{});
-    try f1.writeAll("---\ntitle: Demo\n---\ndemo index");
-    f1.close();
+    var f1 = try std.Io.Dir.createFile(tmp.dir, io, "shared/demo/_index.dj", .{});
+    try f1.writeStreamingAll(io, "---\ntitle: Demo\n---\ndemo index");
+    f1.close(io);
 
-    var f2 = try tmp.dir.createFile("shared/demo/page.dj", .{});
-    try f2.writeAll("---\ntitle: Page\n---\npage content");
-    f2.close();
+    var f2 = try std.Io.Dir.createFile(tmp.dir, io, "shared/demo/page.dj", .{});
+    try f2.writeStreamingAll(io, "---\ntitle: Page\n---\npage content");
+    f2.close(io);
 
     // Create a section index in pages/.
-    var idx = try tmp.dir.createFile("pages/_index.dj", .{});
-    try idx.writeAll("---\n---\nroot");
-    idx.close();
+    var idx = try std.Io.Dir.createFile(tmp.dir, io, "pages/_index.dj", .{});
+    try idx.writeStreamingAll(io, "---\n---\nroot");
+    idx.close(io);
 
     // Symlink the directory into pages/.
-    try tmp.dir.symLink("../shared/demo", "pages/preview", .{ .is_directory = true });
+    try std.Io.Dir.symLink(tmp.dir, io, "../shared/demo", "pages/preview", .{ .is_directory = true });
 
-    var pages_dir = try tmp.dir.openDir("pages", .{ .iterate = true });
-    defer pages_dir.close();
+    var pages_dir = try std.Io.Dir.openDir(tmp.dir, io, "pages", .{ .iterate = true });
+    defer pages_dir.close(io);
 
     const exts = [_][]const u8{".dj"};
-    var result = try scan(testing.allocator, pages_dir, "https://example.com", false, false, &exts);
+    var result = try scan(testing.allocator, io, pages_dir, "https://example.com", false, false, &exts);
     defer result.deinit();
 
     // Should find: root _index, preview/_index (demo), and preview/page.

@@ -62,7 +62,7 @@ pub fn resolve(
     }
     const schemes_list = schemes_array.?;
 
-    var resolved: std.ArrayListUnmanaged(toupee.Value) = .{};
+    var resolved: std.ArrayListUnmanaged(toupee.Value) = .empty;
     for (schemes_list) |entry| {
         const spec_id: []const u8 = switch (entry) {
             .string => |s| s,

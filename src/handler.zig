@@ -43,7 +43,7 @@ pub const Context = struct {
     response_status: u16 = 200,
     response_body: []const u8 = "",
     response_content_type: []const u8 = "text/plain",
-    response_headers: std.ArrayListUnmanaged(Header) = .{},
+    response_headers: std.ArrayListUnmanaged(Header) = .empty,
     responded: bool = false,
 
     _middleware: []const MiddlewareFn = &.{},
