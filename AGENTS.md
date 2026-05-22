@@ -232,6 +232,21 @@ defer site.allocator.free(diags);
 // inspect diags for .kind (.err / .warning) and .message
 ```
 
+### Build diagnostics (`BuildResult.diagnostics`)
+
+Author-facing build failures (scan, render, template, style-file, and link-check problems) are recorded in `BuildResult.diagnostics` during `buildAll()`. The CLI and spec tests read this collector; library code does not print to stderr.
+
+- **`buildAll()` returns `BuildResult`** even when the build failed for author errors — inspect `result.diagnostics.hasErrors()` and exit non-zero (as `wig build` does).
+- **Thrown errors from `buildAll()`** indicate infrastructure failure (I/O, OOM), not a missing layout or path collision.
+- **Pre-build failures** (`Site.init` with no project root) still throw before `buildAll()` runs.
+- **Source attribution** — page scan and render errors set `Diagnostic.source` and `Diagnostic.template_name` where applicable; link-check errors include the source page in the message.
+
+```zig
+const result = try site.buildAll(.{});
+result.diagnostics.printToStderr(allocator); // CLI presentation
+if (result.diagnostics.hasErrors()) { /* exit 1 */ }
+```
+
 ### Link checking
 
 Internal links are checked automatically during `buildAll()` as a post-render phase. The link checker walks all `.html` files in the output tree, extracts `href` and `src` attributes, and verifies that internal targets exist (both file paths and `#fragment` anchors).

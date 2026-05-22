@@ -230,7 +230,10 @@ fn renderPage(
         base_ctx.resolveString("document.layout") orelse "page.html";
     try ctx.putAt("document.layout", .{ .string = try a.dupe(u8, layout_short) });
 
-    const layout_name = resolveLayoutPath(a, layout_short, style_name) catch return error.MissingTemplate;
+    const layout_name = resolveLayoutPath(a, layout_short, style_name) catch {
+        try diags.errFmt(a, "invalid layout path '{s}' for page {s}", .{ layout_short, entry.source_path });
+        return error.BuildFailed;
+    };
 
     const style_loader = template_loader.StyleLoader{
         .templates = template_map,
@@ -243,20 +246,30 @@ fn renderPage(
 
     const output_html = engine.renderTemplate(a, layout_name, &ctx, loader, .{}) catch |err| blk: {
         if (err != error.TemplateNotFound) {
-            logRenderError(a, &err_detail, entry.source_path, layout_name);
-            return err;
+            try recordRenderError(a, diags, &err_detail, entry.source_path, layout_name);
+            return error.BuildFailed;
         }
         const src = (loader.getSource(a, layout_name) catch {
-            std.debug.print("MissingTemplate(load): {s} for page {s}\n", .{ layout_name, entry.source_path });
-            return error.MissingTemplate;
+            try diags.errAt(
+                a,
+                try std.fmt.allocPrint(a, "missing layout template '{s}'", .{layout_name}),
+                entry.source_path,
+                layout_name,
+            );
+            return error.BuildFailed;
         }) orelse {
-            std.debug.print("MissingTemplate(null): {s} for page {s}\n", .{ layout_name, entry.source_path });
-            return error.MissingTemplate;
+            try diags.errAt(
+                a,
+                try std.fmt.allocPrint(a, "missing layout template '{s}'", .{layout_name}),
+                entry.source_path,
+                layout_name,
+            );
+            return error.BuildFailed;
         };
         defer a.free(src);
-        break :blk engine.render(a, src, &ctx, loader, .{}) catch |e| {
-            logRenderError(a, &err_detail, entry.source_path, layout_name);
-            return e;
+        break :blk engine.render(a, src, &ctx, loader, .{}) catch {
+            try recordRenderError(a, diags, &err_detail, entry.source_path, layout_name);
+            return error.BuildFailed;
         };
     };
 
@@ -266,18 +279,19 @@ fn renderPage(
     };
 }
 
-/// Logs a Toupee render error with full detail (source location, caret, suggestion)
-/// to stderr. Called when template rendering fails for a page.
-fn logRenderError(a: Allocator, ed: *const toupee.ErrorDetail, page_source: []const u8, layout: []const u8) void {
-    if (ed.kind == .none) {
-        std.debug.print("render error: page '{s}' layout '{s}' (no detail available)\n", .{ page_source, layout });
-        return;
-    }
-    const formatted = ed.formatError(a) catch {
-        std.debug.print("render error: page '{s}' layout '{s}': {s}\n", .{ page_source, layout, ed.message });
-        return;
-    };
-    std.debug.print("--- render error: page '{s}' ---\n{s}\n", .{ page_source, formatted });
+/// Records a Toupee render error in the build diagnostic collector.
+fn recordRenderError(
+    a: Allocator,
+    diags: *diagnostics_mod.Collector,
+    ed: *const toupee.ErrorDetail,
+    page_source: []const u8,
+    layout: []const u8,
+) !void {
+    const msg = if (ed.kind == .none)
+        try std.fmt.allocPrint(a, "render error (no detail available)", .{})
+    else
+        ed.formatError(a) catch try a.dupe(u8, ed.message);
+    try diags.errAt(a, msg, page_source, layout);
 }
 
 /// Resolves a short layout name to the full template path within a style.

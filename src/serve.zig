@@ -87,6 +87,12 @@ pub const DevServer = struct {
             if (self.options.live_reload) self.broadcastError("Build failed");
             return;
         };
+        result.diagnostics.printToStderr(self.allocator);
+        if (result.diagnostics.hasErrors()) {
+            std.debug.print("wig serve: build failed ({d} error(s))\n", .{result.diagnostics.errorCount()});
+            if (self.options.live_reload) self.broadcastError("Build failed");
+            return;
+        }
         std.debug.print("wig serve: ok ({d} pages)\n", .{result.page_count});
 
         if (self.output_path == null) {

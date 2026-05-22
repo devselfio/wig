@@ -80,9 +80,11 @@ pub const MemoryStore = struct {
 };
 
 /// Generates a cryptographically random session ID as a hex string.
-pub fn generateId(a: Allocator) ![]const u8 {
+pub fn generateId(a: Allocator, io: std.Io) ![]const u8 {
     var buf: [16]u8 = undefined;
-    std.crypto.random.bytes(&buf);
+    const io_source = std.Random.IoSource{ .io = io };
+    const random = io_source.interface();
+    std.Random.bytes(random, &buf);
     const hex = std.fmt.bytesToHex(buf, .lower);
     return try a.dupe(u8, &hex);
 }
@@ -116,7 +118,7 @@ pub fn formatSetCookie(a: Allocator, name: []const u8, value: []const u8) ![]con
 const testing = std.testing;
 
 test "generateId: produces 32-char hex string" {
-    const id = try generateId(testing.allocator);
+    const id = try generateId(testing.allocator, std.testing.io);
     defer testing.allocator.free(id);
     try testing.expectEqual(@as(usize, 32), id.len);
 
@@ -126,9 +128,9 @@ test "generateId: produces 32-char hex string" {
 }
 
 test "generateId: unique across calls" {
-    const id1 = try generateId(testing.allocator);
+    const id1 = try generateId(testing.allocator, std.testing.io);
     defer testing.allocator.free(id1);
-    const id2 = try generateId(testing.allocator);
+    const id2 = try generateId(testing.allocator, std.testing.io);
     defer testing.allocator.free(id2);
     try testing.expect(!std.mem.eql(u8, id1, id2));
 }

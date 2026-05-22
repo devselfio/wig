@@ -267,6 +267,7 @@ test "generateBundle: writes file and returns path" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
     const patterns = [_]pattern_loader.Pattern{
         stubPattern(a, "button", "blocks", ".button { display: flex; }"),
@@ -280,7 +281,7 @@ test "generateBundle: writes file and returns path" {
     };
 
     var ctx = toupee.Context.init(a);
-    const result = try generateBundle(a, "default", resolved, tmp.dir, &ctx);
+    const result = try generateBundle(a, io, "default", resolved, tmp.dir, &ctx);
     try testing.expect(result != null);
 
     const r = result.?;
@@ -290,7 +291,7 @@ test "generateBundle: writes file and returns path" {
     try testing.expect(std.mem.indexOf(u8, r.content, "@layer blocks {") != null);
 
     const file_path = r.path[1..];
-    const on_disk = try tmp.dir.readFileAlloc(a, file_path, 64 * 1024);
+    const on_disk = try tmp.dir.readFileAlloc(io, file_path, a, .limited(64 * 1024));
     try testing.expectEqualStrings(r.content, on_disk);
 }
 
@@ -301,6 +302,7 @@ test "generateBundle: returns null when no CSS" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    const io = std.testing.io;
 
     const patterns = [_]pattern_loader.Pattern{
         stubPattern(a, "reset", "resets", null),
@@ -314,7 +316,7 @@ test "generateBundle: returns null when no CSS" {
     };
 
     var ctx = toupee.Context.init(a);
-    const result = try generateBundle(a, "default", resolved, tmp.dir, &ctx);
+    const result = try generateBundle(a, io, "default", resolved, tmp.dir, &ctx);
     try testing.expect(result == null);
 }
 

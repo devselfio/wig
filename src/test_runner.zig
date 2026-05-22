@@ -203,8 +203,8 @@ fn discoverSpecTests(a: Allocator, io: std.Io, test_dir: std.Io.Dir) !std.ArrayL
 }
 
 /// Returns YYYYMMDD-HHMMSS for the current time (UTC).
-fn timestampRunId(buf: []u8) ![]const u8 {
-    const secs = std.time.timestamp();
+fn timestampRunId(io: std.Io, buf: []u8) ![]const u8 {
+    const secs = std.Io.Clock.real.now(io).toSeconds();
     const es = epoch.EpochSeconds{ .secs = @intCast(@max(0, secs)) };
     const epoch_day = es.getEpochDay();
     const year_day = epoch_day.calculateYearDay();
@@ -250,7 +250,7 @@ pub fn runSpecTests(
     }
 
     var run_id_buf: [16]u8 = undefined;
-    const run_id = try timestampRunId(&run_id_buf);
+    const run_id = try timestampRunId(io, &run_id_buf);
     if (run_id_out) |out| @memcpy(out[0..run_id.len], run_id);
 
     var report = Report.init(a);
@@ -267,7 +267,7 @@ pub fn runSpecTests(
         }
         try to_run.append(a, filename);
     }
-    report.writeHeader(run_id, to_run.items);
+    report.writeHeader(io, run_id, to_run.items);
 
     var workspace = try TestWorkspace.init(a, io, run_id, cfg);
     defer workspace.deinit();
@@ -282,8 +282,9 @@ pub fn runSpecTests(
             continue;
         };
 
-        const status = if (results.failed > 0) "FAIL" else "ok";
-        std.debug.print("  {s}: {s} {d}/{d}\n", .{ test_name, status, results.passed, results.total() });
+        if (results.failed > 0) {
+            std.debug.print("  {s}: FAIL {d}/{d}\n", .{ test_name, results.passed, results.total() });
+        }
         total.add(results);
 
         if (results.failed == 0) {
@@ -693,7 +694,7 @@ test "specNumericPrefix and WIG_TEST numeric match" {
     try testing.expect(specNumericPrefix("9_bad.yaml") == null);
     try testing.expect(specNumericPrefix("no_digits.yaml") == null);
 
-    var f = Filter{ .numbers = .{} };
+    var f = Filter{ .numbers = .empty };
     defer f.deinit(testing.allocator);
     try f.numbers.append(testing.allocator, try testing.allocator.dupe(u8, "34"));
     try testing.expect(f.matchesSpecFilename("034_blog_e2e.yaml"));
@@ -709,7 +710,7 @@ test "wig integration test suite" {
     };
     defer test_dir.close(io);
 
-    const filter = std.posix.getenv("WIG_TEST");
+    const filter = std.process.Environ.getPosix(std.testing.environ, "WIG_TEST");
     var run_id_buf: [16]u8 = undefined;
     var ws_dir: []const u8 = undefined;
 
@@ -718,12 +719,10 @@ test "wig integration test suite" {
         return err;
     };
 
-    std.debug.print("\n  Spec Total: {d}/{d} passed\n", .{ total.passed, total.total() });
-
     if (total.failed > 0) {
+        std.debug.print("\n  Spec Total: {d}/{d} passed\n", .{ total.passed, total.total() });
         std.debug.print("  Test files written to: {s}/{s}\n", .{ ws_dir, run_id_buf[0..15] });
         std.debug.print("  Total failures: {d}\n\n", .{total.failed});
         return error.SpecTestFailures;
     }
-    std.debug.print("\n", .{});
 }

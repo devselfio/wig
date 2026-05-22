@@ -383,9 +383,9 @@ test "jsonToToupee: object" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    var obj = std.json.ObjectMap.init(a);
-    try obj.put("color", .{ .string = "red" });
-    try obj.put("count", .{ .integer = 3 });
+    var obj = try std.json.ObjectMap.init(a, &.{}, &.{});
+    try obj.put(a, "color", .{ .string = "red" });
+    try obj.put(a, "count", .{ .integer = 3 });
 
     const result = try jsonToToupee(a, .{ .object = obj });
     try expectToupeeStr(toupeeMapGet(result, "color") orelse return error.TestExpectedEqual, "red");
@@ -396,7 +396,7 @@ test "jsonToToupee: empty object" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const obj = std.json.ObjectMap.init(a);
+    const obj = try std.json.ObjectMap.init(a, &.{}, &.{});
     const result = try jsonToToupee(a, .{ .object = obj });
     const map = switch (result) {
         .map => |m| m,
@@ -410,16 +410,16 @@ test "jsonToToupee: nested structure" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    var inner = std.json.ObjectMap.init(a);
-    try inner.put("x", .{ .integer = 10 });
+    var inner = try std.json.ObjectMap.init(a, &.{}, &.{});
+    try inner.put(a, "x", .{ .integer = 10 });
 
     var arr = std.json.Array.init(a);
     try arr.append(.{ .string = "item" });
 
-    var outer = std.json.ObjectMap.init(a);
-    try outer.put("nested", .{ .object = inner });
-    try outer.put("items", .{ .array = arr });
-    try outer.put("flag", .{ .bool = false });
+    var outer = try std.json.ObjectMap.init(a, &.{}, &.{});
+    try outer.put(a, "nested", .{ .object = inner });
+    try outer.put(a, "items", .{ .array = arr });
+    try outer.put(a, "flag", .{ .bool = false });
 
     const result = try jsonToToupee(a, .{ .object = outer });
 
@@ -450,10 +450,10 @@ test "comb and json produce same toupee structure for equivalent data" {
     const from_comb = try combToToupee(a, parsed_yaml.value);
 
     // Same data via JSON
-    var json_obj = std.json.ObjectMap.init(a);
-    try json_obj.put("title", .{ .string = "Hello" });
-    try json_obj.put("count", .{ .integer = 5 });
-    try json_obj.put("active", .{ .bool = true });
+    var json_obj = try std.json.ObjectMap.init(a, &.{}, &.{});
+    try json_obj.put(a, "title", .{ .string = "Hello" });
+    try json_obj.put(a, "count", .{ .integer = 5 });
+    try json_obj.put(a, "active", .{ .bool = true });
     const from_json = try jsonToToupee(a, .{ .object = json_obj });
 
     // Both should produce equivalent toupee maps

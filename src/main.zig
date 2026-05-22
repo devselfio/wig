@@ -33,9 +33,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
             std.debug.print("wig build: failed ({any})\n", .{err});
             return err;
         };
-        printBuildDiagnostics(result.diagnostics);
+        result.diagnostics.printToStderr(a);
+        if (result.diagnostics.hasErrors()) {
+            std.debug.print("wig build: failed ({d} error(s))\n", .{result.diagnostics.errorCount()});
+            std.process.exit(1);
+        }
         std.debug.print("wig build: ok ({d} pages) → {s}/zig-out/site/\n", .{ result.page_count, opts.path });
-        if (result.diagnostics.hasErrors()) std.process.exit(1);
     } else if (std.mem.eql(u8, command, "check")) {
         const v = parseCheckArgs(&args);
         var site = try wig.Site.init(a, io, .{ .root = v.path });
@@ -105,16 +108,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
 fn printVersion() void {
     std.debug.print("wig {f}\n", .{options.version});
-}
-
-fn printBuildDiagnostics(diags: wig.diagnostics_mod.Collector) void {
-    for (diags.items.items) |d| {
-        const label: []const u8 = switch (d.kind) {
-            .err => "error",
-            .warning => "warning",
-        };
-        std.debug.print("{s}: {s}\n", .{ label, d.message });
-    }
 }
 
 fn printDiagnostics(diags: []const wig.Diagnostic) void {

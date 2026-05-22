@@ -568,10 +568,10 @@ test "loadSiteConfig: dual config error" {
 
     var f1 = try std.Io.Dir.createFile(data_dir, io, "site.yaml", .{});
     try f1.writeStreamingAll(io, "url: https://example.com");
-    f1.close();
+    f1.close(io);
     var f2 = try std.Io.Dir.createFile(data_dir, io, "site.json", .{});
     try f2.writeStreamingAll(io, "{\"url\": \"https://example.com\"}");
-    f2.close();
+    f2.close(io);
 
     const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, ".", std.testing.allocator);
     defer std.testing.allocator.free(abs);

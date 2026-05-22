@@ -12,8 +12,8 @@ pub const App = struct {
     pub fn init(a: Allocator) App {
         return .{
             .allocator = a,
-            .routes = .{},
-            .middleware = .{},
+            .routes = .empty,
+            .middleware = .empty,
         };
     }
 

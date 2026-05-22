@@ -55,7 +55,6 @@ pub const WigError = error{
     MissingFrontmatter,
     PathCollision,
     UnrecognisedExtension,
-    MissingTemplate,
     BuildFailed,
     OutputDirNotClean,
     TemplateConflict,
@@ -403,6 +402,16 @@ fn buildStyleFileTree(
     return .{ .map = map };
 }
 
+fn finishBuild(self: *Site, build_arena: std.heap.ArenaAllocator, page_count: usize, diags: diagnostics_mod.Collector) BuildResult {
+    self.build_arena = build_arena;
+    return .{ .page_count = page_count, .diagnostics = diags };
+}
+
+fn buildResultIfDiags(self: *Site, build_arena: std.heap.ArenaAllocator, page_count: usize, diags: *const diagnostics_mod.Collector) ?BuildResult {
+    if (!diags.hasErrors()) return null;
+    return finishBuild(self, build_arena, page_count, diags.*);
+}
+
 fn buildPhase_scanAndTaxonomies(
     ba: Allocator,
     a: Allocator,
@@ -412,6 +421,7 @@ fn buildPhase_scanAndTaxonomies(
     site: *Site,
     style_ctx: *toupee.Context,
     data_result: *const config.DataResult,
+    diags: *diagnostics_mod.Collector,
 ) !scanner.ScanResult {
     const pages_path = try std.fs.path.join(a, &.{ abs_root, "pages" });
     defer a.free(pages_path);
@@ -435,6 +445,7 @@ fn buildPhase_scanAndTaxonomies(
         site.options.debug,
         registered_exts.items,
         default_slugify,
+        diags,
     );
 
     const tax_ctx = try taxonomies.buildIndex(ba, scan_result.pages, site_cfg.tags);
@@ -679,7 +690,10 @@ pub const Site = struct {
         for (ctx.hooks.pre_scan) |hook| try hook(&ctx);
 
         // --- Phase: scan pages, tags, `pages` context ---
-        var scan_result = try buildPhase_scanAndTaxonomies(ba, a, io, abs_root, &site_cfg, self, &style_ctx, &data_result);
+        var scan_result = buildPhase_scanAndTaxonomies(ba, a, io, abs_root, &site_cfg, self, &style_ctx, &data_result, &diags) catch |err| {
+            if (buildResultIfDiags(self, build_arena, 0, &diags)) |result| return result;
+            return err;
+        };
         ctx.scan_result = &scan_result;
 
         // --- Hook: post_scan ---
@@ -689,7 +703,7 @@ pub const Site = struct {
         for (ctx.hooks.pre_render) |hook| try hook(&ctx);
 
         // --- Phase: render HTML pages ---
-        const render_results = try pages.renderAll(
+        const render_results = pages.renderAll(
             ba,
             &scan_result,
             &engine,
@@ -700,7 +714,10 @@ pub const Site = struct {
             io,
             output_dir,
             &diags,
-        );
+        ) catch |err| {
+            if (buildResultIfDiags(self, build_arena, scan_result.pages.len, &diags)) |result| return result;
+            return err;
+        };
 
         // --- Hook: post_render ---
         for (ctx.hooks.post_render) |hook| try hook(&ctx);
@@ -767,12 +784,8 @@ pub const Site = struct {
         }
         self.style_configs = style_cfgs;
         self.engine = engine;
-        self.build_arena = build_arena;
 
-        return .{
-            .page_count = scan_result.pages.len,
-            .diagnostics = diags,
-        };
+        return finishBuild(self, build_arena, scan_result.pages.len, diags);
     }
 
     /// Checks site config, style manifests, and template resolution without

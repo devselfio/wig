@@ -6,6 +6,7 @@ const context_mod = @import("context.zig");
 const page_meta_mod = @import("page_meta.zig");
 const slug_mod = @import("slug.zig");
 const collections = @import("collections.zig");
+const diagnostics_mod = @import("diagnostics.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -76,7 +77,7 @@ pub fn scan(
     site_debug: bool,
     registered_extensions: []const []const u8,
 ) !ScanResult {
-    return scanWithOptions(backing, io, pages_dir, base_url, site_draft, site_debug, registered_extensions, false);
+    return scanWithOptions(backing, io, pages_dir, base_url, site_draft, site_debug, registered_extensions, false, null);
 }
 
 pub fn scanWithOptions(
@@ -88,6 +89,7 @@ pub fn scanWithOptions(
     site_debug: bool,
     registered_extensions: []const []const u8,
     default_slugify: bool,
+    diags: ?*diagnostics_mod.Collector,
 ) !ScanResult {
     var arena = std.heap.ArenaAllocator.init(backing);
     errdefer arena.deinit();
@@ -97,7 +99,11 @@ pub fn scanWithOptions(
     var output_paths = std.StringArrayHashMapUnmanaged([]const u8){};
     var gated_dirs = std.StringArrayHashMapUnmanaged(void){};
 
-    try walkDir(a, io, pages_dir, "", base_url, site_draft, site_debug, registered_extensions, &entries, &output_paths, &gated_dirs, default_slugify);
+    try walkDir(a, io, pages_dir, "", base_url, site_draft, site_debug, registered_extensions, &entries, &output_paths, &gated_dirs, default_slugify, diags);
+
+    if (diags) |d| {
+        if (d.hasErrors()) return error.BuildFailed;
+    }
 
     var colls = ValueMap{};
     try collections.buildCollections(a, entries.items, &colls);
@@ -127,6 +133,7 @@ fn walkDir(
     output_paths: *std.StringArrayHashMapUnmanaged([]const u8),
     gated_dirs: *std.StringArrayHashMapUnmanaged(void),
     default_slugify: bool,
+    diags: ?*diagnostics_mod.Collector,
 ) !void {
     if (rel_prefix.len > 0 and gated_dirs.contains(pagesParentDir(rel_prefix))) return;
 
@@ -140,9 +147,16 @@ fn walkDir(
             const ext = std.fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (!isSection(stem)) continue;
-            if (!isValidExtension(ext, registered_extensions)) return error.UnrecognisedExtension;
+            if (!isValidExtension(ext, registered_extensions)) {
+                const source = pageSourcePath(a, rel_prefix, entry.name);
+                if (diags) |d| {
+                    try d.errFmt(a, "unrecognised extension '{s}' in {s}", .{ ext, source });
+                    return error.BuildFailed;
+                }
+                return error.UnrecognisedExtension;
+            }
 
-            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
+            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify, diags);
             if (page.meta.draft and !site_draft or page.meta.debug and !site_debug) {
                 try gated_dirs.put(a, rel_prefix, {});
                 return;
@@ -161,13 +175,27 @@ fn walkDir(
             const ext = std.fs.path.extension(entry.name);
             const stem = entry.name[0 .. entry.name.len - ext.len];
             if (isSection(stem)) continue;
-            if (!isValidExtension(ext, registered_extensions)) return error.UnrecognisedExtension;
+            if (!isValidExtension(ext, registered_extensions)) {
+                const source = pageSourcePath(a, rel_prefix, entry.name);
+                if (diags) |d| {
+                    try d.errFmt(a, "unrecognised extension '{s}' in {s}", .{ ext, source });
+                    return error.BuildFailed;
+                }
+                return error.UnrecognisedExtension;
+            }
 
-            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify);
+            const page = try parsePageFile(a, io, dir, entry.name, rel_prefix, ext, base_url, registered_extensions, default_slugify, diags);
             if (page.meta.draft and !site_draft) continue;
             if (page.meta.debug and !site_debug) continue;
 
-            if (output_paths.contains(page.output_file)) return error.PathCollision;
+            if (output_paths.contains(page.output_file)) {
+                if (diags) |d| {
+                    const existing = output_paths.get(page.output_file).?;
+                    try d.errFmt(a, "output path collision: {s} (pages: {s} and {s})", .{ page.output_file, existing, page.source_path });
+                    return error.BuildFailed;
+                }
+                return error.PathCollision;
+            }
             try output_paths.put(a, page.output_file, page.source_path);
             try entries.append(a, page);
         }
@@ -175,7 +203,14 @@ fn walkDir(
 
     // Add section entry after non-section pages (so collision check covers both).
     if (section_entry) |se| {
-        if (output_paths.contains(se.output_file)) return error.PathCollision;
+        if (output_paths.contains(se.output_file)) {
+            if (diags) |d| {
+                const existing = output_paths.get(se.output_file).?;
+                try d.errFmt(a, "output path collision: {s} (pages: {s} and {s})", .{ se.output_file, existing, se.source_path });
+                return error.BuildFailed;
+            }
+            return error.PathCollision;
+        }
         try output_paths.put(a, se.output_file, se.source_path);
         try entries.append(a, se);
     }
@@ -195,7 +230,7 @@ fn walkDir(
             var sub_dir = std.Io.Dir.openDir(dir, io, entry.name, .{ .iterate = true }) catch continue;
             defer sub_dir.close(io);
 
-            try walkDir(a, io, sub_dir, sub_prefix, base_url, site_draft, site_debug, registered_extensions, entries, output_paths, gated_dirs, default_slugify);
+            try walkDir(a, io, sub_dir, sub_prefix, base_url, site_draft, site_debug, registered_extensions, entries, output_paths, gated_dirs, default_slugify, diags);
         }
     }
 }
@@ -214,6 +249,13 @@ fn isRegularFile(io: std.Io, dir: std.Io.Dir, entry: std.Io.Dir.Entry) bool {
     };
 }
 
+fn pageSourcePath(a: Allocator, rel_prefix: []const u8, filename: []const u8) []const u8 {
+    return if (rel_prefix.len > 0)
+        std.fmt.allocPrint(a, "{s}/{s}", .{ rel_prefix, filename }) catch filename
+    else
+        std.fmt.allocPrint(a, "{s}", .{filename}) catch filename;
+}
+
 fn parsePageFile(
     a: Allocator,
     io: std.Io,
@@ -224,15 +266,43 @@ fn parsePageFile(
     base_url: []const u8,
     registered_extensions: []const []const u8,
     default_slugify: bool,
+    diags: ?*diagnostics_mod.Collector,
 ) !PageEntry {
     _ = registered_extensions;
 
+    const rel_path = if (rel_prefix.len > 0)
+        try std.fmt.allocPrint(a, "{s}/{s}", .{ rel_prefix, filename })
+    else
+        try a.dupe(u8, filename);
+
     const source = try std.Io.Dir.readFileAlloc(dir, io, filename, a, .limited(4 * 1024 * 1024));
-    const fm_result = try frontmatter.parse(a, source);
-    if (fm_result == null) return error.MissingFrontmatter;
+    const fm_result = frontmatter.parse(a, source) catch |err| {
+        if (diags) |d| {
+            const msg = switch (err) {
+                error.InvalidFrontmatter => try std.fmt.allocPrint(a, "invalid frontmatter in {s}", .{rel_path}),
+                error.UnclosedFrontmatter => try std.fmt.allocPrint(a, "unclosed frontmatter in {s}", .{rel_path}),
+            };
+            try d.errAt(a, msg, rel_path, null);
+            return error.BuildFailed;
+        }
+        return err;
+    };
+    if (fm_result == null) {
+        if (diags) |d| {
+            try d.errAt(a, try std.fmt.allocPrint(a, "missing frontmatter in {s}", .{rel_path}), rel_path, null);
+            return error.BuildFailed;
+        }
+        return error.MissingFrontmatter;
+    }
     const fm = fm_result.?;
 
-    const canonical_fm = try frontmatter.normalizeWigPageFrontmatter(a, fm.data);
+    const canonical_fm = frontmatter.normalizeWigPageFrontmatter(a, fm.data) catch |err| {
+        if (diags) |d| {
+            try d.errAt(a, try std.fmt.allocPrint(a, "invalid page frontmatter in {s}", .{rel_path}), rel_path, null);
+            return error.BuildFailed;
+        }
+        return err;
+    };
 
     const meta = try page_meta_mod.parsePageMeta(a, canonical_fm);
     const fm_toupee = try context_mod.combToToupee(a, canonical_fm);
@@ -247,11 +317,6 @@ fn parsePageFile(
         try std.fmt.allocPrint(a, "{s}/{s}", .{ rel_prefix, filename })
     else if (should_slugify)
         try std.fmt.allocPrint(a, "{s}{s}", .{ slugified_stem, ext })
-    else
-        try a.dupe(u8, filename);
-
-    const rel_path = if (rel_prefix.len > 0)
-        try std.fmt.allocPrint(a, "{s}/{s}", .{ rel_prefix, filename })
     else
         try a.dupe(u8, filename);
 

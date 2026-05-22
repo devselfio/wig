@@ -64,13 +64,13 @@ pub const Report = struct {
     }
 
     /// Writes the report header with run ID, timestamp, and test list. Call once before any failures.
-    pub fn writeHeader(self: *Report, run_id: []const u8, test_names: []const []const u8) void {
+    pub fn writeHeader(self: *Report, io: std.Io, run_id: []const u8, test_names: []const []const u8) void {
         if (self.header_written) return;
         self.header_written = true;
         self.append("=== Wig spec test run ===\n", .{});
         self.append("Run ID: {s}\n", .{run_id});
         var buf: [32]u8 = undefined;
-        const ts = timestampIso8601(&buf) catch run_id;
+        const ts = timestampIso8601(io, &buf) catch run_id;
         self.append("Timestamp: {s}\n", .{ts});
         if (test_names.len > 0) {
             self.append("Tests:", .{});
@@ -217,20 +217,20 @@ fn formatUnifiedDiff(a: Allocator, expected: []const u8, actual: []const u8) ![]
                 in_hunk = true;
             }
             if (exp_line != null) {
-                try hunk.writer(a).print("-{s}\n", .{exp});
+                try hunk.print(a, "-{s}\n", .{exp});
                 hunk_exp_count += 1;
             }
             if (act_line != null) {
-                try hunk.writer(a).print("+{s}\n", .{act});
+                try hunk.print(a, "+{s}\n", .{act});
                 hunk_act_count += 1;
             }
         } else {
             if (in_hunk) {
-                try list.writer(a).print("@@ -{d},{d} +{d},{d} @@\n", .{ hunk_start_exp, hunk_exp_count, hunk_start_act, hunk_act_count });
+                try list.print(a, "@@ -{d},{d} +{d},{d} @@\n", .{ hunk_start_exp, hunk_exp_count, hunk_start_act, hunk_act_count });
                 try list.appendSlice(a, hunk.items);
                 in_hunk = false;
             }
-            try list.writer(a).print(" {s}\n", .{exp});
+            try list.print(a, " {s}\n", .{exp});
         }
         if (exp_line != null) {
             exp_ln += 1;
@@ -242,7 +242,7 @@ fn formatUnifiedDiff(a: Allocator, expected: []const u8, actual: []const u8) ![]
         }
     }
     if (in_hunk) {
-        try list.writer(a).print("@@ -{d},{d} +{d},{d} @@\n", .{ hunk_start_exp, hunk_exp_count, hunk_start_act, hunk_act_count });
+        try list.print(a, "@@ -{d},{d} +{d},{d} @@\n", .{ hunk_start_exp, hunk_exp_count, hunk_start_act, hunk_act_count });
         try list.appendSlice(a, hunk.items);
     }
     return list.toOwnedSlice(a);
@@ -266,8 +266,8 @@ pub fn formatOneLineDiff(a: Allocator, expected: []const u8, actual: []const u8)
     }) catch "content mismatch";
 }
 
-fn timestampIso8601(buf: []u8) ![]const u8 {
-    const secs = std.time.timestamp();
+fn timestampIso8601(io: std.Io, buf: []u8) ![]const u8 {
+    const secs = std.Io.Clock.real.now(io).toSeconds();
     const es = epoch.EpochSeconds{ .secs = @intCast(@max(0, secs)) };
     const epoch_day = es.getEpochDay();
     const year_day = epoch_day.calculateYearDay();

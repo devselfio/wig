@@ -12,16 +12,16 @@ pub const Diagnostic = struct {
 
     pub fn format(self: *const Diagnostic, a: Allocator) ![]const u8 {
         var buf = std.ArrayListUnmanaged(u8).empty;
-        const w = buf.writer(a);
+        defer buf.deinit(a);
         const prefix: []const u8 = switch (self.kind) {
             .err => "error",
             .warning => "warning",
         };
-        try w.print("[{s}] {s}", .{ prefix, self.message });
-        if (self.source) |src| try w.print(" ({s})", .{src});
-        if (self.template_name) |tn| try w.print(" [template: {s}]", .{tn});
-        if (self.help) |h| try w.print("\n  help: {s}", .{h});
-        return buf.items;
+        try buf.print(a, "[{s}] {s}", .{ prefix, self.message });
+        if (self.source) |src| try buf.print(a, " ({s})", .{src});
+        if (self.template_name) |tn| try buf.print(a, " [template: {s}]", .{tn});
+        if (self.help) |h| try buf.print(a, "\n  help: {s}", .{h});
+        return try buf.toOwnedSlice(a);
     }
 };
 
@@ -50,11 +50,51 @@ pub const Collector = struct {
         try self.err(a, msg);
     }
 
+    /// Records an error with optional page source and template path attribution.
+    pub fn errAt(
+        self: *Collector,
+        a: Allocator,
+        msg: []const u8,
+        source: ?[]const u8,
+        template_name: ?[]const u8,
+    ) !void {
+        try self.items.append(a, .{
+            .kind = .err,
+            .message = try a.dupe(u8, msg),
+            .source = if (source) |s| try a.dupe(u8, s) else null,
+            .template_name = if (template_name) |t| try a.dupe(u8, t) else null,
+        });
+    }
+
+    pub fn errorCount(self: *const Collector) usize {
+        var n: usize = 0;
+        for (self.items.items) |item| {
+            if (item.kind == .err) n += 1;
+        }
+        return n;
+    }
+
     pub fn hasErrors(self: *const Collector) bool {
         for (self.items.items) |item| {
             if (item.kind == .err) return true;
         }
         return false;
+    }
+
+    /// Writes formatted diagnostics to stderr (CLI / dev server).
+    pub fn printToStderr(self: *const Collector, a: Allocator) void {
+        for (self.items.items) |d| {
+            const formatted = d.format(a) catch {
+                const label: []const u8 = switch (d.kind) {
+                    .err => "error",
+                    .warning => "warning",
+                };
+                std.debug.print("{s}: {s}\n", .{ label, d.message });
+                continue;
+            };
+            defer a.free(formatted);
+            std.debug.print("{s}\n", .{formatted});
+        }
     }
 };
 
@@ -86,6 +126,18 @@ test "Collector: warnFmt" {
     try c.warnFmt(testing.allocator, "page {d} of {d}", .{ 3, 10 });
     try testing.expectEqualStrings("page 3 of 10", c.items.items[0].message);
     testing.allocator.free(c.items.items[0].message);
+    c.items.deinit(testing.allocator);
+}
+
+test "Collector: errAt" {
+    var c = Collector{};
+    try c.errAt(testing.allocator, "missing layout template 'layouts/x.html'", "about.dj", "default/templates/layouts/x.html");
+    try testing.expectEqual(@as(usize, 1), c.items.items.len);
+    try testing.expectEqualStrings("about.dj", c.items.items[0].source.?);
+    try testing.expectEqualStrings("default/templates/layouts/x.html", c.items.items[0].template_name.?);
+    testing.allocator.free(c.items.items[0].message);
+    testing.allocator.free(c.items.items[0].source.?);
+    testing.allocator.free(c.items.items[0].template_name.?);
     c.items.deinit(testing.allocator);
 }
 

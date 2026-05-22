@@ -172,7 +172,7 @@ test "init: creates project directories and CUBE style structure" {
     const io = std.testing.io;
 
     const proj_name = "my-site";
-    try std.Io.Dir.createDir(tmp.dir, io, proj_name, .{});
+    try std.Io.Dir.createDir(tmp.dir, io, proj_name, .default_dir);
 
     const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, proj_name, testing.allocator);
     defer testing.allocator.free(abs);
@@ -207,7 +207,7 @@ test "addStyle: creates manifest with correct name" {
     defer tmp.cleanup();
     const io = std.testing.io;
 
-    try std.Io.Dir.createDir(tmp.dir, io, "styles", .{});
+    try std.Io.Dir.createDir(tmp.dir, io, "styles", .default_dir);
 
     const abs = try std.Io.Dir.realPathFileAlloc(tmp.dir, io, "styles", testing.allocator);
     defer testing.allocator.free(abs);
@@ -250,5 +250,6 @@ test "addBlock: creates CSS, template, and pattern files (CUBE)" {
 }
 
 test "install: returns NotImplemented" {
-    try testing.expectError(error.NotImplemented, install(testing.allocator, "theme", "/tmp", .{}));
+    const io = std.testing.io;
+    try testing.expectError(error.NotImplemented, install(testing.allocator, io, "theme", "/tmp", .{}));
 }

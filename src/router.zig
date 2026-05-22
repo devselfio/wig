@@ -27,7 +27,7 @@ pub const RouteGroup = struct {
     pub fn init(a: Allocator, prefix: []const u8) RouteGroup {
         return .{
             .prefix = prefix,
-            .routes = .{},
+            .routes = .empty,
             .allocator = a,
         };
     }

@@ -37,3 +37,6 @@ input:
           Blog as section.
 output:
   exit: 1
+  diagnostics:
+    - kind: error
+      contains: "collision"
